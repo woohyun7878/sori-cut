@@ -6,10 +6,29 @@
   "scripts": {
     "dev": "pnpm --filter @sori-cut/web dev",
     "build": "pnpm --filter @sori-cut/web build",
+    "test": "pnpm --filter @sori-cut/web test",
     "lint": "pnpm -r lint",
     "clean": "pnpm -r clean"
   },
-  "keywords": ["music", "editor", "korean", "reels", "shorts", "tiktok", "audio", "video"],
+  "keywords": [
+    "music",
+    "editor",
+    "korean",
+    "reels",
+    "shorts",
+    "tiktok",
+    "audio",
+    "video"
+  ],
   "author": "junewoomusic",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "vitest": "^4.1.10",
+    "@testing-library/dom": "^10.4.1"
+  },
+  "dependencies": {
+    "zustand": "^5.0.14",
+    "react-router-dom": "^7.18.1",
+    "wavesurfer.js": "^7.12.10"
+  }
 }
