@@ -101,11 +101,11 @@ export function Timeline() {
   const markers = Array.from({ length: Math.ceil(totalDuration / markerStep) + 1 }, (_, index) => index * markerStep);
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
-      <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
+      <div className="mb-4 flex flex-col gap-4 md:mb-5 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">타임라인 / Timeline</h2>
-          <p className="mt-2 text-sm text-gray-400">클립 위치를 조정하고 플레이헤드를 이동하세요 / Position clips and adjust timing.</p>
+          <h2 className="text-xl font-semibold text-white md:text-2xl">타임라인 / Timeline</h2>
+          <p className="mt-1 text-sm text-gray-400 md:mt-2">클립 위치를 조정하고 플레이헤드를 이동하세요 / Position clips and adjust timing.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -114,15 +114,15 @@ export function Timeline() {
           </div>
           <div className="flex items-center rounded-xl border border-gray-800 bg-gray-950 p-1">
             <button
-              className="rounded-lg px-3 py-2 text-sm text-gray-200 transition-colors hover:bg-gray-900"
+              className="touch-control rounded-lg px-3 py-2 text-sm text-gray-200 transition-colors hover:bg-gray-900"
               type="button"
               onClick={() => setZoom((value) => Math.max(24, value - 16))}
             >
               -
             </button>
-            <span className="min-w-20 text-center text-xs text-gray-400">Zoom {zoom}px/s</span>
+            <span className="min-w-16 text-center text-xs text-gray-400 md:min-w-20">Zoom {zoom}px/s</span>
             <button
-              className="rounded-lg px-3 py-2 text-sm text-gray-200 transition-colors hover:bg-gray-900"
+              className="touch-control rounded-lg px-3 py-2 text-sm text-gray-200 transition-colors hover:bg-gray-900"
               type="button"
               onClick={() => setZoom((value) => Math.min(160, value + 16))}
             >
@@ -130,7 +130,7 @@ export function Timeline() {
             </button>
           </div>
           <select
-            className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
+            className="touch-control rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
             value={newTrackType}
             onChange={(event) => setNewTrackType(event.target.value as TrackType)}
           >
@@ -139,7 +139,7 @@ export function Timeline() {
             <option value="recording">Recording</option>
           </select>
           <button
-            className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
+            className="touch-control rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
             type="button"
             onClick={() => addTrack({ type: newTrackType })}
           >
@@ -148,8 +148,8 @@ export function Timeline() {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-3xl border border-gray-800 bg-gray-950/70">
-        <div className="grid min-w-max grid-cols-[230px_minmax(720px,1fr)]">
+      <div className="scroll-touch rounded-2xl border border-gray-800 bg-gray-950/70 md:rounded-3xl">
+        <div className="grid min-w-max grid-cols-[160px_minmax(720px,1fr)] md:grid-cols-[230px_minmax(720px,1fr)]">
           <div className="sticky left-0 z-30 border-b border-r border-gray-800 bg-gray-950 px-4 py-3 text-xs uppercase tracking-[0.24em] text-gray-500">
             Tracks
           </div>
@@ -196,7 +196,7 @@ export function Timeline() {
 
               <div className="relative border-b border-gray-800 bg-gray-950/40">
                 <div
-                  className="relative h-28"
+                  className="relative h-20 md:h-28"
                   style={{ width: timelineWidth }}
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect();
@@ -223,7 +223,7 @@ export function Timeline() {
                   ))}
 
                   <div
-                    className={`absolute top-1/2 flex h-16 -translate-y-1/2 cursor-grab items-center justify-between overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-r px-4 text-sm text-white shadow-lg ${trackColors[track.type]}`}
+                    className={`absolute top-1/2 flex h-12 -translate-y-1/2 cursor-grab items-center justify-between overflow-hidden rounded-xl border border-white/10 bg-gradient-to-r px-3 text-sm text-white shadow-lg md:h-16 md:rounded-2xl md:px-4 ${trackColors[track.type]}`}
                     draggable
                     style={{
                       left: track.startOffset * zoom,
@@ -252,7 +252,7 @@ export function Timeline() {
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+      <div className="mt-3 flex flex-col gap-1 text-xs text-gray-500 sm:flex-row sm:items-center sm:justify-between md:mt-4">
         <span>클릭해서 플레이헤드를 이동하고 드래그로 클립 위치를 바꾸세요.</span>
         <span>{isPlaying ? '재생 중 / Playing' : '정지 / Stopped'}</span>
       </div>

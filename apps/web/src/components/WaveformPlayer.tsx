@@ -81,25 +81,25 @@ export function WaveformPlayer({ audioUrl, label }: WaveformPlayerProps) {
   }, [audioUrl]);
 
   return (
-    <div className="rounded-2xl border border-gray-800 bg-gray-900 p-4">
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <div>
-          {label ? <p className="text-sm font-medium text-white">{label}</p> : null}
+    <div className="rounded-xl border border-gray-800 bg-gray-900 p-3 md:rounded-2xl md:p-4">
+      <div className="mb-2 flex items-center justify-between gap-3 md:mb-3 md:gap-4">
+        <div className="min-w-0 flex-1">
+          {label ? <p className="truncate text-sm font-medium text-white">{label}</p> : null}
           <p className="text-xs text-gray-400">Waveform preview · 클릭해서 탐색 / Click to seek</p>
         </div>
         <button
           type="button"
           disabled={!isReady}
           onClick={() => void wavesurferRef.current?.playPause()}
-          className="rounded-full bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
+          className="touch-control shrink-0 rounded-full bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
         >
-          {isPlaying ? '일시정지 / Pause' : '재생 / Play'}
+          {isPlaying ? '일시정지' : '재생'}
         </button>
       </div>
 
-      <div ref={containerRef} className="w-full overflow-hidden rounded-xl bg-gray-950" />
+      <div ref={containerRef} className="w-full overflow-hidden rounded-lg bg-gray-950 md:rounded-xl" />
 
-      <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+      <div className="mt-2 flex items-center justify-between text-xs text-gray-400 md:mt-3">
         <span>{timeDisplay}</span>
         <span>{isReady ? '준비 완료 / Ready' : '파형 생성 중 / Loading waveform'}</span>
       </div>

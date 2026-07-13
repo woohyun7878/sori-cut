@@ -96,37 +96,37 @@ export function TransportBar() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">재생 바 / Transport</h2>
-          <p className="mt-2 text-sm text-gray-400">재생, 시크, 루프를 한 번에 제어하세요 / Control playback and seeking.</p>
+          <h2 className="text-xl font-semibold text-white md:text-2xl">재생 바 / Transport</h2>
+          <p className="mt-1 text-sm text-gray-400 md:mt-2">재생, 시크, 루프를 한 번에 제어하세요 / Control playback and seeking.</p>
         </div>
 
-        <div className="flex items-center gap-2 rounded-2xl border border-gray-800 bg-gray-950/70 p-2">
+        <div className="flex items-center gap-1.5 rounded-2xl border border-gray-800 bg-gray-950/70 p-1.5 md:gap-2 md:p-2">
           <button
-            className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="touch-control rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs font-semibold text-gray-200 transition-colors hover:border-brand-400/60 md:rounded-xl md:px-4 md:py-3 md:text-sm"
             type="button"
             onClick={() => seekBy(-5)}
           >
             -5s
           </button>
           <button
-            className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="touch-control rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs font-semibold text-gray-200 transition-colors hover:border-brand-400/60 md:rounded-xl md:px-4 md:py-3 md:text-sm"
             type="button"
             onClick={stopPlayback}
           >
             Stop
           </button>
           <button
-            className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-600 text-lg font-semibold text-white shadow-lg shadow-brand-900/50 transition-colors hover:bg-brand-700"
+            className="touch-control flex h-12 w-12 items-center justify-center rounded-full bg-brand-600 text-base font-semibold text-white shadow-lg shadow-brand-900/50 transition-colors hover:bg-brand-700 md:h-16 md:w-16 md:text-lg"
             type="button"
             onClick={() => setIsPlaying(!isPlaying)}
           >
             {isPlaying ? '❚❚' : '▶'}
           </button>
           <button
-            className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="touch-control rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-xs font-semibold text-gray-200 transition-colors hover:border-brand-400/60 md:rounded-xl md:px-4 md:py-3 md:text-sm"
             type="button"
             onClick={() => seekBy(5)}
           >
@@ -134,7 +134,7 @@ export function TransportBar() {
           </button>
           <button
             className={[
-              'rounded-xl border px-4 py-3 text-sm font-semibold transition-colors',
+              'touch-control rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors md:rounded-xl md:px-4 md:py-3 md:text-sm',
               loopEnabled
                 ? 'border-brand-400/60 bg-brand-500/20 text-brand-100'
                 : 'border-gray-700 bg-gray-900 text-gray-200 hover:border-brand-400/60',
@@ -142,19 +142,19 @@ export function TransportBar() {
             type="button"
             onClick={() => setLoopEnabled(!loopEnabled)}
           >
-            루프 / Loop
+            루프
           </button>
         </div>
       </div>
 
-      <div className="mt-6">
-        <div className="mb-3 flex items-center justify-between text-sm">
+      <div className="mt-4 md:mt-6">
+        <div className="mb-2 flex items-center justify-between text-xs md:mb-3 md:text-sm">
           <span className="font-mono text-brand-300">{formatTime(playheadPosition)}</span>
           <span className="font-mono text-gray-500">{formatTime(totalDuration)}</span>
         </div>
 
         <button
-          className="relative block h-4 w-full overflow-hidden rounded-full border border-gray-800 bg-gray-950"
+          className="touch-control relative block h-6 w-full overflow-hidden rounded-full border border-gray-800 bg-gray-950 md:h-4"
           type="button"
           onClick={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();

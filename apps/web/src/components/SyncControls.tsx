@@ -105,10 +105,10 @@ export function SyncControls() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
       <div>
-        <h2 className="text-2xl font-semibold text-white">싱크 조정 / Sync Controls</h2>
-        <p className="mt-2 text-sm text-gray-400">오디오와 비디오의 오프셋을 세밀하게 맞춰보세요 / Fine tune audio-video timing.</p>
+        <h2 className="text-xl font-semibold text-white md:text-2xl">싱크 조정 / Sync Controls</h2>
+        <p className="mt-1 text-sm text-gray-400 md:mt-2">오디오와 비디오의 오프셋을 세밀하게 맞춰보세요 / Fine tune audio-video timing.</p>
       </div>
 
       <div className="mt-6 space-y-4">
@@ -173,23 +173,23 @@ export function SyncControls() {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-3">
           <button
-            className="rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="touch-control rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
             type="button"
             onClick={() => void handlePreview()}
           >
             미리보기 / Preview
           </button>
           <button
-            className="rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="touch-control rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
             type="button"
             onClick={() => setMessage('자동 싱크는 곧 제공됩니다. / Auto sync coming soon.')}
           >
             자동 싱크 / Auto Sync
           </button>
           <button
-            className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
+            className="touch-control rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
             type="button"
             onClick={() => {
               if (!selectedTrack) {

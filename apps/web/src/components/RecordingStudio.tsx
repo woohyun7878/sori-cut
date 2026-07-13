@@ -235,16 +235,16 @@ export function RecordingStudio() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">녹음 스튜디오 / Recording Studio</h2>
-          <p className="mt-2 text-sm text-gray-400">
+          <h2 className="text-xl font-semibold text-white md:text-2xl">녹음 스튜디오 / Recording Studio</h2>
+          <p className="mt-1 text-sm text-gray-400 md:mt-2">
             MediaRecorder와 Web Audio API로 브라우저 안에서 바로 녹음하세요.
           </p>
         </div>
 
-        <label className="inline-flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-300">
+        <label className="touch-control inline-flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-300">
           <input
             type="checkbox"
             checked={monitoringEnabled}
@@ -255,7 +255,7 @@ export function RecordingStudio() {
         </label>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/80 p-5">
+      <div className="mt-5 rounded-xl border border-gray-800 bg-gray-950/80 p-4 md:mt-6 md:rounded-2xl md:p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm text-gray-400">녹음 시간 / Recording time</p>
@@ -268,7 +268,7 @@ export function RecordingStudio() {
               onClick={() => void startRecording()}
               disabled={isRecording}
               className={[
-                'rounded-xl px-5 py-3 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
+                'touch-control rounded-xl px-5 py-3 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
                 isRecording ? 'bg-red-600/90' : 'bg-brand-600 hover:bg-brand-700 disabled:bg-gray-800',
               ].join(' ')}
             >
@@ -279,7 +279,7 @@ export function RecordingStudio() {
               type="button"
               onClick={() => void stopRecording()}
               disabled={!isRecording}
-              className="rounded-xl border border-red-400/50 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-500"
+              className="touch-control rounded-xl border border-red-400/50 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-500"
             >
               녹음 중지 / Stop Recording
             </button>

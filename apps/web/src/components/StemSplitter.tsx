@@ -71,10 +71,10 @@ export function StemSplitter() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">스템 분리 / Stem Splitter</h2>
+          <h2 className="text-xl font-semibold text-white md:text-2xl">스템 분리 / Stem Splitter</h2>
           <p className="mt-2 text-sm text-gray-400">{splitHint}</p>
         </div>
 
@@ -82,7 +82,7 @@ export function StemSplitter() {
           type="button"
           onClick={() => void handleSplit()}
           disabled={!originalAudio || isProcessing}
-          className="rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
+          className="touch-control rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
         >
           {isProcessing ? '분리 중... / Splitting...' : '스템 분리 시작 / Split Stems'}
         </button>
@@ -110,7 +110,7 @@ export function StemSplitter() {
       ) : null}
 
       {stems.length > 0 ? (
-        <div className="mt-6 grid gap-4 xl:grid-cols-2">
+        <div className="mt-6 grid gap-4 md:grid-cols-2">
           {stems.map((stem) => (
             <article key={stem.id} className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -124,7 +124,7 @@ export function StemSplitter() {
                     type="button"
                     onClick={() => toggleStemMute(stem.id)}
                     className={[
-                      'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
+                      'touch-control rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
                       stem.muted
                         ? 'border-red-400/50 bg-red-500/20 text-red-200'
                         : 'border-gray-700 bg-gray-900 text-gray-300 hover:border-red-400/50',
@@ -136,7 +136,7 @@ export function StemSplitter() {
                     type="button"
                     onClick={() => toggleStemSolo(stem.id)}
                     className={[
-                      'rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
+                      'touch-control rounded-lg border px-3 py-2 text-xs font-semibold transition-colors',
                       stem.solo
                         ? 'border-brand-400/50 bg-brand-500/20 text-brand-100'
                         : 'border-gray-700 bg-gray-900 text-gray-300 hover:border-brand-400/50',
