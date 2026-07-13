@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { type UndoRedoState, undoMiddleware } from './undoMiddleware';
 
 export interface AudioFile {
   id: string;
@@ -62,7 +63,7 @@ interface AddTrackInput {
   volume?: number;
 }
 
-export interface ProjectState {
+export interface ProjectState extends UndoRedoState {
   projectId: string;
   projectName: string;
   originalAudio: AudioFile | null;
@@ -172,7 +173,7 @@ export function calculateProjectDuration(tracks: TimelineTrack[], video: VideoFi
   return Math.max(trackDuration, video?.duration ?? 0);
 }
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
+export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) => ({
   ...initialState,
   setProjectName: (name) => set({ projectName: name }),
   loadFromSaved: (saved) =>
@@ -432,4 +433,4 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       return { ...initialState, projectId: crypto.randomUUID() };
     }),
-}));
+})));
