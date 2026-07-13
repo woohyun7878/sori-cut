@@ -7,9 +7,11 @@ import { Timeline } from '../components/Timeline';
 import { TransportBar } from '../components/TransportBar';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
+import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
 export function Studio() {
+  usePlaybackEngine();
   const originalAudio = useProjectStore((state) => state.originalAudio);
 
   return (
