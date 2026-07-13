@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { calculateProjectDuration, useProjectStore } from '../store/useProjectStore';
 
 function formatTime(time: number) {
@@ -22,72 +22,6 @@ export function TransportBar() {
   const stopPlayback = useProjectStore((state) => state.stopPlayback);
 
   const totalDuration = useMemo(() => calculateProjectDuration(tracks, video), [tracks, video]);
-  const frameRef = useRef<number | null>(null);
-  const playheadRef = useRef(playheadPosition);
-  const durationRef = useRef(totalDuration);
-  const loopRef = useRef(loopEnabled);
-
-  useEffect(() => {
-    playheadRef.current = playheadPosition;
-  }, [playheadPosition]);
-
-  useEffect(() => {
-    durationRef.current = totalDuration;
-  }, [totalDuration]);
-
-  useEffect(() => {
-    loopRef.current = loopEnabled;
-  }, [loopEnabled]);
-
-  useEffect(() => {
-    if (!isPlaying) {
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current);
-      }
-      return undefined;
-    }
-
-    let previousTime = performance.now();
-
-    const tick = (timestamp: number) => {
-      const deltaSeconds = (timestamp - previousTime) / 1000;
-      previousTime = timestamp;
-      const duration = durationRef.current;
-      const nextPosition = playheadRef.current + deltaSeconds;
-
-      if (duration <= 0) {
-        setIsPlaying(false);
-        setPlayheadPosition(0);
-        return;
-      }
-
-      if (nextPosition >= duration) {
-        if (loopRef.current) {
-          playheadRef.current = 0;
-          setPlayheadPosition(0);
-          frameRef.current = requestAnimationFrame(tick);
-          return;
-        }
-
-        playheadRef.current = duration;
-        setPlayheadPosition(duration);
-        setIsPlaying(false);
-        return;
-      }
-
-      playheadRef.current = nextPosition;
-      setPlayheadPosition(nextPosition);
-      frameRef.current = requestAnimationFrame(tick);
-    };
-
-    frameRef.current = requestAnimationFrame(tick);
-
-    return () => {
-      if (frameRef.current !== null) {
-        cancelAnimationFrame(frameRef.current);
-      }
-    };
-  }, [isPlaying, setIsPlaying, setPlayheadPosition]);
 
   const progressPercent = totalDuration > 0 ? (playheadPosition / totalDuration) * 100 : 0;
 

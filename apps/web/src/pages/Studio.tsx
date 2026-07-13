@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
-import { ProjectManager } from '../components/ProjectManager';
 import { RecordingStudio } from '../components/RecordingStudio';
 import { StemSplitter } from '../components/StemSplitter';
 import { SyncControls } from '../components/SyncControls';
@@ -9,38 +8,12 @@ import { Timeline } from '../components/Timeline';
 import { TransportBar } from '../components/TransportBar';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
-import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
-import { listProjects, loadProject } from '../lib/projectStorage';
+import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
 export function Studio() {
+  usePlaybackEngine();
   const originalAudio = useProjectStore((state) => state.originalAudio);
-  const loadFromSaved = useProjectStore((state) => state.loadFromSaved);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-
-  useAutoSave(setSaveStatus);
-
-  // On initial mount, try to restore the most recent project
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const projects = await listProjects();
-      if (cancelled || projects.length === 0) return;
-      const latest = projects[0];
-      const loaded = await loadProject(latest.id);
-      if (cancelled || !loaded) return;
-      loadFromSaved({
-        projectId: loaded.metadata.id,
-        projectName: loaded.metadata.name,
-        originalAudio: loaded.originalAudio,
-        stems: loaded.stems,
-        recordings: loaded.recordings,
-        video: loaded.video,
-        tracks: loaded.tracks,
-      });
-    })();
-    return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-950 text-white">
