@@ -63,6 +63,8 @@ interface AddTrackInput {
 }
 
 export interface ProjectState {
+  projectId: string;
+  projectName: string;
   originalAudio: AudioFile | null;
   stems: Stem[];
   recordings: Recording[];
@@ -73,6 +75,8 @@ export interface ProjectState {
   loopEnabled: boolean;
   exportProgress: number;
   isExporting: boolean;
+  setProjectName: (name: string) => void;
+  loadFromSaved: (state: Partial<ProjectState>) => void;
   setOriginalAudio: (file: AudioFile) => void;
   setStems: (stems: Stem[]) => void;
   toggleStemMute: (id: string) => void;
@@ -104,6 +108,8 @@ const trackLabels: Record<TrackType, string> = {
 };
 
 const initialState = {
+  projectId: crypto.randomUUID(),
+  projectName: '새 프로젝트' as string,
   originalAudio: null as AudioFile | null,
   stems: [] as Stem[],
   recordings: [] as Recording[],
@@ -168,6 +174,16 @@ export function calculateProjectDuration(tracks: TimelineTrack[], video: VideoFi
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   ...initialState,
+  setProjectName: (name) => set({ projectName: name }),
+  loadFromSaved: (saved) =>
+    set((state) => {
+      // Revoke old URLs
+      revokeUrl(state.originalAudio?.url);
+      state.stems.forEach((s) => revokeUrl(s.url));
+      state.recordings.forEach((r) => revokeUrl(r.url));
+      revokeUrl(state.video?.url);
+      return { ...initialState, ...saved, projectId: saved.projectId ?? crypto.randomUUID() };
+    }),
   setOriginalAudio: (file) =>
     set((state) => {
       if (state.originalAudio?.url !== file.url) {
@@ -414,6 +430,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       state.recordings.forEach((recording) => revokeUrl(recording.url));
       revokeUrl(state.video?.url);
 
-      return { ...initialState };
+      return { ...initialState, projectId: crypto.randomUUID() };
     }),
 }));

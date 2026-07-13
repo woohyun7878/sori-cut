@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
+import { ProjectManager } from '../components/ProjectManager';
 import { RecordingStudio } from '../components/RecordingStudio';
 import { StemSplitter } from '../components/StemSplitter';
 import { SyncControls } from '../components/SyncControls';
@@ -7,19 +9,25 @@ import { Timeline } from '../components/Timeline';
 import { TransportBar } from '../components/TransportBar';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
+import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
 export function Studio() {
   usePlaybackEngine();
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  useAutoSave(setSaveStatus);
   const originalAudio = useProjectStore((state) => state.originalAudio);
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-950 text-white">
       <nav className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-        <Link to="/" className="text-xl font-bold">
-          <span className="text-brand-400">소리</span>컷
-        </Link>
+        <div className="flex items-center gap-6">
+          <Link to="/" className="text-xl font-bold">
+            <span className="text-brand-400">소리</span>컷
+          </Link>
+          <ProjectManager saveStatus={saveStatus} />
+        </div>
         <div className="flex gap-4">
           <Link
             to="/export"
