@@ -17,7 +17,7 @@ export interface SavedProjectMetadata {
 }
 
 export interface SavedProject extends SavedProjectMetadata {
-  originalAudio: Omit<AudioFile, 'url'> & { blobId: string } | null;
+  originalAudio: (Omit<AudioFile, 'url' | 'blob'> & { blobId: string }) | null;
   stems: (Omit<Stem, 'url' | 'blob'> & { blobId: string })[];
   recordings: (Omit<Recording, 'url' | 'blob'> & { blobId: string })[];
   video: (Omit<VideoFile, 'url' | 'blob'> & { blobId: string }) | null;
@@ -54,7 +54,7 @@ let dbPromise: Promise<IDBPDatabase<SoriCutDB>> | null = null;
 function getDB(): Promise<IDBPDatabase<SoriCutDB>> {
   if (!dbPromise) {
     dbPromise = openDB<SoriCutDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db: IDBPDatabase<SoriCutDB>) {
         const projectStore = db.createObjectStore('projects', { keyPath: 'id' });
         projectStore.createIndex('by-updated', 'updatedAt');
 
@@ -63,7 +63,7 @@ function getDB(): Promise<IDBPDatabase<SoriCutDB>> {
       },
     });
   }
-  return dbPromise;
+  return dbPromise!;
 }
 
 function makeBlobId(projectId: string, category: string, itemId: string): string {

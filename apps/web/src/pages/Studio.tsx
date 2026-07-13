@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
+import { ProjectManager } from '../components/ProjectManager';
 import { RecordingStudio } from '../components/RecordingStudio';
 import { StemSplitter } from '../components/StemSplitter';
 import { SyncControls } from '../components/SyncControls';
@@ -8,11 +9,14 @@ import { Timeline } from '../components/Timeline';
 import { TransportBar } from '../components/TransportBar';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
+import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
 export function Studio() {
   usePlaybackEngine();
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  useAutoSave(setSaveStatus);
   const originalAudio = useProjectStore((state) => state.originalAudio);
 
   return (
