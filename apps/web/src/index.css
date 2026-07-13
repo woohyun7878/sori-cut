@@ -5,5 +5,50 @@
 @layer base {
   body {
     @apply bg-gray-950 text-white;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* Safe area insets for notched phones */
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-x {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+@layer components {
+  /* Prevent double-tap zoom on interactive controls */
+  .touch-control {
+    touch-action: manipulation;
+  }
+}
+
+@layer utilities {
+  /* Horizontal scroll with momentum scrolling */
+  .scroll-touch {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.gray.700') transparent;
+  }
+
+  .scroll-touch::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .scroll-touch::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-touch::-webkit-scrollbar-thumb {
+    background: theme('colors.gray.700');
+    border-radius: 9999px;
   }
 }

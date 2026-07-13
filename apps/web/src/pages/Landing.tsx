@@ -2,18 +2,18 @@ import { Link } from 'react-router-dom';
 
 export function Landing() {
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col safe-x">
       {/* Hero */}
-      <header className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        <div className="mb-8">
-          <h1 className="text-6xl font-bold tracking-tight">
+      <header className="flex-1 flex flex-col items-center justify-center px-4 py-12 text-center md:px-6 md:py-16">
+        <div className="mb-6 md:mb-8">
+          <h1 className="text-4xl font-bold tracking-tight md:text-5xl lg:text-6xl">
             <span className="text-brand-400">소리</span>
             <span className="text-white">컷</span>
           </h1>
-          <p className="mt-2 text-xl text-gray-400 font-medium">sori-cut</p>
+          <p className="mt-2 text-lg text-gray-400 font-medium md:text-xl">sori-cut</p>
         </div>
 
-        <p className="max-w-2xl text-lg text-gray-300 leading-relaxed">
+        <p className="max-w-2xl text-base text-gray-300 leading-relaxed md:text-lg">
           음악 커버 크리에이터를 위한 올인원 숏폼 편집기
           <br />
           <span className="text-gray-400">
@@ -21,10 +21,10 @@ export function Landing() {
           </span>
         </p>
 
-        <div className="mt-12 flex flex-col sm:flex-row gap-4">
+        <div className="mt-8 flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4 md:mt-12">
           <Link
             to="/studio"
-            className="px-8 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-semibold text-lg transition-colors"
+            className="touch-control px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-semibold text-base text-center transition-colors md:px-8 md:text-lg"
           >
             스튜디오 시작하기
           </Link>
@@ -32,14 +32,14 @@ export function Landing() {
             href="https://instagram.com/junewoomusic"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-8 py-3 rounded-xl border border-gray-700 hover:border-gray-500 text-gray-300 font-medium text-lg transition-colors"
+            className="touch-control px-6 py-3 rounded-xl border border-gray-700 hover:border-gray-500 text-gray-300 font-medium text-base text-center transition-colors md:px-8 md:text-lg"
           >
             @junewoomusic
           </a>
         </div>
 
         {/* Feature grid */}
-        <div className="mt-20 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 max-w-5xl w-full">
+        <div className="mt-12 grid grid-cols-1 gap-4 w-full max-w-5xl sm:grid-cols-2 sm:gap-5 lg:grid-cols-4 lg:gap-6 md:mt-20">
           <FeatureCard
             emoji="🎛️"
             title="스템 분리"
@@ -68,7 +68,7 @@ export function Landing() {
       </header>
 
       {/* Footer */}
-      <footer className="py-8 text-center text-sm text-gray-500">
+      <footer className="py-6 px-4 text-center text-sm text-gray-500 safe-bottom md:py-8">
         <p>
           소리(sound) + 컷(cut) — 소리를 자르고, 붙이고, 세상에 내보내세요.
         </p>
@@ -92,8 +92,8 @@ function FeatureCard({
   description: string;
 }) {
   return (
-    <div className="p-6 rounded-2xl bg-gray-900 border border-gray-800 hover:border-brand-600/50 transition-colors">
-      <div className="text-3xl mb-3">{emoji}</div>
+    <div className="p-5 rounded-2xl bg-gray-900 border border-gray-800 hover:border-brand-600/50 transition-colors md:p-6">
+      <div className="text-2xl mb-2 md:text-3xl md:mb-3">{emoji}</div>
       <h3 className="font-semibold text-white">{title}</h3>
       <p className="text-sm text-brand-400">{subtitle}</p>
       <p className="mt-2 text-sm text-gray-400">{description}</p>
