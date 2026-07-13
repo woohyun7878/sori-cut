@@ -1,0 +1,15 @@
+{
+  "name": "sori-cut",
+  "version": "0.1.0",
+  "private": true,
+  "description": "소리컷 — All-in-one browser-based editor for Korean music short-form content creators",
+  "scripts": {
+    "dev": "pnpm --filter @sori-cut/web dev",
+    "build": "pnpm --filter @sori-cut/web build",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean"
+  },
+  "keywords": ["music", "editor", "korean", "reels", "shorts", "tiktok", "audio", "video"],
+  "author": "junewoomusic",
+  "license": "MIT"
+}
