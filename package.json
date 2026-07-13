@@ -9,7 +9,19 @@
     "lint": "pnpm -r lint",
     "clean": "pnpm -r clean"
   },
-  "keywords": ["music", "editor", "korean", "reels", "shorts", "tiktok", "audio", "video"],
+  "keywords": [
+    "music",
+    "editor",
+    "korean",
+    "reels",
+    "shorts",
+    "tiktok",
+    "audio",
+    "video"
+  ],
   "author": "junewoomusic",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "idb": "^8.0.3"
+  }
 }

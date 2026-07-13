@@ -1,5 +1,7 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
-import { NavBar } from '../components/NavBar';
+import { ProjectManager } from '../components/ProjectManager';
 import { RecordingStudio } from '../components/RecordingStudio';
 import { StemSplitter } from '../components/StemSplitter';
 import { SyncControls } from '../components/SyncControls';
@@ -7,20 +9,40 @@ import { Timeline } from '../components/Timeline';
 import { TransportBar } from '../components/TransportBar';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
+import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
+import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
 export function Studio() {
+  usePlaybackEngine();
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  useAutoSave(setSaveStatus);
   const originalAudio = useProjectStore((state) => state.originalAudio);
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-950 text-white">
-      <NavBar />
+      <nav className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+        <div className="flex items-center gap-6">
+          <Link to="/" className="text-xl font-bold">
+            <span className="text-brand-400">소리</span>컷
+          </Link>
+          <ProjectManager saveStatus={saveStatus} />
+        </div>
+        <div className="flex gap-4">
+          <Link
+            to="/export"
+            className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium transition-colors"
+          >
+            내보내기 Export
+          </Link>
+        </div>
+      </nav>
 
-      <main className="flex-1 px-3 py-6 sm:px-4 md:px-6 md:py-8 safe-x safe-bottom">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 md:gap-8">
+      <main className="flex-1 px-6 py-8">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
           <div className="max-w-3xl">
-            <h1 className="text-2xl font-bold text-white md:text-3xl">커버 크리에이터 스튜디오 / Creator Studio</h1>
-            <p className="mt-2 text-sm text-gray-400 md:text-base">
+            <h1 className="text-3xl font-bold text-white">커버 크리에이터 스튜디오 / Creator Studio</h1>
+            <p className="mt-2 text-gray-400">
               비디오 업로드, 스템 분리, 보컬 녹음, 싱크 조정, 타임라인 편집을 한 화면에서 빠르게 진행하세요.
               <span className="block text-gray-500">Upload, record, align, and prep your Korean cover short in one workflow.</span>
             </p>
@@ -38,10 +60,10 @@ export function Studio() {
             </div>
           </div>
 
-          <section className="rounded-2xl border border-gray-800 bg-gray-950/70 p-4 md:rounded-3xl md:p-6">
-            <div className="mb-4 flex flex-col gap-2 md:mb-6">
-              <h2 className="text-xl font-semibold text-white md:text-2xl">오디오 준비 / Audio prep</h2>
-              <p className="text-sm text-gray-400">
+          <section className="rounded-3xl border border-gray-800 bg-gray-950/70 p-6">
+            <div className="mb-6 flex flex-col gap-2">
+              <h2 className="text-2xl font-semibold text-white">오디오 준비 / Audio prep</h2>
+              <p className="text-gray-400">
                 원곡 오디오를 업로드하면 타임라인과 내보내기에 자동으로 연결됩니다.
               </p>
             </div>

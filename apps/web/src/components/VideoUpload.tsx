@@ -104,10 +104,10 @@ export function VideoUpload() {
   };
 
   return (
-    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
+    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
       <div
         className={[
-          'rounded-2xl border-2 border-dashed bg-gray-950/70 p-5 text-center transition-colors md:rounded-3xl md:p-8',
+          'rounded-3xl border-2 border-dashed bg-gray-950/70 p-8 text-center transition-colors',
           isDragging ? 'border-brand-400 bg-brand-600/10' : 'border-gray-700 hover:border-brand-500/70',
         ].join(' ')}
         onDragEnter={() => setIsDragging(true)}
@@ -120,16 +120,16 @@ export function VideoUpload() {
       >
         <input accept={ACCEPTED_VIDEO_TYPES} className="hidden" id="video-upload" type="file" onChange={(event) => void handleInputChange(event)} />
 
-        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gray-800 text-2xl md:mb-4 md:h-16 md:w-16 md:rounded-2xl md:text-3xl">
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl">
           🎬
         </div>
 
-        <h3 className="text-lg font-semibold text-white md:text-xl">영상 파일을 여기에 놓으세요</h3>
-        <p className="mt-1 text-sm text-gray-400 md:mt-2">Drop your video file here</p>
-        <p className="mt-3 text-xs text-gray-500 md:mt-4">MP4 · MOV · WEBM</p>
+        <h3 className="text-xl font-semibold text-white">영상 파일을 여기에 놓으세요</h3>
+        <p className="mt-2 text-sm text-gray-400">Drop your video file here</p>
+        <p className="mt-4 text-xs text-gray-500">MP4 · MOV · WEBM</p>
 
         <label
-          className="touch-control mt-5 inline-flex cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 md:mt-6"
+          className="mt-6 inline-flex cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
           htmlFor="video-upload"
         >
           {isLoading ? '불러오는 중... / Loading...' : '파일 선택 / Browse Video'}
@@ -142,22 +142,22 @@ export function VideoUpload() {
         ) : null}
 
         {video ? (
-          <div className="mt-5 rounded-xl border border-gray-800 bg-gray-950/70 p-3 text-left md:mt-6 md:rounded-2xl md:p-4">
-            <div className="overflow-hidden rounded-xl border border-gray-800 bg-black md:rounded-2xl">
+          <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
+            <div className="overflow-hidden rounded-2xl border border-gray-800 bg-black">
               <video className="aspect-video w-full bg-black" controls src={video.url} />
             </div>
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-3 md:mt-4 md:gap-3">
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
               {metadata?.map((item) => (
-                <div key={item.label} className="rounded-lg border border-gray-800 bg-gray-900/80 p-2.5 md:rounded-xl md:p-3">
+                <div key={item.label} className="rounded-xl border border-gray-800 bg-gray-900/80 p-3">
                   <p className="text-xs uppercase tracking-[0.16em] text-gray-500">{item.label}</p>
-                  <p className="mt-1 text-sm font-medium text-white md:mt-2">{item.value}</p>
+                  <p className="mt-2 text-sm font-medium text-white">{item.value}</p>
                 </div>
               ))}
             </div>
 
             <button
-              className="touch-control mt-3 inline-flex rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-red-400/60 hover:text-red-200 md:mt-4"
+              className="mt-4 inline-flex rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-red-400/60 hover:text-red-200"
               type="button"
               onClick={() => setVideo(null)}
             >

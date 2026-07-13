@@ -69,7 +69,7 @@ export function DropZone() {
       }}
       onDrop={(event) => void handleDrop(event)}
       className={[
-        'rounded-2xl border-2 border-dashed bg-gray-900/80 p-5 text-center transition-colors md:rounded-3xl md:p-8',
+        'rounded-3xl border-2 border-dashed bg-gray-900/80 p-8 text-center transition-colors',
         isDragging ? 'border-brand-400 bg-brand-600/10' : 'border-gray-700 hover:border-brand-600/60',
       ].join(' ')}
     >
@@ -84,25 +84,25 @@ export function DropZone() {
         }}
       />
 
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gray-800 text-2xl md:mb-4 md:h-16 md:w-16 md:rounded-2xl md:text-3xl">
+      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl">
         🎵
       </div>
 
-      <h3 className="text-lg font-semibold text-white md:text-xl">오디오 파일을 여기에 놓으세요</h3>
-      <p className="mt-1 text-sm text-gray-400 md:mt-2">Drop your audio file here</p>
-      <p className="mt-3 text-xs text-gray-500 md:mt-4">MP3 · WAV · OGG · FLAC · M4A</p>
+      <h3 className="text-xl font-semibold text-white">오디오 파일을 여기에 놓으세요</h3>
+      <p className="mt-2 text-sm text-gray-400">Drop your audio file here</p>
+      <p className="mt-4 text-xs text-gray-500">MP3 · WAV · OGG · FLAC · M4A</p>
 
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
         disabled={isLoading}
-        className="touch-control mt-5 inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900 md:mt-6"
+        className="mt-6 inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
       >
         {isLoading ? '불러오는 중... / Loading...' : '파일 선택 / Browse Files'}
       </button>
 
       {originalAudio ? (
-        <div className="mt-5 rounded-xl border border-gray-800 bg-gray-950/70 p-3 text-left md:mt-6 md:rounded-2xl md:p-4">
+        <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
           <p className="text-sm font-medium text-white">{originalAudio.name}</p>
           <p className="mt-1 text-xs text-gray-400">
             {originalAudio.duration.toFixed(1)}s · 업로드 완료 / Ready to split

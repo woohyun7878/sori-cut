@@ -181,13 +181,13 @@ export function ExportPanel() {
   };
 
   return (
-    <section className="rounded-2xl border border-gray-800 bg-gray-900 p-4 md:rounded-3xl md:p-6">
+    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
       <div>
-        <h2 className="text-xl font-semibold text-white md:text-2xl">내보내기 패널 / Export Panel</h2>
-        <p className="mt-1 text-sm text-gray-400 md:mt-2">FFmpeg.wasm으로 세로형 숏폼 비디오를 렌더링합니다 / Render vertical short-form video with muxed audio.</p>
+        <h2 className="text-2xl font-semibold text-white">내보내기 패널 / Export Panel</h2>
+        <p className="mt-2 text-sm text-gray-400">FFmpeg.wasm으로 세로형 숏폼 비디오를 렌더링합니다 / Render vertical short-form video with muxed audio.</p>
       </div>
 
-      <div className="mt-5 grid gap-4 md:mt-6 md:grid-cols-2">
+      <div className="mt-6 grid gap-4 md:grid-cols-2">
         <label className="block text-sm text-gray-300">
           플랫폼 / Platform
           <select
@@ -238,7 +238,7 @@ export function ExportPanel() {
       </div>
 
       <button
-        className="touch-control mt-5 w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900 md:mt-6"
+        className="mt-6 w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
         disabled={isExporting}
         type="button"
         onClick={() => void handleExport()}
