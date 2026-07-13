@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateProjectDuration, type TimelineTrack, type TrackType, useProjectStore } from '../store/useProjectStore';
 
 const trackColors: Record<TrackType, string> = {
@@ -83,6 +83,98 @@ function TrackInspector({ track }: { track: TimelineTrack }) {
   );
 }
 
+interface TrimDragState {
+  trackId: string;
+  edge: 'left' | 'right';
+  initialMouseX: number;
+  initialOffset: number;
+  initialDuration: number;
+}
+
+interface ContextMenuState {
+  trackId: string;
+  x: number;
+  y: number;
+}
+
+function TimelineClip({
+  track,
+  zoom,
+  isSelected,
+  onSelect,
+  onContextMenu,
+  onTrimStart,
+}: {
+  track: TimelineTrack;
+  zoom: number;
+  isSelected: boolean;
+  onSelect: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onTrimStart: (edge: 'left' | 'right', e: React.MouseEvent) => void;
+}) {
+  const clipWidth = Math.max(track.duration * zoom, 48);
+
+  return (
+    <div
+      className={[
+        'group absolute top-1/2 flex h-16 -translate-y-1/2 items-center justify-between overflow-hidden rounded-2xl border bg-gradient-to-r px-4 text-sm text-white shadow-lg transition-shadow',
+        trackColors[track.type],
+        isSelected
+          ? 'border-brand-400 shadow-[0_0_12px_rgba(167,139,250,0.4)]'
+          : 'border-white/10 hover:border-white/30',
+      ].join(' ')}
+      style={{
+        left: track.startOffset * zoom,
+        width: clipWidth,
+        opacity: track.muted ? 0.45 : 1,
+        backgroundImage:
+          'repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(255,255,255,0.04) 6px, rgba(255,255,255,0.04) 7px)',
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(e);
+      }}
+    >
+      {/* Left trim handle */}
+      <div
+        className={[
+          'absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize rounded-l-2xl transition-colors',
+          isSelected ? 'bg-brand-300' : 'bg-white/20 group-hover:bg-white/50',
+        ].join(' ')}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onTrimStart('left', e);
+        }}
+      />
+
+      {/* Right trim handle */}
+      <div
+        className={[
+          'absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize rounded-r-2xl transition-colors',
+          isSelected ? 'bg-brand-300' : 'bg-white/20 group-hover:bg-white/50',
+        ].join(' ')}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onTrimStart('right', e);
+        }}
+      />
+
+      <div className="pointer-events-none min-w-0 flex-1 truncate">
+        <p className="truncate font-medium">{track.name}</p>
+        <p className="text-xs text-white/75">{track.startOffset.toFixed(2)}s</p>
+      </div>
+      <span className="pointer-events-none ml-2 shrink-0 text-xs text-white/80">
+        {track.duration.toFixed(2)}s
+      </span>
+    </div>
+  );
+}
+
 export function Timeline() {
   const tracks = useProjectStore((state) => state.tracks);
   const video = useProjectStore((state) => state.video);
@@ -90,15 +182,89 @@ export function Timeline() {
   const isPlaying = useProjectStore((state) => state.isPlaying);
   const addTrack = useProjectStore((state) => state.addTrack);
   const setPlayheadPosition = useProjectStore((state) => state.setPlayheadPosition);
-  const updateTrackOffset = useProjectStore((state) => state.updateTrackOffset);
+  const removeTrack = useProjectStore((state) => state.removeTrack);
+  const selectedTrackId = useProjectStore((state) => state.selectedTrackId);
+  const setSelectedTrack = useProjectStore((state) => state.setSelectedTrack);
+  const splitTrackAtPosition = useProjectStore((state) => state.splitTrackAtPosition);
+  const trimTrack = useProjectStore((state) => state.trimTrack);
+
   const [zoom, setZoom] = useState(64);
   const [newTrackType, setNewTrackType] = useState<TrackType>('audio');
-  const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [trimDrag, setTrimDrag] = useState<TrimDragState | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const totalDuration = useMemo(() => Math.max(calculateProjectDuration(tracks, video), 10), [tracks, video]);
   const timelineWidth = Math.max(totalDuration * zoom, 720);
   const markerStep = getMarkerStep(zoom);
   const markers = Array.from({ length: Math.ceil(totalDuration / markerStep) + 1 }, (_, index) => index * markerStep);
+
+  // Handle trim drag
+  const handleTrimMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!trimDrag) return;
+
+      const deltaX = e.clientX - trimDrag.initialMouseX;
+      const deltaTime = deltaX / zoom;
+
+      if (trimDrag.edge === 'left') {
+        const newOffset = Math.max(0, trimDrag.initialOffset + deltaTime);
+        const offsetDelta = newOffset - trimDrag.initialOffset;
+        const newDuration = trimDrag.initialDuration - offsetDelta;
+        if (newDuration >= 0.5) {
+          trimTrack(trimDrag.trackId, newOffset, newDuration);
+        }
+      } else {
+        const newDuration = Math.max(0.5, trimDrag.initialDuration + deltaTime);
+        trimTrack(trimDrag.trackId, trimDrag.initialOffset, newDuration);
+      }
+    },
+    [trimDrag, zoom, trimTrack],
+  );
+
+  const handleTrimMouseUp = useCallback(() => {
+    setTrimDrag(null);
+  }, []);
+
+  useEffect(() => {
+    if (trimDrag) {
+      window.addEventListener('mousemove', handleTrimMouseMove);
+      window.addEventListener('mouseup', handleTrimMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleTrimMouseMove);
+        window.removeEventListener('mouseup', handleTrimMouseUp);
+      };
+    }
+  }, [trimDrag, handleTrimMouseMove, handleTrimMouseUp]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = () => setContextMenu(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, [contextMenu]);
+
+  const handleSplitAtPlayhead = () => {
+    if (!selectedTrackId) return;
+    splitTrackAtPosition(selectedTrackId, playheadPosition);
+  };
+
+  const handleDeleteTrack = (trackId: string) => {
+    setShowDeleteConfirm(trackId);
+  };
+
+  const confirmDelete = () => {
+    if (showDeleteConfirm) {
+      removeTrack(showDeleteConfirm);
+      if (selectedTrackId === showDeleteConfirm) {
+        setSelectedTrack(null);
+      }
+      setShowDeleteConfirm(null);
+    }
+  };
 
   return (
     <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
@@ -129,6 +295,15 @@ export function Timeline() {
               +
             </button>
           </div>
+          <button
+            className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 transition-colors hover:border-brand-400/60 disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={!selectedTrackId}
+            title="분할 / Split at playhead"
+            type="button"
+            onClick={handleSplitAtPlayhead}
+          >
+            ✂️ 분할
+          </button>
           <select
             className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
             value={newTrackType}
@@ -148,7 +323,7 @@ export function Timeline() {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-3xl border border-gray-800 bg-gray-950/70">
+      <div ref={containerRef} className="overflow-x-auto rounded-3xl border border-gray-800 bg-gray-950/70">
         <div className="grid min-w-max grid-cols-[230px_minmax(720px,1fr)]">
           <div className="sticky left-0 z-30 border-b border-r border-gray-800 bg-gray-950 px-4 py-3 text-xs uppercase tracking-[0.24em] text-gray-500">
             Tracks
@@ -202,18 +377,7 @@ export function Timeline() {
                     const rect = event.currentTarget.getBoundingClientRect();
                     const nextPosition = ((event.clientX - rect.left) / rect.width) * totalDuration;
                     setPlayheadPosition(nextPosition);
-                  }}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    if (!draggingTrackId) {
-                      return;
-                    }
-
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    const nextOffset = ((event.clientX - rect.left) / rect.width) * totalDuration;
-                    updateTrackOffset(draggingTrackId, nextOffset);
-                    setDraggingTrackId(null);
+                    setSelectedTrack(null);
                   }}
                 >
                   {markers.map((marker) => (
@@ -222,24 +386,24 @@ export function Timeline() {
                     </div>
                   ))}
 
-                  <div
-                    className={`absolute top-1/2 flex h-16 -translate-y-1/2 cursor-grab items-center justify-between overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-r px-4 text-sm text-white shadow-lg ${trackColors[track.type]}`}
-                    draggable
-                    style={{
-                      left: track.startOffset * zoom,
-                      width: Math.max(track.duration * zoom, 120),
-                      opacity: track.muted ? 0.45 : 1,
+                  <TimelineClip
+                    isSelected={selectedTrackId === track.id}
+                    track={track}
+                    zoom={zoom}
+                    onContextMenu={(e) => {
+                      setContextMenu({ trackId: track.id, x: e.clientX, y: e.clientY });
                     }}
-                    onClick={(event) => event.stopPropagation()}
-                    onDragEnd={() => setDraggingTrackId(null)}
-                    onDragStart={() => setDraggingTrackId(track.id)}
-                  >
-                    <div>
-                      <p className="font-medium">{track.name}</p>
-                      <p className="text-xs text-white/75">{track.startOffset.toFixed(2)}s</p>
-                    </div>
-                    <span className="text-xs text-white/80">{track.duration.toFixed(2)}s</span>
-                  </div>
+                    onSelect={() => setSelectedTrack(track.id)}
+                    onTrimStart={(edge, e) => {
+                      setTrimDrag({
+                        trackId: track.id,
+                        edge,
+                        initialMouseX: e.clientX,
+                        initialOffset: track.startOffset,
+                        initialDuration: track.duration,
+                      });
+                    }}
+                  />
 
                   <div
                     className="absolute inset-y-0 z-10 w-px bg-brand-400 shadow-[0_0_0_1px_rgba(167,139,250,0.2)]"
@@ -253,9 +417,63 @@ export function Timeline() {
       </div>
 
       <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-        <span>클릭해서 플레이헤드를 이동하고 드래그로 클립 위치를 바꾸세요.</span>
+        <span>클릭해서 플레이헤드를 이동하고 클립을 선택해 편집하세요.</span>
         <span>{isPlaying ? '재생 중 / Playing' : '정지 / Stopped'}</span>
       </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 min-w-[160px] rounded-xl border border-gray-700 bg-gray-900 py-1 shadow-2xl"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+            type="button"
+            onClick={() => {
+              splitTrackAtPosition(contextMenu.trackId, playheadPosition);
+              setContextMenu(null);
+            }}
+          >
+            ✂️ 플레이헤드에서 분할
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-sm text-red-300 hover:bg-gray-800"
+            type="button"
+            onClick={() => {
+              handleDeleteTrack(contextMenu.trackId);
+              setContextMenu(null);
+            }}
+          >
+            🗑️ 클립 삭제
+          </button>
+        </div>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
+            <p className="mb-4 text-sm text-white">클립을 삭제하시겠습니까?</p>
+            <div className="flex gap-3">
+              <button
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"
+                type="button"
+                onClick={confirmDelete}
+              >
+                삭제 / Delete
+              </button>
+              <button
+                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800"
+                type="button"
+                onClick={() => setShowDeleteConfirm(null)}
+              >
+                취소 / Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

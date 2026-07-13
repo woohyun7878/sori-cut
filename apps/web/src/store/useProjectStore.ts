@@ -76,6 +76,7 @@ export interface ProjectState extends UndoRedoState {
   loopEnabled: boolean;
   exportProgress: number;
   isExporting: boolean;
+  selectedTrackId: string | null;
   setProjectName: (name: string) => void;
   loadFromSaved: (state: Partial<ProjectState>) => void;
   setOriginalAudio: (file: AudioFile) => void;
@@ -98,6 +99,9 @@ export interface ProjectState extends UndoRedoState {
   stopPlayback: () => void;
   setExportProgress: (progress: number) => void;
   setIsExporting: (exporting: boolean) => void;
+  setSelectedTrack: (id: string | null) => void;
+  splitTrackAtPosition: (id: string, position: number) => void;
+  trimTrack: (id: string, newOffset: number, newDuration: number) => void;
   reset: () => void;
 }
 
@@ -121,6 +125,7 @@ const initialState = {
   loopEnabled: false,
   exportProgress: 0,
   isExporting: false,
+  selectedTrackId: null as string | null,
 };
 
 function revokeUrl(url?: string | null) {
@@ -424,6 +429,51 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
     set({
       isExporting: exporting,
     }),
+  setSelectedTrack: (id) => set({ selectedTrackId: id }),
+  splitTrackAtPosition: (id, position) =>
+    set((state) => {
+      const track = state.tracks.find((t) => t.id === id);
+      if (!track) return state;
+
+      const trackStart = track.startOffset;
+      const trackEnd = track.startOffset + track.duration;
+
+      if (position <= trackStart || position >= trackEnd) return state;
+
+      const firstDuration = position - trackStart;
+      const secondDuration = trackEnd - position;
+
+      if (firstDuration < 0.1 || secondDuration < 0.1) return state;
+
+      const firstPart: TimelineTrack = {
+        ...track,
+        duration: firstDuration,
+      };
+
+      const secondPart: TimelineTrack = {
+        ...track,
+        id: crypto.randomUUID(),
+        name: `${track.name} (2)`,
+        startOffset: position,
+        duration: secondDuration,
+      };
+
+      return {
+        tracks: state.tracks.map((t) => (t.id === id ? firstPart : t)).concat(secondPart),
+      };
+    }),
+  trimTrack: (id, newOffset, newDuration) =>
+    set((state) => ({
+      tracks: state.tracks.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              startOffset: Math.max(0, newOffset),
+              duration: Math.max(0.5, newDuration),
+            }
+          : t,
+      ),
+    })),
   reset: () =>
     set((state) => {
       revokeUrl(state.originalAudio?.url);
