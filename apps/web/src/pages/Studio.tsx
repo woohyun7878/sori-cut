@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
 import { ProjectManager } from '../components/ProjectManager';
 import { RecordingStudio } from '../components/RecordingStudio';
+import { ShortcutHelpModal } from '../components/ShortcutHelpModal';
 import { StemSplitter } from '../components/StemSplitter';
 import { SyncControls } from '../components/SyncControls';
 import { Timeline } from '../components/Timeline';
+import { Toast } from '../components/Toast';
 import { TransportBar } from '../components/TransportBar';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
 import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
@@ -17,6 +20,9 @@ export function Studio() {
   usePlaybackEngine();
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   useAutoSave(setSaveStatus);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const openHelp = useCallback(() => setHelpOpen(true), []);
+  useKeyboardShortcuts(openHelp);
   const originalAudio = useProjectStore((state) => state.originalAudio);
 
   return (
@@ -28,7 +34,15 @@ export function Studio() {
           </Link>
           <ProjectManager saveStatus={saveStatus} />
         </div>
-        <div className="flex gap-4">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => setHelpOpen(true)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white"
+            aria-label="단축키 도움말"
+            title="단축키 (Shortcuts)"
+          >
+            ?
+          </button>
           <Link
             to="/export"
             className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium transition-colors"
@@ -83,6 +97,8 @@ export function Studio() {
           </div>
         </div>
       </main>
+      <Toast />
+      <ShortcutHelpModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }
