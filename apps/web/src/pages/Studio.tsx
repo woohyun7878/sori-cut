@@ -9,6 +9,7 @@ import { SyncControls } from '../components/SyncControls';
 import { Timeline } from '../components/Timeline';
 import { Toast } from '../components/Toast';
 import { TransportBar } from '../components/TransportBar';
+import { UndoRedoButtons } from '../components/UndoRedoButtons';
 import { VideoUpload } from '../components/VideoUpload';
 import { WaveformPlayer } from '../components/WaveformPlayer';
 import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
@@ -33,6 +34,7 @@ export function Studio() {
             <span className="text-brand-400">소리</span>컷
           </Link>
           <ProjectManager saveStatus={saveStatus} />
+          <UndoRedoButtons />
         </div>
         <div className="flex items-center gap-4">
           <button
