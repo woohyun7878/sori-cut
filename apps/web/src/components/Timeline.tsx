@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateProjectDuration, type TimelineTrack, type TrackType, useProjectStore } from '../store/useProjectStore';
+import { ClipWaveform } from './ClipWaveform';
 
 const trackColors: Record<TrackType, string> = {
   audio: 'from-purple-500/90 to-fuchsia-400/90',
@@ -113,6 +114,7 @@ function TimelineClip({
   onTrimStart: (edge: 'left' | 'right', e: React.MouseEvent) => void;
 }) {
   const clipWidth = Math.max(track.duration * zoom, 48);
+  const clipHeight = 64; // h-16 = 64px
 
   return (
     <div
@@ -127,8 +129,6 @@ function TimelineClip({
         left: track.startOffset * zoom,
         width: clipWidth,
         opacity: track.muted ? 0.45 : 1,
-        backgroundImage:
-          'repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(255,255,255,0.04) 6px, rgba(255,255,255,0.04) 7px)',
       }}
       onClick={(e) => {
         e.stopPropagation();
@@ -140,6 +140,17 @@ function TimelineClip({
         onContextMenu(e);
       }}
     >
+      {/* Waveform visualization */}
+      {track.sourceUrl && (
+        <ClipWaveform
+          sourceUrl={track.sourceUrl}
+          sourceStartOffset={track.sourceStartOffset}
+          duration={track.duration}
+          width={clipWidth}
+          height={clipHeight}
+        />
+      )}
+
       {/* Left trim handle */}
       <div
         className={[
@@ -164,11 +175,11 @@ function TimelineClip({
         }}
       />
 
-      <div className="pointer-events-none min-w-0 flex-1 truncate">
-        <p className="truncate font-medium">{track.name}</p>
-        <p className="text-xs text-white/75">{track.startOffset.toFixed(2)}s</p>
+      <div className="pointer-events-none relative z-[5] min-w-0 flex-1 truncate">
+        <p className="truncate font-medium drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{track.name}</p>
+        <p className="text-xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{track.startOffset.toFixed(2)}s</p>
       </div>
-      <span className="pointer-events-none ml-2 shrink-0 text-xs text-white/80">
+      <span className="pointer-events-none relative z-[5] ml-2 shrink-0 text-xs text-white/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
         {track.duration.toFixed(2)}s
       </span>
     </div>
