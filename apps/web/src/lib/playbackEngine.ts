@@ -114,15 +114,19 @@ export class PlaybackEngine {
         continue;
       }
 
+      const sourceStart = Math.max(track.sourceStartOffset ?? 0, 0);
+
       if (fromPosition <= trackStart) {
-        // Track hasn't started yet - schedule it for the future
+        // Track hasn't started yet - schedule it for the future.
+        // Play from the clip's source in-point, stopping at its trimmed duration.
         const delay = trackStart - fromPosition;
-        source.start(ctx.currentTime + delay, 0, track.duration);
+        source.start(ctx.currentTime + delay, sourceStart, track.duration);
       } else {
-        // Playhead is inside this track - start immediately with offset
-        const offset = fromPosition - trackStart;
-        const remaining = track.duration - offset;
-        source.start(0, offset, remaining);
+        // Playhead is inside this track - start immediately, offset into the
+        // source by the in-point plus how far the playhead is into the clip.
+        const intoClip = fromPosition - trackStart;
+        const remaining = track.duration - intoClip;
+        source.start(ctx.currentTime, sourceStart + intoClip, remaining);
       }
 
       this.activeNodes.push({ source, gain });

@@ -9,8 +9,20 @@ function createSilentBuffer(context: AudioContext, totalDuration: number) {
   return context.createBuffer(2, Math.ceil(duration * context.sampleRate), context.sampleRate);
 }
 
+export interface MixTrackInput {
+  url: string;
+  /** Timeline position (seconds) where the clip starts. */
+  offset: number;
+  volume: number;
+  muted: boolean;
+  /** Seconds into the source media where the clip begins. Defaults to 0. */
+  sourceStartOffset?: number;
+  /** Clip duration on the timeline. Defaults to the rest of the source buffer. */
+  duration?: number;
+}
+
 export async function mixAudioTracks(
-  tracks: Array<{ url: string; offset: number; volume: number; muted: boolean }>,
+  tracks: MixTrackInput[],
   totalDuration: number,
 ): Promise<AudioBuffer> {
   const context = createAudioContext();
@@ -32,38 +44,47 @@ export async function mixAudioTracks(
 
         const data = await response.arrayBuffer();
         const buffer = await context.decodeAudioData(data.slice(0));
+        const sourceStartOffset = Math.max(track.sourceStartOffset ?? 0, 0);
+        const availableFromSource = Math.max(buffer.duration - sourceStartOffset, 0);
+        const playDuration = Math.max(Math.min(track.duration ?? availableFromSource, availableFromSource), 0);
 
         return {
           ...track,
           buffer,
+          sourceStartOffset,
+          playDuration,
         };
       }),
     );
 
     const duration = Math.max(
       totalDuration,
-      ...decodedTracks.map((track) => Math.max(track.offset, 0) + track.buffer.duration),
+      0.5,
+      ...decodedTracks.map((track) => Math.max(track.offset, 0) + track.playDuration),
     );
-    const output = context.createBuffer(2, Math.ceil(duration * context.sampleRate), context.sampleRate);
+
+    const offlineContext = new OfflineAudioContext(2, Math.ceil(duration * context.sampleRate), context.sampleRate);
 
     decodedTracks.forEach((track) => {
-      const startFrame = Math.round(Math.max(track.offset, 0) * output.sampleRate);
-
-      for (let channelIndex = 0; channelIndex < output.numberOfChannels; channelIndex += 1) {
-        const target = output.getChannelData(channelIndex);
-        const source = track.buffer.getChannelData(Math.min(channelIndex, track.buffer.numberOfChannels - 1));
-
-        for (let sampleIndex = 0; sampleIndex < source.length; sampleIndex += 1) {
-          const outputIndex = startFrame + sampleIndex;
-
-          if (outputIndex >= target.length) {
-            break;
-          }
-
-          target[outputIndex] += source[sampleIndex] * track.volume;
-        }
+      if (track.playDuration <= 0) {
+        return;
       }
+
+      const source = offlineContext.createBufferSource();
+      source.buffer = track.buffer;
+
+      const gain = offlineContext.createGain();
+      gain.gain.value = track.volume;
+
+      source.connect(gain);
+      gain.connect(offlineContext.destination);
+
+      // (when, offset, duration): start at the timeline position, read from the
+      // clip's source in-point, and stop at the clip's trimmed duration.
+      source.start(Math.max(track.offset, 0), track.sourceStartOffset, track.playDuration);
     });
+
+    const output = await offlineContext.startRendering();
 
     for (let channelIndex = 0; channelIndex < output.numberOfChannels; channelIndex += 1) {
       const channel = output.getChannelData(channelIndex);

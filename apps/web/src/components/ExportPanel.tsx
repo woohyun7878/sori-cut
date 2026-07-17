@@ -102,6 +102,8 @@ export function ExportPanel() {
             offset: track.startOffset,
             volume: track.volume,
             muted: track.muted,
+            sourceStartOffset: track.sourceStartOffset,
+            duration: track.duration,
           })),
         totalDuration || video.duration,
       );

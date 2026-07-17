@@ -21,12 +21,12 @@ export interface UndoRedoState {
 }
 
 type UndoMiddleware = <
-  T,
+  T extends UndoRedoState,
   Mps extends [StoreMutatorIdentifier, unknown][] = [],
   Mcs extends [StoreMutatorIdentifier, unknown][] = [],
 >(
-  creator: StateCreator<T, Mps, Mcs>,
-) => StateCreator<T & UndoRedoState, Mps, Mcs>;
+  creator: StateCreator<T, Mps, Mcs, Omit<T, keyof UndoRedoState>>,
+) => StateCreator<T, Mps, Mcs>;
 
 /** Extract only the data keys (non-function, non-transient) from state. */
 function getTrackedState(state: Record<string, unknown>): Record<string, unknown> {
@@ -57,13 +57,19 @@ function hasChanged(a: Record<string, unknown>, b: Record<string, unknown>): boo
   return false;
 }
 
-export const undoMiddleware: UndoMiddleware =
+// Implementation is written against a concrete Record state and cast to the
+// generic UndoMiddleware signature (the standard zustand middleware pattern).
+type UndoMiddlewareImpl = (
+  creator: StateCreator<Record<string, unknown>, [], []>,
+) => StateCreator<Record<string, unknown>, [], []>;
+
+const undoMiddlewareImpl: UndoMiddlewareImpl =
   (creator) =>
   (set, get, api) => {
     let isUndoRedoing = false;
     let lastSnapshot: Record<string, unknown> | null = null;
 
-    const wrappedSet: typeof set = (...args: Parameters<typeof set>) => {
+    const wrappedSet: typeof set = ((...args: unknown[]) => {
       if (!isUndoRedoing) {
         const currentState = get() as Record<string, unknown>;
         const currentSnapshot = getTrackedState(currentState);
@@ -96,9 +102,9 @@ export const undoMiddleware: UndoMiddleware =
       }
 
       (set as (...a: unknown[]) => void)(...args);
-    };
+    }) as typeof set;
 
-    const storeApi = api as StoreApi<Record<string, unknown>>;
+    const storeApi: StoreApi<Record<string, unknown>> = api;
 
     const undo = () => {
       const state = get() as Record<string, unknown>;
@@ -147,7 +153,7 @@ export const undoMiddleware: UndoMiddleware =
     };
 
     const initialState = creator(wrappedSet, get, api);
-    lastSnapshot = getTrackedState(initialState as Record<string, unknown>);
+    lastSnapshot = getTrackedState(initialState);
 
     return {
       ...initialState,
@@ -159,3 +165,5 @@ export const undoMiddleware: UndoMiddleware =
       redo,
     };
   };
+
+export const undoMiddleware = undoMiddlewareImpl as unknown as UndoMiddleware;

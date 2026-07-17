@@ -48,6 +48,8 @@ export interface TimelineTrack {
   sourceUrl: string;
   startOffset: number;
   duration: number;
+  /** Seconds into the source media where this clip begins playing. */
+  sourceStartOffset: number;
   muted: boolean;
   volume: number;
 }
@@ -59,6 +61,7 @@ interface AddTrackInput {
   name?: string;
   sourceUrl?: string;
   startOffset?: number;
+  sourceStartOffset?: number;
   type?: TrackType;
   volume?: number;
 }
@@ -151,6 +154,7 @@ function sanitizeTrack(track: AddTrackInput, existingTracks: TimelineTrack[], fa
     sourceUrl: track.sourceUrl ?? '',
     startOffset: Math.max(track.startOffset ?? 0, 0),
     duration: Math.max(track.duration ?? fallbackDuration, 0.5),
+    sourceStartOffset: Math.max(track.sourceStartOffset ?? 0, 0),
     muted: track.muted ?? false,
     volume: clamp(track.volume ?? 0.9, 0, 1),
   };
@@ -188,7 +192,19 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
       state.stems.forEach((s) => revokeUrl(s.url));
       state.recordings.forEach((r) => revokeUrl(r.url));
       revokeUrl(state.video?.url);
-      return { ...initialState, ...saved, projectId: saved.projectId ?? crypto.randomUUID() };
+
+      // Migrate tracks saved before sourceStartOffset existed.
+      const migratedTracks = saved.tracks?.map((track) => ({
+        ...track,
+        sourceStartOffset: track.sourceStartOffset ?? 0,
+      }));
+
+      return {
+        ...initialState,
+        ...saved,
+        ...(migratedTracks ? { tracks: migratedTracks } : {}),
+        projectId: saved.projectId ?? crypto.randomUUID(),
+      };
     }),
   setOriginalAudio: (file) =>
     set((state) => {
@@ -456,6 +472,7 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
         name: `${track.name} (2)`,
         startOffset: position,
         duration: secondDuration,
+        sourceStartOffset: track.sourceStartOffset + firstDuration,
       };
 
       return {
@@ -464,15 +481,20 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
     }),
   trimTrack: (id, newOffset, newDuration) =>
     set((state) => ({
-      tracks: state.tracks.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              startOffset: Math.max(0, newOffset),
-              duration: Math.max(0.5, newDuration),
-            }
-          : t,
-      ),
+      tracks: state.tracks.map((t) => {
+        if (t.id !== id) return t;
+
+        const clampedOffset = Math.max(0, newOffset);
+        // Moving the start edge right (or left) shifts the source in-point by the same amount.
+        const offsetDelta = clampedOffset - t.startOffset;
+
+        return {
+          ...t,
+          startOffset: clampedOffset,
+          duration: Math.max(0.5, newDuration),
+          sourceStartOffset: Math.max(0, t.sourceStartOffset + offsetDelta),
+        };
+      }),
     })),
   reset: () =>
     set((state) => {

@@ -21,17 +21,25 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
       }
 
       // Ctrl+Shift+Z / Cmd+Shift+Z — redo
-      if (meta && event.shiftKey && event.key === 'Z') {
+      if (meta && event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault();
-        console.log('[sori-cut] Redo (placeholder)');
+        useProjectStore.getState().redo();
+        showToast('↪️ 다시 실행 (Redo)');
+        return;
+      }
+
+      // Ctrl+Y / Cmd+Y — redo
+      if (meta && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        useProjectStore.getState().redo();
         showToast('↪️ 다시 실행 (Redo)');
         return;
       }
 
       // Ctrl+Z / Cmd+Z — undo
-      if (meta && event.key === 'z') {
+      if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
-        console.log('[sori-cut] Undo (placeholder)');
+        useProjectStore.getState().undo();
         showToast('↩️ 되돌리기 (Undo)');
         return;
       }
@@ -72,12 +80,17 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
         }
         case 'm':
         case 'M': {
-          const tracks = store.tracks;
-          if (tracks.length > 0) {
-            const firstTrack = tracks[0];
-            store.toggleTrackMute(firstTrack.id);
-            showToast(firstTrack.muted ? '🔊 음소거 해제 (Unmute)' : '🔇 음소거 (Mute)');
+          const selectedTrack = store.selectedTrackId
+            ? store.tracks.find((track) => track.id === store.selectedTrackId)
+            : undefined;
+
+          if (!selectedTrack) {
+            showToast('⚠️ 먼저 트랙을 선택하세요 (Select a track first)');
+            break;
           }
+
+          store.toggleTrackMute(selectedTrack.id);
+          showToast(selectedTrack.muted ? '🔊 음소거 해제 (Unmute)' : '🔇 음소거 (Mute)');
           break;
         }
         case 'l':

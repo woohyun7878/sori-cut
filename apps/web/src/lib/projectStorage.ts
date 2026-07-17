@@ -277,7 +277,12 @@ export async function loadProject(id: string): Promise<LoadedProject | null> {
     } else if (t.id === 'video-track' && video) {
       sourceUrl = video.url;
     }
-    return { ...t, sourceUrl };
+    return {
+      ...t,
+      sourceUrl,
+      // Migrate projects saved before sourceStartOffset existed.
+      sourceStartOffset: t.sourceStartOffset ?? 0,
+    };
   });
 
   return {
