@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { computeAutoSyncOffset } from '../lib/autoSync';
 import { useProjectStore } from '../store/useProjectStore';
 
 function offsetToPercent(offset: number) {
@@ -13,6 +14,7 @@ export function SyncControls() {
   const [selectedTrackId, setSelectedTrackId] = useState('');
   const [offset, setOffset] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -182,11 +184,53 @@ export function SyncControls() {
             미리보기 / Preview
           </button>
           <button
-            className="rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60 disabled:opacity-50"
+            disabled={isSyncing}
             type="button"
-            onClick={() => setMessage('자동 싱크는 곧 제공됩니다. / Auto sync coming soon.')}
+            onClick={async () => {
+              if (!video) {
+                setMessage('먼저 영상을 업로드하세요. / Upload a video first.');
+                return;
+              }
+
+              if (!selectedTrack?.sourceUrl) {
+                setMessage('선택한 트랙에 오디오 소스가 없습니다. / The selected track has no audio source.');
+                return;
+              }
+
+              // Determine the reference track: prefer the original audio, fall back to video.
+              const referenceUrl = video.url;
+              if (!referenceUrl) {
+                setMessage('기준 오디오를 찾을 수 없습니다. / No reference audio found.');
+                return;
+              }
+
+              setIsSyncing(true);
+              setMessage('자동 싱크 분석 중... / Analyzing for auto sync...');
+
+              try {
+                const result = await computeAutoSyncOffset(referenceUrl, selectedTrack.sourceUrl);
+                const computedOffset = Math.max(-5, Math.min(5, result.offsetSeconds));
+                setOffset(computedOffset);
+                updateTrack(selectedTrack.id, { startOffset: Math.max(0, computedOffset) });
+
+                const confidencePercent = Math.round(result.confidence * 100);
+                setMessage(
+                  `자동 싱크 완료: ${computedOffset.toFixed(2)}초 오프셋 (신뢰도 ${confidencePercent}%) / ` +
+                  `Auto sync done: ${computedOffset.toFixed(2)}s offset (${confidencePercent}% confidence)`,
+                );
+              } catch (error) {
+                setMessage(
+                  error instanceof Error
+                    ? `자동 싱크 실패: ${error.message} / Auto sync failed.`
+                    : '자동 싱크 중 오류가 발생했습니다. / Auto sync error.',
+                );
+              } finally {
+                setIsSyncing(false);
+              }
+            }}
           >
-            자동 싱크 / Auto Sync
+            {isSyncing ? '분석 중... / Syncing...' : '자동 싱크 / Auto Sync'}
           </button>
           <button
             className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
