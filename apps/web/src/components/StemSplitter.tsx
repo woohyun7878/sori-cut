@@ -27,7 +27,7 @@ export function StemSplitter() {
       return '스플릿이 완료되었습니다 / Stems are ready to mix.';
     }
 
-    return 'Web Audio API 기반의 주파수 필터로 빠르게 스템을 추출합니다.';
+    return 'ONNX 기반 ML 모델로 정밀하게 스템을 분리합니다. / ML-powered stem separation.';
   }, [originalAudio, stems.length]);
 
   const handleSplit = async () => {
@@ -91,7 +91,7 @@ export function StemSplitter() {
       {isProcessing ? (
         <div className="mt-6">
           <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
-            <span>오프라인 렌더링 진행 중 / Offline rendering in progress</span>
+            <span>ML 모델 분리 진행 중 / ML separation in progress</span>
             <span>{Math.round(progress)}%</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-gray-800">
