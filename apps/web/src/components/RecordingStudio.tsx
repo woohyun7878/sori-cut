@@ -218,7 +218,7 @@ export function RecordingStudio() {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : '마이크 접근에 실패했습니다 / Could not access microphone.',
+          : 'Could not access microphone.',
       );
       await cleanupStream();
     }
@@ -238,9 +238,9 @@ export function RecordingStudio() {
     <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">녹음 스튜디오 / Recording Studio</h2>
+          <h2 className="text-2xl font-semibold text-white">Recording Studio</h2>
           <p className="mt-2 text-sm text-gray-400">
-            MediaRecorder와 Web Audio API로 브라우저 안에서 바로 녹음하세요.
+            Record directly in the browser with MediaRecorder and Web Audio API.
           </p>
         </div>
 
@@ -251,14 +251,14 @@ export function RecordingStudio() {
             onChange={(event) => setMonitoringEnabled(event.target.checked)}
             className="h-4 w-4 rounded border-gray-700 bg-gray-900 text-brand-500 focus:ring-brand-500"
           />
-          <span>모니터링 / Hear yourself</span>
+          <span>Hear yourself</span>
         </label>
       </div>
 
       <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/80 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm text-gray-400">녹음 시간 / Recording time</p>
+            <p className="text-sm text-gray-400">Recording time</p>
             <p className="mt-1 text-3xl font-semibold text-white">{formatElapsed(elapsed)}</p>
           </div>
 
@@ -272,7 +272,7 @@ export function RecordingStudio() {
                 isRecording ? 'bg-red-600/90' : 'bg-brand-600 hover:bg-brand-700 disabled:bg-gray-800',
               ].join(' ')}
             >
-              {isRecording ? '녹음 중 / Recording...' : '녹음 시작 / Start Recording'}
+              {isRecording ? 'Recording...' : 'Start Recording'}
             </button>
 
             <button
@@ -281,14 +281,14 @@ export function RecordingStudio() {
               disabled={!isRecording}
               className="rounded-xl border border-red-400/50 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-500"
             >
-              녹음 중지 / Stop Recording
+              Stop Recording
             </button>
           </div>
         </div>
 
         <div className="mt-6">
           <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
-            <span>입력 레벨 / Input level</span>
+            <span>Input level</span>
             <span>{Math.round(level * 100)}%</span>
           </div>
           <div className="flex h-5 overflow-hidden rounded-full border border-gray-800 bg-gray-900">
@@ -310,8 +310,8 @@ export function RecordingStudio() {
         <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-5">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-white">새 녹음 / New Recording</h3>
-              <p className="text-sm text-gray-400">미리 듣고 저장할지 결정하세요 / Preview before saving.</p>
+              <h3 className="text-lg font-semibold text-white">New Recording</h3>
+              <p className="text-sm text-gray-400">Preview before saving.</p>
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -320,14 +320,14 @@ export function RecordingStudio() {
                 onClick={discardPreview}
                 className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-2 text-sm font-semibold text-gray-300 transition-colors hover:border-gray-500"
               >
-                다시 녹음 / Re-record
+                Re-record
               </button>
               <button
                 type="button"
                 onClick={saveRecording}
                 className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
               >
-                저장 / Save
+                Save
               </button>
             </div>
           </div>
@@ -339,8 +339,8 @@ export function RecordingStudio() {
       {recordings.length > 0 ? (
         <div className="mt-6">
           <div className="mb-4">
-            <h3 className="text-lg font-semibold text-white">저장된 녹음 / Saved Recordings</h3>
-            <p className="text-sm text-gray-400">{recordings.length}개의 트랙이 프로젝트에 저장되었습니다.</p>
+            <h3 className="text-lg font-semibold text-white">Saved Recordings</h3>
+            <p className="text-sm text-gray-400">{recordings.length} track(s) saved to project.</p>
           </div>
 
           <div className="space-y-4">

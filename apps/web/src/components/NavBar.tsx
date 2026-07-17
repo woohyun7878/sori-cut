@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 const navLinks = [
-  { to: '/', label: '홈 Home' },
-  { to: '/studio', label: '스튜디오 Studio' },
-  { to: '/export', label: '내보내기 Export' },
+  { to: '/', label: 'Home' },
+  { to: '/studio', label: 'Studio' },
+  { to: '/export', label: 'Export' },
 ] as const;
 
 export function NavBar() {

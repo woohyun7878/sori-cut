@@ -26,7 +26,7 @@ function makeStem(overrides = {}) {
   return {
     id: 'stem-1',
     name: 'vocals',
-    label: '보컬',
+    label: 'Vocals',
     blob: new Blob(['stem'], { type: 'audio/wav' }),
     url: 'blob:stem-url',
     muted: false,
@@ -39,7 +39,7 @@ function makeStem(overrides = {}) {
 function makeRecording(overrides = {}) {
   return {
     id: 'rec-1',
-    name: '녹음 1',
+    name: 'Recording 1',
     blob: new Blob(['recording'], { type: 'audio/wav' }),
     url: 'blob:rec-url',
     duration: 5,

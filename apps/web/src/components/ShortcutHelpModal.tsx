@@ -4,17 +4,17 @@ interface ShortcutHelpModalProps {
 }
 
 const shortcuts = [
-  { key: 'Space', desc: '재생 / 일시정지 (Play / Pause)' },
-  { key: 'Escape', desc: '정지 (Stop)' },
-  { key: 'R', desc: '녹음 토글 (Record)' },
-  { key: 'Ctrl+S', desc: '프로젝트 저장 (Save)' },
-  { key: 'Ctrl+Z', desc: '되돌리기 (Undo)' },
-  { key: 'Ctrl+Shift+Z', desc: '다시 실행 (Redo)' },
-  { key: '[', desc: '5초 뒤로 (Back 5s)' },
-  { key: ']', desc: '5초 앞으로 (Forward 5s)' },
-  { key: 'M', desc: '트랙 음소거 토글 (Mute)' },
-  { key: 'L', desc: '반복 재생 토글 (Loop)' },
-  { key: '?', desc: '단축키 도움말 (This help)' },
+  { key: 'Space', desc: 'Play / Pause' },
+  { key: 'Escape', desc: 'Stop' },
+  { key: 'R', desc: 'Toggle recording' },
+  { key: 'Ctrl+S', desc: 'Save project' },
+  { key: 'Ctrl+Z', desc: 'Undo' },
+  { key: 'Ctrl+Shift+Z', desc: 'Redo' },
+  { key: '[', desc: 'Back 5s' },
+  { key: ']', desc: 'Forward 5s' },
+  { key: 'M', desc: 'Toggle mute' },
+  { key: 'L', desc: 'Toggle loop' },
+  { key: '?', desc: 'This help' },
 ];
 
 export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
@@ -26,18 +26,18 @@ export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="단축키 도움말"
+      aria-label="Keyboard shortcuts"
     >
       <div
         className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-white">⌨️ 단축키 / Shortcuts</h2>
+          <h2 className="text-lg font-bold text-white">⌨️ Shortcuts</h2>
           <button
             onClick={onClose}
             className="rounded-lg p-1 text-gray-400 hover:bg-gray-800 hover:text-white"
-            aria-label="닫기"
+            aria-label="Close"
           >
             ✕
           </button>

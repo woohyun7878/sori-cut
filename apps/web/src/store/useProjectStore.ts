@@ -109,15 +109,15 @@ export interface ProjectState extends UndoRedoState {
 }
 
 const trackLabels: Record<TrackType, string> = {
-  audio: '오디오',
-  video: '비디오',
-  stem: '스템',
-  recording: '녹음',
+  audio: 'Audio',
+  video: 'Video',
+  stem: 'Stem',
+  recording: 'Recording',
 };
 
 const initialState = {
   projectId: crypto.randomUUID(),
-  projectName: '새 프로젝트' as string,
+  projectName: 'New Project' as string,
   originalAudio: null as AudioFile | null,
   stems: [] as Stem[],
   recordings: [] as Recording[],

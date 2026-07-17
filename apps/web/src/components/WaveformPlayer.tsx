@@ -85,7 +85,7 @@ export function WaveformPlayer({ audioUrl, label }: WaveformPlayerProps) {
       <div className="mb-3 flex items-center justify-between gap-4">
         <div>
           {label ? <p className="text-sm font-medium text-white">{label}</p> : null}
-          <p className="text-xs text-gray-400">Waveform preview · 클릭해서 탐색 / Click to seek</p>
+          <p className="text-xs text-gray-400">Waveform preview · Click to seek</p>
         </div>
         <button
           type="button"
@@ -93,7 +93,7 @@ export function WaveformPlayer({ audioUrl, label }: WaveformPlayerProps) {
           onClick={() => void wavesurferRef.current?.playPause()}
           className="rounded-full bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
         >
-          {isPlaying ? '일시정지 / Pause' : '재생 / Play'}
+          {isPlaying ? 'Pause' : 'Play'}
         </button>
       </div>
 
@@ -101,7 +101,7 @@ export function WaveformPlayer({ audioUrl, label }: WaveformPlayerProps) {
 
       <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
         <span>{timeDisplay}</span>
-        <span>{isReady ? '준비 완료 / Ready' : '파형 생성 중 / Loading waveform'}</span>
+        <span>{isReady ? 'Ready' : 'Loading waveform'}</span>
       </div>
     </div>
   );

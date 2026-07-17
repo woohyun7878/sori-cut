@@ -33,8 +33,8 @@ export function TransportBar() {
     <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">재생 바 / Transport</h2>
-          <p className="mt-2 text-sm text-gray-400">재생, 시크, 루프를 한 번에 제어하세요 / Control playback and seeking.</p>
+          <h2 className="text-2xl font-semibold text-white">Transport</h2>
+          <p className="mt-2 text-sm text-gray-400">Control playback and seeking.</p>
         </div>
 
         <div className="flex items-center gap-2 rounded-2xl border border-gray-800 bg-gray-950/70 p-2">
@@ -76,7 +76,7 @@ export function TransportBar() {
             type="button"
             onClick={() => setLoopEnabled(!loopEnabled)}
           >
-            루프 / Loop
+            Loop
           </button>
         </div>
       </div>

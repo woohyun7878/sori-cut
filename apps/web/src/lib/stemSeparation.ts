@@ -89,7 +89,7 @@ async function renderStem(
 const STEM_DEFINITIONS: StemDefinition[] = [
   {
     name: 'vocals',
-    label: '보컬',
+    label: 'Vocals',
     connectGraph: (context, source, destination) => {
       const highpass = context.createBiquadFilter();
       highpass.type = 'highpass';
@@ -106,7 +106,7 @@ const STEM_DEFINITIONS: StemDefinition[] = [
   },
   {
     name: 'drums',
-    label: '드럼',
+    label: 'Drums',
     connectGraph: (context, source, destination) => {
       const sparkleHighpass = context.createBiquadFilter();
       sparkleHighpass.type = 'highpass';
@@ -133,7 +133,7 @@ const STEM_DEFINITIONS: StemDefinition[] = [
   },
   {
     name: 'bass',
-    label: '베이스',
+    label: 'Bass',
     connectGraph: (context, source, destination) => {
       const lowpass = context.createBiquadFilter();
       lowpass.type = 'lowpass';
@@ -145,7 +145,7 @@ const STEM_DEFINITIONS: StemDefinition[] = [
   },
   {
     name: 'guitar',
-    label: '기타/기타',
+    label: 'Guitar',
     connectGraph: (context, source, destination) => {
       const highpass = context.createBiquadFilter();
       highpass.type = 'highpass';
