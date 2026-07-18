@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { computeAutoSyncOffset } from '../lib/autoSync';
 import { useProjectStore } from '../store/useProjectStore';
 
 function offsetToPercent(offset: number) {
@@ -13,6 +14,7 @@ export function SyncControls() {
   const [selectedTrackId, setSelectedTrackId] = useState('');
   const [offset, setOffset] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -182,11 +184,52 @@ export function SyncControls() {
             Preview
           </button>
           <button
-            className="rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
+            className="rounded-xl border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60 disabled:opacity-50"
+            disabled={isSyncing}
             type="button"
-            onClick={() => setMessage('Auto sync coming soon.')}
+            onClick={async () => {
+              if (!video) {
+                setMessage('Upload a video first.');
+                return;
+              }
+
+              if (!selectedTrack?.sourceUrl) {
+                setMessage('The selected track has no audio source.');
+                return;
+              }
+
+              // Determine the reference track: prefer the original audio, fall back to video.
+              const referenceUrl = video.url;
+              if (!referenceUrl) {
+                setMessage('No reference audio found.');
+                return;
+              }
+
+              setIsSyncing(true);
+              setMessage('Analyzing for auto sync...');
+
+              try {
+                const result = await computeAutoSyncOffset(referenceUrl, selectedTrack.sourceUrl);
+                const computedOffset = Math.max(-5, Math.min(5, result.offsetSeconds));
+                setOffset(computedOffset);
+                updateTrack(selectedTrack.id, { startOffset: Math.max(0, computedOffset) });
+
+                const confidencePercent = Math.round(result.confidence * 100);
+                setMessage(
+                  `Auto sync done: ${computedOffset.toFixed(2)}s offset (${confidencePercent}% confidence)`,
+                );
+              } catch (error) {
+                setMessage(
+                  error instanceof Error
+                    ? `Auto sync failed: ${error.message}`
+                    : 'Auto sync error.',
+                );
+              } finally {
+                setIsSyncing(false);
+              }
+            }}
           >
-            Auto Sync
+            {isSyncing ? 'Syncing...' : 'Auto Sync'}
           </button>
           <button
             className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
