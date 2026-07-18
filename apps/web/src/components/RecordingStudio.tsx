@@ -235,14 +235,11 @@ export function RecordingStudio() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <div>
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-white">Recording Studio</h2>
-          <p className="mt-2 text-sm text-gray-400">
-            Record directly in the browser with MediaRecorder and Web Audio API.
-          </p>
-        </div>
+        <p className="text-sm text-gray-400">
+          Record directly in the browser with MediaRecorder and Web Audio API.
+        </p>
 
         <label className="inline-flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-300">
           <input
@@ -350,6 +347,6 @@ export function RecordingStudio() {
           </div>
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }

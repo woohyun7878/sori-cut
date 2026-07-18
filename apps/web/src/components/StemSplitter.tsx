@@ -71,12 +71,9 @@ export function StemSplitter() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <div>
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-white">Stem Splitter</h2>
-          <p className="mt-2 text-sm text-gray-400">{splitHint}</p>
-        </div>
+        <p className="text-sm text-gray-400">{splitHint}</p>
 
         <button
           type="button"
@@ -167,6 +164,6 @@ export function StemSplitter() {
           ))}
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }
