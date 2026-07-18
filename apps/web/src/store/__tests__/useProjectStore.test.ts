@@ -123,6 +123,41 @@ describe('useProjectStore', () => {
     });
   });
 
+  describe('setStems', () => {
+    it("revokes replaced stems' object URLs when new stems are set", () => {
+      const first = makeStem({ id: 'stem-1', url: 'blob:stem-old' });
+      useProjectStore.getState().setStems([first]);
+
+      (URL.revokeObjectURL as ReturnType<typeof vi.fn>).mockClear();
+
+      const second = makeStem({ id: 'stem-2', url: 'blob:stem-new' });
+      useProjectStore.getState().setStems([second]);
+
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:stem-old');
+    });
+
+    it('revokes all stem URLs when stems are cleared', () => {
+      const stem = makeStem({ id: 'stem-1', url: 'blob:stem-a' });
+      useProjectStore.getState().setStems([stem]);
+
+      (URL.revokeObjectURL as ReturnType<typeof vi.fn>).mockClear();
+      useProjectStore.getState().setStems([]);
+
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:stem-a');
+    });
+
+    it("keeps a stem's URL when it is still present in the new set", () => {
+      const stem = makeStem({ id: 'stem-1', url: 'blob:stem-keep' });
+      useProjectStore.getState().setStems([stem]);
+
+      (URL.revokeObjectURL as ReturnType<typeof vi.fn>).mockClear();
+      // Re-set the same stem (e.g. a volume/mute change committed elsewhere).
+      useProjectStore.getState().setStems([makeStem({ id: 'stem-1', url: 'blob:stem-keep' })]);
+
+      expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:stem-keep');
+    });
+  });
+
   describe('toggleStemMute', () => {
     it('toggles muted state on a stem', () => {
       const stem = makeStem({ muted: false });

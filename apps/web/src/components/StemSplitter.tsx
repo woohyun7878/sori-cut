@@ -1,10 +1,14 @@
-import { useMemo, useState } from 'react';
-import { separateStems } from '../lib/stemSeparation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { separateStems, type StemResult } from '../lib/stemSeparation';
 import { useProjectStore, type Stem } from '../store/useProjectStore';
 import { WaveformPlayer } from './WaveformPlayer';
 
 function titleFromStemName(name: string) {
   return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function revokeStemUrls(stems: StemResult[]) {
+  stems.forEach((stem) => URL.revokeObjectURL(stem.url));
 }
 
 export function StemSplitter() {
@@ -17,6 +21,20 @@ export function StemSplitter() {
   const [progress, setProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Object URLs produced by separateStems that have not yet been handed to the
+  // store. Once setStems commits them, the store owns their lifecycle (it revokes
+  // replaced stems and clears them on reset/load) and the timeline still references
+  // them, so committed stems must NOT be revoked here.
+  const uncommittedStemsRef = useRef<StemResult[]>([]);
+
+  useEffect(() => {
+    return () => {
+      // On unmount, only clean up URLs we produced but never committed to the store.
+      revokeStemUrls(uncommittedStemsRef.current);
+      uncommittedStemsRef.current = [];
+    };
+  }, []);
 
   const splitHint = useMemo(() => {
     if (!originalAudio) {
@@ -45,6 +63,7 @@ export function StemSplitter() {
       const arrayBuffer = await originalAudio.blob.arrayBuffer();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
       const stemResults = await separateStems(audioBuffer, setProgress);
+      uncommittedStemsRef.current = stemResults;
 
       const projectStems: Stem[] = stemResults.map((stem) => ({
         id: crypto.randomUUID(),
@@ -57,8 +76,14 @@ export function StemSplitter() {
         solo: false,
       }));
 
+      // Committing hands URL ownership to the store, which revokes the previously
+      // held stems' URLs — preventing leaks across repeated separations.
       setStems(projectStems);
+      uncommittedStemsRef.current = [];
     } catch (caughtError) {
+      // Revoke any URLs we produced but failed to commit so they don't orphan.
+      revokeStemUrls(uncommittedStemsRef.current);
+      uncommittedStemsRef.current = [];
       setError(
         caughtError instanceof Error
           ? caughtError.message
