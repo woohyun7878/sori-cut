@@ -43,7 +43,7 @@ export function Studio() {
       {/* Top nav */}
       <nav className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-gray-800 lg:px-6">
         <div className="flex items-center gap-4 lg:gap-6">
-          <Link to="/" className="text-xl font-bold">
+          <Link to="/studio" className="text-xl font-bold">
             <span className="text-brand-400">소리</span>컷
           </Link>
           <ProjectManager saveStatus={saveStatus} />
