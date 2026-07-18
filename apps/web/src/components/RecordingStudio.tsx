@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useProjectStore, type Recording } from '../store/useProjectStore';
 import { WaveformPlayer } from './WaveformPlayer';
+import {
+  Metronome,
+  clampBpm,
+  parseTimeSignature,
+  DEFAULT_BPM,
+  MIN_BPM,
+  MAX_BPM,
+} from '../lib/metronome';
+
+const TIME_SIGNATURE_OPTIONS = ['4/4', '3/4', '2/4', '6/8'] as const;
 
 interface RecordingDraft extends Recording {}
 
@@ -28,6 +38,14 @@ export function RecordingStudio() {
   const [preview, setPreview] = useState<RecordingDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [metronomeEnabled, setMetronomeEnabled] = useState(false);
+  const [countInEnabled, setCountInEnabled] = useState(false);
+  const [countInBars, setCountInBars] = useState(1);
+  const [bpm, setBpm] = useState(DEFAULT_BPM);
+  const [timeSignature, setTimeSignature] = useState<string>('4/4');
+  const [isCountingIn, setIsCountingIn] = useState(false);
+  const [countInBeat, setCountInBeat] = useState(0);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -38,6 +56,7 @@ export function RecordingStudio() {
   const intervalRef = useRef<number | null>(null);
   const startedAtRef = useRef<number>(0);
   const previewRef = useRef<RecordingDraft | null>(null);
+  const metronomeRef = useRef<Metronome | null>(null);
 
   previewRef.current = preview;
 
@@ -67,6 +86,7 @@ export function RecordingStudio() {
 
       streamRef.current?.getTracks().forEach((track) => track.stop());
       void audioContextRef.current?.close();
+      metronomeRef.current?.destroy();
     },
     [],
   );
@@ -135,11 +155,31 @@ export function RecordingStudio() {
     }
   };
 
+  const ensureMetronome = () => {
+    if (!metronomeRef.current) {
+      metronomeRef.current = new Metronome();
+    }
+
+    return metronomeRef.current;
+  };
+
+  const stopMetronome = () => {
+    metronomeRef.current?.stop();
+  };
+
   const stopRecording = async () => {
+    if (isCountingIn) {
+      stopMetronome();
+      setIsCountingIn(false);
+      setCountInBeat(0);
+      return;
+    }
+
     if (!isRecording) {
       return;
     }
 
+    stopMetronome();
     stopMeters();
     setIsRecording(false);
     setElapsed(Date.now() - startedAtRef.current);
@@ -151,14 +191,7 @@ export function RecordingStudio() {
     await cleanupStream();
   };
 
-  const startRecording = async () => {
-    if (isRecording) {
-      return;
-    }
-
-    discardPreview();
-    setError(null);
-
+  const beginRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = pickRecorderMimeType();
@@ -220,8 +253,66 @@ export function RecordingStudio() {
           ? caughtError.message
           : 'Could not access microphone.',
       );
+      stopMetronome();
+      setIsCountingIn(false);
+      setCountInBeat(0);
       await cleanupStream();
     }
+  };
+
+  const handleStartRecording = async () => {
+    if (isRecording || isCountingIn) {
+      return;
+    }
+
+    discardPreview();
+    setError(null);
+
+    const useCountIn = countInEnabled && countInBars > 0;
+    const useMetronome = metronomeEnabled;
+
+    if (!useCountIn && !useMetronome) {
+      await beginRecording();
+      return;
+    }
+
+    const metronome = ensureMetronome();
+    const parsedTimeSignature = parseTimeSignature(timeSignature);
+    const safeBpm = clampBpm(bpm);
+
+    if (useCountIn) {
+      setIsCountingIn(true);
+      setCountInBeat(0);
+
+      metronome.start({
+        bpm: safeBpm,
+        timeSignature: parsedTimeSignature,
+        countInBars,
+        continueAfterCountIn: useMetronome,
+        onBeat: (beat) => {
+          if (beat.countIn) {
+            setCountInBeat(beat.beatInBar + 1);
+          }
+        },
+        onCountInComplete: () => {
+          setIsCountingIn(false);
+          setCountInBeat(0);
+          void beginRecording();
+        },
+      });
+
+      return;
+    }
+
+    // Metronome only (no count-in): start clicking and record immediately.
+    metronome.start({
+      bpm: safeBpm,
+      timeSignature: parsedTimeSignature,
+      countInBars: 0,
+      continueAfterCountIn: true,
+    });
+
+    await beginRecording();
   };
 
   const saveRecording = () => {
@@ -252,30 +343,101 @@ export function RecordingStudio() {
         </label>
       </div>
 
+      <div className="mt-6 grid gap-4 rounded-2xl border border-gray-800 bg-gray-950/60 p-5 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="flex flex-col gap-1.5 text-sm text-gray-300">
+          <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Tempo (BPM)</span>
+          <input
+            type="number"
+            min={MIN_BPM}
+            max={MAX_BPM}
+            value={bpm}
+            disabled={isRecording || isCountingIn}
+            onChange={(event) => setBpm(Number(event.target.value))}
+            onBlur={() => setBpm((current) => clampBpm(current))}
+            className="rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-white focus:border-brand-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-sm text-gray-300">
+          <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Time signature</span>
+          <select
+            value={timeSignature}
+            disabled={isRecording || isCountingIn}
+            onChange={(event) => setTimeSignature(event.target.value)}
+            className="rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-white focus:border-brand-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {TIME_SIGNATURE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-3 self-end rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-sm text-gray-300">
+          <input
+            type="checkbox"
+            checked={metronomeEnabled}
+            disabled={isRecording || isCountingIn}
+            onChange={(event) => setMetronomeEnabled(event.target.checked)}
+            className="h-4 w-4 rounded border-gray-700 bg-gray-900 text-brand-500 focus:ring-brand-500"
+          />
+          <span>Metronome click</span>
+        </label>
+
+        <div className="flex flex-col gap-2 self-end">
+          <label className="flex items-center gap-3 rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={countInEnabled}
+              disabled={isRecording || isCountingIn}
+              onChange={(event) => setCountInEnabled(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-700 bg-gray-900 text-brand-500 focus:ring-brand-500"
+            />
+            <span>Count-in</span>
+          </label>
+          {countInEnabled ? (
+            <select
+              value={countInBars}
+              disabled={isRecording || isCountingIn}
+              onChange={(event) => setCountInBars(Number(event.target.value))}
+              className="rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-brand-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value={1}>1 bar</option>
+              <option value={2}>2 bars</option>
+            </select>
+          ) : null}
+        </div>
+      </div>
+
       <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/80 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm text-gray-400">Recording time</p>
-            <p className="mt-1 text-3xl font-semibold text-white">{formatElapsed(elapsed)}</p>
+            <p className="text-sm text-gray-400">{isCountingIn ? 'Count-in' : 'Recording time'}</p>
+            <p className="mt-1 text-3xl font-semibold text-white">
+              {isCountingIn ? countInBeat || '…' : formatElapsed(elapsed)}
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={() => void startRecording()}
-              disabled={isRecording}
+              onClick={() => void handleStartRecording()}
+              disabled={isRecording || isCountingIn}
               className={[
                 'rounded-xl px-5 py-3 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
-                isRecording ? 'bg-red-600/90' : 'bg-brand-600 hover:bg-brand-700 disabled:bg-gray-800',
+                isRecording || isCountingIn
+                  ? 'bg-red-600/90'
+                  : 'bg-brand-600 hover:bg-brand-700 disabled:bg-gray-800',
               ].join(' ')}
             >
-              {isRecording ? 'Recording...' : 'Start Recording'}
+              {isCountingIn ? 'Counting in...' : isRecording ? 'Recording...' : 'Start Recording'}
             </button>
 
             <button
               type="button"
               onClick={() => void stopRecording()}
-              disabled={!isRecording}
+              disabled={!isRecording && !isCountingIn}
               className="rounded-xl border border-red-400/50 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-500"
             >
               Stop Recording
