@@ -13,7 +13,8 @@ export type PlaybackEndCallback = () => void;
 export class PlaybackEngine {
   private audioContext: AudioContext | null = null;
   private bufferCache = new Map<string, AudioBuffer>();
-  private activeNodes: { source: AudioBufferSourceNode; gain: GainNode }[] = [];
+  private activeNodes = new Map<string, { source: AudioBufferSourceNode; gain: GainNode }[]>();
+  private currentTracks: TimelineTrack[] = [];
   private rafId: number | null = null;
   private startContextTime = 0;
   private startPlayheadPosition = 0;
@@ -74,6 +75,7 @@ export class PlaybackEngine {
 
     this.stopSources();
 
+    this.currentTracks = tracks;
     this.state = {
       isPlaying: true,
       playheadPosition: fromPosition,
@@ -105,31 +107,27 @@ export class PlaybackEngine {
       source.connect(gain);
       gain.connect(ctx.destination);
 
-      // Calculate when to start this track relative to playhead position
       const trackStart = track.startOffset;
       const trackEnd = trackStart + track.duration;
 
       if (fromPosition >= trackEnd) {
-        // Playhead is past this track
         continue;
       }
 
       const sourceStart = Math.max(track.sourceStartOffset ?? 0, 0);
 
       if (fromPosition <= trackStart) {
-        // Track hasn't started yet - schedule it for the future.
-        // Play from the clip's source in-point, stopping at its trimmed duration.
         const delay = trackStart - fromPosition;
         source.start(ctx.currentTime + delay, sourceStart, track.duration);
       } else {
-        // Playhead is inside this track - start immediately, offset into the
-        // source by the in-point plus how far the playhead is into the clip.
         const intoClip = fromPosition - trackStart;
         const remaining = track.duration - intoClip;
         source.start(ctx.currentTime, sourceStart + intoClip, remaining);
       }
 
-      this.activeNodes.push({ source, gain });
+      const existing = this.activeNodes.get(track.id) ?? [];
+      existing.push({ source, gain });
+      this.activeNodes.set(track.id, existing);
     }
   }
 
@@ -148,7 +146,6 @@ export class PlaybackEngine {
 
   seek(tracks: TimelineTrack[], position: number, projectDuration: number, loopEnabled: boolean) {
     if (this.state.isPlaying) {
-      // Re-schedule all tracks from the new position
       this.stopSources();
       this.cancelAnimationLoop();
       this.state.playheadPosition = position;
@@ -158,11 +155,16 @@ export class PlaybackEngine {
     }
   }
 
-  updateTrackVolume(trackId: string, _tracks: TimelineTrack[]) {
-    // Volume changes during playback won't take effect on already-playing nodes
-    // without a full reschedule. We update gain on existing nodes if we track them per-track.
-    // For simplicity, this is a no-op — volume changes take effect on next play/seek.
-    void trackId;
+  updateTrackVolume(trackId: string, tracks: TimelineTrack[]) {
+    const track = tracks.find((t) => t.id === trackId);
+    if (!track) return;
+
+    const nodes = this.activeNodes.get(trackId);
+    if (!nodes) return;
+
+    for (const { gain } of nodes) {
+      gain.gain.value = track.volume;
+    }
   }
 
   private startAnimationLoop() {
@@ -176,13 +178,13 @@ export class PlaybackEngine {
 
       if (currentPosition >= this.state.projectDuration) {
         if (this.state.loopEnabled) {
-          // Loop: reset
           currentPosition = 0;
           this.startPlayheadPosition = 0;
           this.startContextTime = this.audioContext.currentTime;
-          // Note: re-scheduling audio on loop would need to happen through the hook
+          this.stopSources();
+          void this.scheduleAllTracks(this.currentTracks, 0);
           this.onPlayheadUpdate?.(0);
-          this.onPlaybackEnd?.();
+          this.rafId = requestAnimationFrame(tick);
           return;
         }
 
@@ -210,14 +212,16 @@ export class PlaybackEngine {
   }
 
   private stopSources() {
-    for (const { source } of this.activeNodes) {
-      try {
-        source.stop();
-      } catch {
-        // Already stopped
+    for (const nodes of this.activeNodes.values()) {
+      for (const { source } of nodes) {
+        try {
+          source.stop();
+        } catch {
+          // Already stopped
+        }
       }
     }
-    this.activeNodes = [];
+    this.activeNodes.clear();
   }
 
   get isPlaying() {
