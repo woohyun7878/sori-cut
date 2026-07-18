@@ -6,9 +6,10 @@ let uuidCounter = 0;
 vi.stubGlobal('crypto', { randomUUID: () => `test-uuid-${++uuidCounter}` });
 
 // Mock URL.createObjectURL / revokeObjectURL
+const mockRevokeObjectURL = vi.fn();
 vi.stubGlobal('URL', {
   createObjectURL: () => 'blob:test-url',
-  revokeObjectURL: vi.fn(),
+  revokeObjectURL: mockRevokeObjectURL,
 });
 
 function makeAudioFile(overrides = {}) {
@@ -229,6 +230,76 @@ describe('useProjectStore', () => {
       useProjectStore.getState().addRecording(makeRecording());
       useProjectStore.getState().loadFromSaved({ projectName: 'Fresh' });
       expect(useProjectStore.getState().recordings).toHaveLength(0);
+    });
+  });
+
+  describe('blob URL lifecycle', () => {
+    it('revokes the outgoing project object URLs when replacing the project', () => {
+      useProjectStore.getState().setOriginalAudio(makeAudioFile({ url: 'blob:old-audio' }));
+      useProjectStore.getState().setStems([makeStem({ url: 'blob:old-stem' })]);
+      useProjectStore.getState().addRecording(makeRecording({ url: 'blob:old-rec' }));
+      useProjectStore.getState().setVideo(makeVideo({ url: 'blob:old-video' }));
+
+      mockRevokeObjectURL.mockClear();
+
+      useProjectStore.getState().loadFromSaved({
+        projectId: 'loaded-id',
+        projectName: 'Loaded',
+        originalAudio: makeAudioFile({ id: 'audio-2', url: 'blob:new-audio' }),
+        stems: [],
+        recordings: [],
+        video: null,
+        tracks: [],
+      });
+
+      const revoked = mockRevokeObjectURL.mock.calls.map((call) => call[0]);
+      expect(revoked).toContain('blob:old-audio');
+      expect(revoked).toContain('blob:old-stem');
+      expect(revoked).toContain('blob:old-rec');
+      expect(revoked).toContain('blob:old-video');
+      // The freshly loaded URL must survive.
+      expect(revoked).not.toContain('blob:new-audio');
+    });
+
+    it('revokes every project object URL on reset', () => {
+      useProjectStore.getState().setOriginalAudio(makeAudioFile({ url: 'blob:reset-audio' }));
+      useProjectStore.getState().setVideo(makeVideo({ url: 'blob:reset-video' }));
+
+      mockRevokeObjectURL.mockClear();
+      useProjectStore.getState().reset();
+
+      const revoked = mockRevokeObjectURL.mock.calls.map((call) => call[0]);
+      expect(revoked).toContain('blob:reset-audio');
+      expect(revoked).toContain('blob:reset-video');
+    });
+
+    it('does not revoke a URL that the incoming project still references', () => {
+      const audio = makeAudioFile({ url: 'blob:kept-audio' });
+      useProjectStore.getState().setOriginalAudio(audio);
+
+      mockRevokeObjectURL.mockClear();
+      // Re-load a project that carries the same audio asset forward.
+      useProjectStore.getState().loadFromSaved({
+        projectName: 'Same audio',
+        originalAudio: audio,
+        tracks: [
+          {
+            id: 'audio-original',
+            name: audio.name,
+            type: 'audio',
+            sourceUrl: audio.url,
+            startOffset: 0,
+            duration: audio.duration,
+            sourceStartOffset: 0,
+            muted: false,
+            volume: 1,
+          },
+        ],
+      });
+
+      const revoked = mockRevokeObjectURL.mock.calls.map((call) => call[0]);
+      expect(revoked).not.toContain('blob:kept-audio');
+      expect(useProjectStore.getState().originalAudio?.url).toBe('blob:kept-audio');
     });
   });
 
