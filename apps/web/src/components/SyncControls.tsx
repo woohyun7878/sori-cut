@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeAutoSyncOffset } from '../lib/autoSync';
 import { useProjectStore } from '../store/useProjectStore';
 
+/** Below this normalized confidence, the auto-sync offset is likely unreliable. */
+const LOW_CONFIDENCE_THRESHOLD = 0.1;
+
 function offsetToPercent(offset: number) {
   return 50 + (offset / 5) * 38;
 }
@@ -210,13 +213,22 @@ export function SyncControls() {
               try {
                 const result = await computeAutoSyncOffset(referenceUrl, selectedTrack.sourceUrl);
                 const computedOffset = Math.max(-5, Math.min(5, result.offsetSeconds));
-                setOffset(computedOffset);
-                updateTrack(selectedTrack.id, { startOffset: Math.max(0, computedOffset) });
-
                 const confidencePercent = Math.round(result.confidence * 100);
-                setMessage(
-                  `Auto sync done: ${computedOffset.toFixed(2)}s offset (${confidencePercent}% confidence)`,
-                );
+
+                // Surface the suggested offset on the slider so the user can review/preview it.
+                setOffset(computedOffset);
+
+                if (result.confidence < LOW_CONFIDENCE_THRESHOLD) {
+                  // Low confidence: don't silently apply a likely-inaccurate offset — warn instead.
+                  setMessage(
+                    `⚠️ Auto sync confidence is low (${confidencePercent}%). The suggested ${computedOffset.toFixed(2)}s offset may be inaccurate — preview and adjust it manually before applying.`,
+                  );
+                } else {
+                  updateTrack(selectedTrack.id, { startOffset: Math.max(0, computedOffset) });
+                  setMessage(
+                    `Auto sync done: ${computedOffset.toFixed(2)}s offset (${confidencePercent}% confidence)`,
+                  );
+                }
               } catch (error) {
                 setMessage(
                   error instanceof Error
