@@ -53,11 +53,11 @@ function TrackInspector({ track }: { track: TimelineTrack }) {
         type="button"
         onClick={() => toggleTrackMute(track.id)}
       >
-        {track.muted ? '음소거 해제 / Unmute' : '음소거 / Mute'}
+        {track.muted ? 'Unmute' : 'Mute'}
       </button>
 
       <label className="block text-xs text-gray-400">
-        볼륨 / Volume
+        Volume
         <input
           className="mt-1 h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-800 accent-brand-500"
           max={1}
@@ -70,7 +70,7 @@ function TrackInspector({ track }: { track: TimelineTrack }) {
       </label>
 
       <label className="block text-xs text-gray-400">
-        시작 위치 / Start offset
+        Start offset
         <input
           className="mt-1 w-full rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
           min={0}
@@ -281,13 +281,13 @@ export function Timeline() {
     <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
       <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">타임라인 / Timeline</h2>
-          <p className="mt-2 text-sm text-gray-400">클립 위치를 조정하고 플레이헤드를 이동하세요 / Position clips and adjust timing.</p>
+          <h2 className="text-2xl font-semibold text-white">Timeline</h2>
+          <p className="mt-2 text-sm text-gray-400">Position clips and adjust timing.</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <div className="rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-300">
-            총 길이 / Total <span className="text-brand-300">{formatSeconds(totalDuration)}</span>
+            Total <span className="text-brand-300">{formatSeconds(totalDuration)}</span>
           </div>
           <div className="flex items-center rounded-xl border border-gray-800 bg-gray-950 p-1">
             <button
@@ -309,11 +309,11 @@ export function Timeline() {
           <button
             className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 transition-colors hover:border-brand-400/60 disabled:opacity-40 disabled:cursor-not-allowed"
             disabled={!selectedTrackId}
-            title="분할 / Split at playhead"
+            title="Split at playhead"
             type="button"
             onClick={handleSplitAtPlayhead}
           >
-            ✂️ 분할
+            ✂️ Split
           </button>
           <select
             className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
@@ -329,7 +329,7 @@ export function Timeline() {
             type="button"
             onClick={() => addTrack({ type: newTrackType })}
           >
-            트랙 추가 / Add Track
+            Add Track
           </button>
         </div>
       </div>
@@ -428,8 +428,8 @@ export function Timeline() {
       </div>
 
       <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-        <span>클릭해서 플레이헤드를 이동하고 클립을 선택해 편집하세요.</span>
-        <span>{isPlaying ? '재생 중 / Playing' : '정지 / Stopped'}</span>
+        <span>Click to move the playhead. Select a clip to edit.</span>
+        <span>{isPlaying ? 'Playing' : 'Stopped'}</span>
       </div>
 
       {/* Context menu */}
@@ -446,7 +446,7 @@ export function Timeline() {
               setContextMenu(null);
             }}
           >
-            ✂️ 플레이헤드에서 분할
+            ✂️ Split at playhead
           </button>
           <button
             className="w-full px-4 py-2 text-left text-sm text-red-300 hover:bg-gray-800"
@@ -456,7 +456,7 @@ export function Timeline() {
               setContextMenu(null);
             }}
           >
-            🗑️ 클립 삭제
+            🗑️ Delete clip
           </button>
         </div>
       )}
@@ -465,21 +465,21 @@ export function Timeline() {
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
-            <p className="mb-4 text-sm text-white">클립을 삭제하시겠습니까?</p>
+            <p className="mb-4 text-sm text-white">Delete this clip?</p>
             <div className="flex gap-3">
               <button
                 className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"
                 type="button"
                 onClick={confirmDelete}
               >
-                삭제 / Delete
+                Delete
               </button>
               <button
                 className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800"
                 type="button"
                 onClick={() => setShowDeleteConfirm(null)}
               >
-                취소 / Cancel
+                Cancel
               </button>
             </div>
           </div>

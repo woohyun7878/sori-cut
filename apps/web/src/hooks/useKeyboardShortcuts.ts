@@ -16,7 +16,7 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
       // Ctrl+S / Cmd+S — save project
       if (meta && event.key === 's') {
         event.preventDefault();
-        showToast('💾 저장 (Save)');
+        showToast('💾 Saved');
         return;
       }
 
@@ -24,7 +24,7 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
       if (meta && event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         useProjectStore.getState().redo();
-        showToast('↪️ 다시 실행 (Redo)');
+        showToast('↪️ Redo');
         return;
       }
 
@@ -32,7 +32,7 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
       if (meta && event.key.toLowerCase() === 'y') {
         event.preventDefault();
         useProjectStore.getState().redo();
-        showToast('↪️ 다시 실행 (Redo)');
+        showToast('↪️ Redo');
         return;
       }
 
@@ -40,7 +40,7 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         useProjectStore.getState().undo();
-        showToast('↩️ 되돌리기 (Undo)');
+        showToast('↩️ Undo');
         return;
       }
 
@@ -54,28 +54,28 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
           event.preventDefault();
           const next = !store.isPlaying;
           store.setIsPlaying(next);
-          showToast(next ? '▶️ 재생 (Play)' : '⏸️ 일시정지 (Pause)');
+          showToast(next ? '▶️ Play' : '⏸️ Pause');
           break;
         }
         case 'Escape': {
           store.stopPlayback();
-          showToast('⏹️ 정지 (Stop)');
+          showToast('⏹️ Stop');
           break;
         }
         case 'r':
         case 'R': {
-          showToast('🎙️ 녹음 토글 (Record)');
+          showToast('🎙️ Record');
           break;
         }
         case '[': {
           const pos = Math.max(0, store.playheadPosition - 5);
           store.setPlayheadPosition(pos);
-          showToast('⏪ -5초 (Back 5s)');
+          showToast('⏪ Back 5s');
           break;
         }
         case ']': {
           store.setPlayheadPosition(store.playheadPosition + 5);
-          showToast('⏩ +5초 (Forward 5s)');
+          showToast('⏩ Forward 5s');
           break;
         }
         case 'm':
@@ -85,19 +85,19 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
             : undefined;
 
           if (!selectedTrack) {
-            showToast('⚠️ 먼저 트랙을 선택하세요 (Select a track first)');
+            showToast('⚠️ Select a track first');
             break;
           }
 
           store.toggleTrackMute(selectedTrack.id);
-          showToast(selectedTrack.muted ? '🔊 음소거 해제 (Unmute)' : '🔇 음소거 (Mute)');
+          showToast(selectedTrack.muted ? '🔊 Unmuted' : '🔇 Muted');
           break;
         }
         case 'l':
         case 'L': {
           const next = !store.loopEnabled;
           store.setLoopEnabled(next);
-          showToast(next ? '🔁 반복 켜기 (Loop On)' : '➡️ 반복 끄기 (Loop Off)');
+          showToast(next ? '🔁 Loop On' : '➡️ Loop Off');
           break;
         }
         case '?': {

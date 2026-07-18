@@ -40,7 +40,7 @@ function getVideoMetadata(file: File) {
 
     video.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error('영상 파일을 읽을 수 없습니다. / Could not read the selected video.'));
+      reject(new Error('Could not read the selected video.'));
     };
   });
 }
@@ -58,9 +58,9 @@ export function VideoUpload() {
     }
 
     return [
-      { label: '길이 / Duration', value: formatDuration(video.duration) },
-      { label: '해상도 / Resolution', value: `${video.width ?? 0} × ${video.height ?? 0}` },
-      { label: '파일 / File', value: video.name },
+      { label: 'Duration', value: formatDuration(video.duration) },
+      { label: 'Resolution', value: `${video.width ?? 0} × ${video.height ?? 0}` },
+      { label: 'File', value: video.name },
     ];
   }, [video]);
 
@@ -70,7 +70,7 @@ export function VideoUpload() {
     }
 
     if (!isSupportedVideo(file)) {
-      setError('지원 형식은 MP4, MOV, WEBM 입니다. / Supported formats: MP4, MOV, WEBM.');
+      setError('Supported formats: MP4, MOV, WEBM.');
       return;
     }
 
@@ -84,7 +84,7 @@ export function VideoUpload() {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : '영상 업로드 중 오류가 발생했습니다. / Video upload failed.',
+          : 'Video upload failed.',
       );
     } finally {
       setIsLoading(false);
@@ -124,15 +124,15 @@ export function VideoUpload() {
           🎬
         </div>
 
-        <h3 className="text-xl font-semibold text-white">영상 파일을 여기에 놓으세요</h3>
-        <p className="mt-2 text-sm text-gray-400">Drop your video file here</p>
+        <h3 className="text-xl font-semibold text-white">Drop your video file here</h3>
+        <p className="mt-2 text-sm text-gray-400">or click to browse</p>
         <p className="mt-4 text-xs text-gray-500">MP4 · MOV · WEBM</p>
 
         <label
           className="mt-6 inline-flex cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
           htmlFor="video-upload"
         >
-          {isLoading ? '불러오는 중... / Loading...' : '파일 선택 / Browse Video'}
+          {isLoading ? 'Loading...' : 'Browse Video'}
         </label>
 
         {error ? (
@@ -161,7 +161,7 @@ export function VideoUpload() {
               type="button"
               onClick={() => setVideo(null)}
             >
-              영상 제거 / Remove Video
+              Remove Video
             </button>
           </div>
         ) : null}

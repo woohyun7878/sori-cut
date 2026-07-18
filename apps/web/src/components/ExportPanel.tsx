@@ -16,9 +16,9 @@ const FFMPEG_CORE_VERSION = '0.12.6';
 const platformOptions: Platform[] = ['Instagram Reels', 'YouTube Shorts', 'TikTok'];
 
 const qualityOptions: Record<Quality, { crf: string; label: string; preset: string }> = {
-  draft: { crf: '30', label: 'Draft (빠른 미리보기)', preset: 'veryfast' },
-  standard: { crf: '24', label: 'Standard (표준)', preset: 'medium' },
-  high: { crf: '19', label: 'High (고화질)', preset: 'slow' },
+  draft: { crf: '30', label: 'Draft (fast preview)', preset: 'veryfast' },
+  standard: { crf: '24', label: 'Standard', preset: 'medium' },
+  high: { crf: '19', label: 'High quality', preset: 'slow' },
 };
 
 function formatDuration(duration: number) {
@@ -72,14 +72,14 @@ export function ExportPanel() {
 
   const handleExport = async () => {
     if (!video) {
-      setError('먼저 영상을 업로드하세요. / Upload a video before exporting.');
+      setError('Upload a video before exporting.');
       return;
     }
 
     setIsExporting(true);
     setError(null);
     setProgress(0);
-    setStatus('FFmpeg 로딩 중... / Loading FFmpeg...');
+    setStatus('Loading FFmpeg...');
 
     try {
       const ffmpeg = ffmpegRef.current ?? new FFmpeg();
@@ -93,7 +93,7 @@ export function ExportPanel() {
 
       await loadFFmpeg(ffmpeg);
 
-      setStatus('오디오 믹스 준비 중... / Preparing mixed audio...');
+      setStatus('Preparing mixed audio...');
       const mixedAudio = await mixAudioTracks(
         tracks
           .filter((track) => track.type !== 'video')
@@ -113,11 +113,11 @@ export function ExportPanel() {
       const outputName = `${video.name.replace(/\.[^.]+$/, '')}-${platform.toLowerCase().replace(/\s+/g, '-')}.mp4`;
       const qualityOption = qualityOptions[quality];
 
-      setStatus('가상 파일 시스템에 입력 쓰는 중... / Writing files to FFmpeg FS...');
+      setStatus('Writing files to FFmpeg FS...');
       await ffmpeg.writeFile(inputName, await fetchFile(video.blob));
       await ffmpeg.writeFile('mixed-audio.wav', await fetchFile(wavBlob));
 
-      setStatus('인코딩 중... / Encoding export...');
+      setStatus('Encoding export...');
       const exitCode = await ffmpeg.exec([
         '-i',
         inputName,
@@ -146,13 +146,13 @@ export function ExportPanel() {
       ]);
 
       if (exitCode !== 0) {
-        throw new Error('FFmpeg 명령이 실패했습니다.');
+        throw new Error('FFmpeg command failed.');
       }
 
       const output = await ffmpeg.readFile(outputName);
 
       if (!(output instanceof Uint8Array)) {
-        throw new Error('내보내기 파일을 읽지 못했습니다.');
+        throw new Error('Could not read the exported file.');
       }
 
       if (downloadUrl?.startsWith('blob:')) {
@@ -169,12 +169,12 @@ export function ExportPanel() {
         fileSize: formatFileSize(blob.size),
       });
       setProgress(100);
-      setStatus('내보내기 완료 / Export complete');
+      setStatus('Export complete');
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
-          ? `내보내기에 실패했습니다: ${caughtError.message}`
-          : '내보내기 중 알 수 없는 오류가 발생했습니다.',
+          ? `Export failed: ${caughtError.message}`
+          : 'An unknown error occurred during export.',
       );
       setStatus(null);
     } finally {
@@ -185,13 +185,13 @@ export function ExportPanel() {
   return (
     <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
       <div>
-        <h2 className="text-2xl font-semibold text-white">내보내기 패널 / Export Panel</h2>
-        <p className="mt-2 text-sm text-gray-400">FFmpeg.wasm으로 세로형 숏폼 비디오를 렌더링합니다 / Render vertical short-form video with muxed audio.</p>
+        <h2 className="text-2xl font-semibold text-white">Export Panel</h2>
+        <p className="mt-2 text-sm text-gray-400">Render vertical short-form video with muxed audio via FFmpeg.wasm.</p>
       </div>
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <label className="block text-sm text-gray-300">
-          플랫폼 / Platform
+          Platform
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
             value={platform}
@@ -206,7 +206,7 @@ export function ExportPanel() {
         </label>
 
         <label className="block text-sm text-gray-300">
-          품질 / Quality
+          Quality
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
             value={quality}
@@ -222,7 +222,7 @@ export function ExportPanel() {
       </div>
 
       <div className="mt-4 rounded-2xl border border-gray-800 bg-gray-950/70 p-4">
-        <h3 className="text-sm font-semibold text-white">포맷 정보 / Format info</h3>
+        <h3 className="text-sm font-semibold text-white">Format info</h3>
         <div className="mt-3 grid gap-3 text-sm text-gray-300 md:grid-cols-3">
           <div>
             <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Canvas</p>
@@ -245,13 +245,13 @@ export function ExportPanel() {
         type="button"
         onClick={() => void handleExport()}
       >
-        {isExporting ? '내보내는 중... / Exporting...' : '내보내기 시작 / Start Export'}
+        {isExporting ? 'Exporting...' : 'Start Export'}
       </button>
 
       {(isExporting || status) && (
         <div className="mt-4">
           <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
-            <span>{status ?? '처리 중... / Processing...'}</span>
+            <span>{status ?? 'Processing...'}</span>
             <span>{progress}%</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-gray-800">
@@ -273,7 +273,7 @@ export function ExportPanel() {
         <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 className="text-sm font-semibold text-white">다운로드 준비 완료 / Ready to download</h3>
+              <h3 className="text-sm font-semibold text-white">Ready to download</h3>
               {stats ? (
                 <p className="mt-2 text-sm text-gray-400">
                   {stats.fileSize} · {formatDuration(stats.duration)}
@@ -286,7 +286,7 @@ export function ExportPanel() {
               download={downloadName}
               href={downloadUrl}
             >
-              다운로드 / Download
+              Download
             </a>
           </div>
         </div>

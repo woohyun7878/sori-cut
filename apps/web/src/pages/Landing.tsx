@@ -14,11 +14,7 @@ export function Landing() {
         </div>
 
         <p className="max-w-2xl text-base text-gray-300 leading-relaxed md:text-lg">
-          음악 커버 크리에이터를 위한 올인원 숏폼 편집기
-          <br />
-          <span className="text-gray-400">
-            The all-in-one short-form editor for music cover creators.
-          </span>
+          The all-in-one short-form editor for music cover creators.
         </p>
 
         <div className="mt-8 flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:flex-row sm:gap-4 md:mt-12">
@@ -26,7 +22,7 @@ export function Landing() {
             to="/studio"
             className="touch-control px-6 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-semibold text-base text-center transition-colors md:px-8 md:text-lg"
           >
-            스튜디오 시작하기
+            Open Studio
           </Link>
           <a
             href="https://instagram.com/junewoomusic"
@@ -42,27 +38,23 @@ export function Landing() {
         <div className="mt-12 grid grid-cols-1 gap-4 w-full max-w-5xl sm:grid-cols-2 sm:gap-5 lg:grid-cols-4 lg:gap-6 md:mt-20">
           <FeatureCard
             emoji="🎛️"
-            title="스템 분리"
-            subtitle="Stem Splitting"
-            description="보컬, 드럼, 베이스, 기타를 자동으로 분리"
+            title="Stem Splitting"
+            description="Automatically separate vocals, drums, bass, and guitar"
           />
           <FeatureCard
             emoji="🎸"
-            title="녹음 스튜디오"
-            subtitle="Recording Studio"
-            description="Web Audio API 기반 고품질 녹음"
+            title="Recording Studio"
+            description="High-quality recording via Web Audio API"
           />
           <FeatureCard
             emoji="🎬"
-            title="영상 싱크"
-            subtitle="Video Sync"
-            description="녹음한 오디오를 촬영 영상에 정확히 맞추기"
+            title="Video Sync"
+            description="Align your recorded audio precisely to filmed video"
           />
           <FeatureCard
             emoji="✂️"
-            title="타임라인 편집"
-            subtitle="Timeline Editor"
-            description="트림, 배치, 이펙트를 한 곳에서"
+            title="Timeline Editor"
+            description="Trim, arrange, and add effects in one place"
           />
         </div>
       </header>
@@ -70,7 +62,7 @@ export function Landing() {
       {/* Footer */}
       <footer className="py-6 px-4 text-center text-sm text-gray-500 safe-bottom md:py-8">
         <p>
-          소리(sound) + 컷(cut) — 소리를 자르고, 붙이고, 세상에 내보내세요.
+          Trim, layer, and publish your covers.
         </p>
         <p className="mt-1">
           Optimized for Reels · Shorts · TikTok (9:16)
@@ -83,19 +75,16 @@ export function Landing() {
 function FeatureCard({
   emoji,
   title,
-  subtitle,
   description,
 }: {
   emoji: string;
   title: string;
-  subtitle: string;
   description: string;
 }) {
   return (
     <div className="p-5 rounded-2xl bg-gray-900 border border-gray-800 hover:border-brand-600/50 transition-colors md:p-6">
       <div className="text-2xl mb-2 md:text-3xl md:mb-3">{emoji}</div>
       <h3 className="font-semibold text-white">{title}</h3>
-      <p className="text-sm text-brand-400">{subtitle}</p>
       <p className="mt-2 text-sm text-gray-400">{description}</p>
     </div>
   );

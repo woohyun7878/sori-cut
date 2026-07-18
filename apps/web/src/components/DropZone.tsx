@@ -88,8 +88,8 @@ export function DropZone() {
         🎵
       </div>
 
-      <h3 className="text-xl font-semibold text-white">오디오 파일을 여기에 놓으세요</h3>
-      <p className="mt-2 text-sm text-gray-400">Drop your audio file here</p>
+      <h3 className="text-xl font-semibold text-white">Drop your audio file here</h3>
+      <p className="mt-2 text-sm text-gray-400">or click to browse</p>
       <p className="mt-4 text-xs text-gray-500">MP3 · WAV · OGG · FLAC · M4A</p>
 
       <button
@@ -98,14 +98,14 @@ export function DropZone() {
         disabled={isLoading}
         className="mt-6 inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
       >
-        {isLoading ? '불러오는 중... / Loading...' : '파일 선택 / Browse Files'}
+        {isLoading ? 'Loading...' : 'Browse Files'}
       </button>
 
       {originalAudio ? (
         <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
           <p className="text-sm font-medium text-white">{originalAudio.name}</p>
           <p className="mt-1 text-xs text-gray-400">
-            {originalAudio.duration.toFixed(1)}s · 업로드 완료 / Ready to split
+            {originalAudio.duration.toFixed(1)}s · Ready to split
           </p>
         </div>
       ) : null}

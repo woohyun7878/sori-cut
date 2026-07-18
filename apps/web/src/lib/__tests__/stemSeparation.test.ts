@@ -92,14 +92,14 @@ describe('separateStems', () => {
     expect(names).toContain('guitar');
   });
 
-  it('returns stems with Korean labels', async () => {
+  it('returns stems with English labels', async () => {
     const audioBuffer = createMockAudioBuffer();
     const stems = await separateStems(audioBuffer);
     const labels = stems.map((s) => s.label);
-    expect(labels).toContain('보컬');
-    expect(labels).toContain('드럼');
-    expect(labels).toContain('베이스');
-    expect(labels).toContain('기타/기타');
+    expect(labels).toContain('Vocals');
+    expect(labels).toContain('Drums');
+    expect(labels).toContain('Bass');
+    expect(labels).toContain('Guitar');
   });
 
   it('each stem has a blob and url', async () => {

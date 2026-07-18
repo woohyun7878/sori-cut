@@ -40,8 +40,8 @@ export function Studio() {
           <button
             onClick={() => setHelpOpen(true)}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white"
-            aria-label="단축키 도움말"
-            title="단축키 (Shortcuts)"
+            aria-label="Keyboard shortcuts"
+            title="Shortcuts"
           >
             ?
           </button>
@@ -49,7 +49,7 @@ export function Studio() {
             to="/export"
             className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium transition-colors"
           >
-            내보내기 Export
+            Export
           </Link>
         </div>
       </nav>
@@ -57,10 +57,9 @@ export function Studio() {
       <main className="flex-1 px-6 py-8">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
           <div className="max-w-3xl">
-            <h1 className="text-3xl font-bold text-white">커버 크리에이터 스튜디오 / Creator Studio</h1>
+            <h1 className="text-3xl font-bold text-white">Creator Studio</h1>
             <p className="mt-2 text-gray-400">
-              비디오 업로드, 스템 분리, 보컬 녹음, 싱크 조정, 타임라인 편집을 한 화면에서 빠르게 진행하세요.
-              <span className="block text-gray-500">Upload, record, align, and prep your Korean cover short in one workflow.</span>
+              Upload, record, align, and prep your cover short in one workflow.
             </p>
           </div>
 
@@ -78,9 +77,9 @@ export function Studio() {
 
           <section className="rounded-3xl border border-gray-800 bg-gray-950/70 p-6">
             <div className="mb-6 flex flex-col gap-2">
-              <h2 className="text-2xl font-semibold text-white">오디오 준비 / Audio prep</h2>
+              <h2 className="text-2xl font-semibold text-white">Audio Prep</h2>
               <p className="text-gray-400">
-                원곡 오디오를 업로드하면 타임라인과 내보내기에 자동으로 연결됩니다.
+                Upload your source audio to automatically connect it to the timeline and export.
               </p>
             </div>
 
@@ -88,7 +87,7 @@ export function Studio() {
 
             {originalAudio ? (
               <div className="mt-6">
-                <WaveformPlayer audioUrl={originalAudio.url} label={`원본 오디오 / ${originalAudio.name}`} />
+                <WaveformPlayer audioUrl={originalAudio.url} label={`Source audio / ${originalAudio.name}`} />
               </div>
             ) : null}
           </section>
