@@ -2,10 +2,21 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import { audioBufferToWavBlob, mixAudioTracks } from '../lib/audioMixer';
+import {
+  DEFAULT_EXPORT_PRESET_ID,
+  DEFAULT_EXPORT_QUALITY,
+  buildExportFFmpegArgs,
+  buildExportFileName,
+  exportPresets,
+  exportQualityOptions,
+  formatBitrate,
+  getExportPreset,
+  getExportQuality,
+  validateDuration,
+  type ExportPresetId,
+  type ExportQuality,
+} from '../lib/exportPresets';
 import { calculateProjectDuration, useProjectStore } from '../store/useProjectStore';
-
-type Platform = 'Instagram Reels' | 'YouTube Shorts' | 'TikTok';
-type Quality = 'draft' | 'standard' | 'high';
 
 interface ExportStats {
   duration: number;
@@ -13,13 +24,6 @@ interface ExportStats {
 }
 
 const FFMPEG_CORE_VERSION = '0.12.6';
-const platformOptions: Platform[] = ['Instagram Reels', 'YouTube Shorts', 'TikTok'];
-
-const qualityOptions: Record<Quality, { crf: string; label: string; preset: string }> = {
-  draft: { crf: '30', label: 'Draft (fast preview)', preset: 'veryfast' },
-  standard: { crf: '24', label: 'Standard', preset: 'medium' },
-  high: { crf: '19', label: 'High quality', preset: 'slow' },
-};
 
 function formatDuration(duration: number) {
   const minutes = Math.floor(duration / 60);
@@ -52,8 +56,8 @@ export function ExportPanel() {
   const tracks = useProjectStore((state) => state.tracks);
   const totalDuration = useMemo(() => calculateProjectDuration(tracks, video), [tracks, video]);
   const ffmpegRef = useRef<FFmpeg | null>(null);
-  const [platform, setPlatform] = useState<Platform>('Instagram Reels');
-  const [quality, setQuality] = useState<Quality>('standard');
+  const [presetId, setPresetId] = useState<ExportPresetId>(DEFAULT_EXPORT_PRESET_ID);
+  const [quality, setQuality] = useState<ExportQuality>(DEFAULT_EXPORT_QUALITY);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +65,10 @@ export function ExportPanel() {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState('sori-cut-export.mp4');
   const [stats, setStats] = useState<ExportStats | null>(null);
+
+  const preset = getExportPreset(presetId);
+  const qualityOption = getExportQuality(quality);
+  const durationValidation = validateDuration(preset, totalDuration);
 
   useEffect(() => {
     return () => {
@@ -110,40 +118,24 @@ export function ExportPanel() {
       const wavBlob = audioBufferToWavBlob(mixedAudio);
       const extension = video.name.includes('.') ? video.name.slice(video.name.lastIndexOf('.')) : '.mp4';
       const inputName = `input-video${extension}`;
-      const outputName = `${video.name.replace(/\.[^.]+$/, '')}-${platform.toLowerCase().replace(/\s+/g, '-')}.mp4`;
-      const qualityOption = qualityOptions[quality];
+      const audioName = 'mixed-audio.wav';
+      const outputName = buildExportFileName(video.name, preset);
 
       setStatus('Writing files to FFmpeg FS...');
       await ffmpeg.writeFile(inputName, await fetchFile(video.blob));
-      await ffmpeg.writeFile('mixed-audio.wav', await fetchFile(wavBlob));
+      await ffmpeg.writeFile(audioName, await fetchFile(wavBlob));
 
       setStatus('Encoding export...');
-      const exitCode = await ffmpeg.exec([
-        '-i',
-        inputName,
-        '-i',
-        'mixed-audio.wav',
-        '-vf',
-        'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black',
-        '-map',
-        '0:v:0',
-        '-map',
-        '1:a:0',
-        '-c:v',
-        'libx264',
-        '-preset',
-        qualityOption.preset,
-        '-crf',
-        qualityOption.crf,
-        '-c:a',
-        'aac',
-        '-b:a',
-        '192k',
-        '-movflags',
-        '+faststart',
-        '-shortest',
-        outputName,
-      ]);
+      const exitCode = await ffmpeg.exec(
+        buildExportFFmpegArgs({
+          preset,
+          inputName,
+          audioName,
+          outputName,
+          crf: qualityOption.crf,
+          encoderPreset: qualityOption.encoderPreset,
+        }),
+      );
 
       if (exitCode !== 0) {
         throw new Error('FFmpeg command failed.');
@@ -191,15 +183,15 @@ export function ExportPanel() {
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <label className="block text-sm text-gray-300">
-          Platform
+          Platform preset
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
-            value={platform}
-            onChange={(event) => setPlatform(event.target.value as Platform)}
+            value={presetId}
+            onChange={(event) => setPresetId(event.target.value as ExportPresetId)}
           >
-            {platformOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {exportPresets.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
               </option>
             ))}
           </select>
@@ -210,10 +202,10 @@ export function ExportPanel() {
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
             value={quality}
-            onChange={(event) => setQuality(event.target.value as Quality)}
+            onChange={(event) => setQuality(event.target.value as ExportQuality)}
           >
-            {Object.entries(qualityOptions).map(([value, option]) => (
-              <option key={value} value={value}>
+            {exportQualityOptions.map((option) => (
+              <option key={option.id} value={option.id}>
                 {option.label}
               </option>
             ))}
@@ -222,22 +214,45 @@ export function ExportPanel() {
       </div>
 
       <div className="mt-4 rounded-2xl border border-gray-800 bg-gray-950/70 p-4">
-        <h3 className="text-sm font-semibold text-white">Format info</h3>
-        <div className="mt-3 grid gap-3 text-sm text-gray-300 md:grid-cols-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white">Target spec · {preset.name}</h3>
+          <span className="text-xs uppercase tracking-[0.16em] text-gray-500">H.264 + AAC</span>
+        </div>
+        <div className="mt-3 grid gap-3 text-sm text-gray-300 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Canvas</p>
-            <p className="mt-2">9:16 · 1080 × 1920</p>
+            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Resolution</p>
+            <p className="mt-2">
+              {preset.width} × {preset.height} · 9:16
+            </p>
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Codec</p>
-            <p className="mt-2">H.264 + AAC</p>
+            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Frame rate</p>
+            <p className="mt-2">{preset.fps} fps</p>
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Duration</p>
-            <p className="mt-2">{formatDuration(totalDuration || 0)}</p>
+            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Target bitrate</p>
+            <p className="mt-2">{formatBitrate(preset.videoBitrateKbps)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.16em] text-gray-500">Max length</p>
+            <p className="mt-2">{formatDuration(preset.maxDurationSeconds)}</p>
           </div>
         </div>
+        <div className="mt-3 border-t border-gray-800 pt-3 text-sm text-gray-400">
+          Project duration:{' '}
+          <span className={durationValidation.withinRecommendedMax ? 'text-gray-200' : 'text-amber-300'}>
+            {formatDuration(totalDuration || 0)}
+          </span>
+        </div>
       </div>
+
+      {!durationValidation.withinRecommendedMax ? (
+        <div className="mt-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          This project is {formatDuration(totalDuration || 0)}, longer than {preset.name}&apos;s recommended maximum of{' '}
+          {formatDuration(preset.maxDurationSeconds)}. You can still export, but {preset.name} may reject or trim the
+          upload — consider trimming about {formatDuration(durationValidation.overageSeconds)}.
+        </div>
+      ) : null}
 
       <button
         className="mt-6 w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
