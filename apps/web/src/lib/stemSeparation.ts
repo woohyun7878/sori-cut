@@ -65,13 +65,29 @@ export async function separateStems(
             break;
 
           case 'result': {
-            const stems: StemResult[] = msg.stems.map(
-              (stem: { name: string; label: string; channelData: Float32Array[] }) => {
+            const stems: StemResult[] = [];
+
+            try {
+              for (const stem of msg.stems as Array<{
+                name: string;
+                label: string;
+                channelData: Float32Array[];
+              }>) {
                 const blob = encodeWavBlob(stem.channelData, audioBuffer.sampleRate);
                 const url = URL.createObjectURL(blob);
-                return { name: stem.name, label: stem.label, blob, url };
-              },
-            );
+                stems.push({ name: stem.name, label: stem.label, blob, url });
+              }
+            } catch (buildError) {
+              // A failure partway through must not orphan the URLs already created.
+              stems.forEach((created) => URL.revokeObjectURL(created.url));
+              reject(
+                buildError instanceof Error
+                  ? buildError
+                  : new Error('Failed to build stem results'),
+              );
+              break;
+            }
+
             resolve(stems);
             break;
           }
