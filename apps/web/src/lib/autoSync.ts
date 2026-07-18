@@ -2,8 +2,11 @@
  * Auto-sync: cross-correlate a user's recording against the backing track
  * to determine the optimal time offset for alignment.
  *
- * Uses OfflineAudioContext for decoding and downsampling.
+ * Uses OfflineAudioContext for decoding and downsampling. The CPU-bound
+ * cross-correlation runs in a Web Worker so it never blocks the main thread.
  */
+
+import type { CrossCorrelationResult } from './autoSyncCore';
 
 /** Downsample rate used for correlation to keep computation fast. */
 const ANALYSIS_SAMPLE_RATE = 8000;
@@ -51,58 +54,42 @@ async function decodeToMono(url: string): Promise<Float32Array> {
 }
 
 /**
- * Compute cross-correlation between two signals over a bounded lag range.
- * Returns the lag (in samples) that maximizes the normalized correlation.
+ * Run the cross-correlation in a Web Worker so the CPU-bound work stays off
+ * the main thread. The two signal buffers are transferred (zero-copy) to the
+ * worker, so callers must not reuse them afterward.
  */
-function crossCorrelate(
+function correlateInWorker(
   reference: Float32Array,
   target: Float32Array,
   maxLagSamples: number,
-): { lagSamples: number; confidence: number } {
-  const refLen = reference.length;
-  const tarLen = target.length;
+): Promise<CrossCorrelationResult> {
+  const worker = new Worker(new URL('./autoSync.worker.ts', import.meta.url), {
+    type: 'module',
+  });
 
-  // Compute energy for normalization.
-  let refEnergy = 0;
-  for (let i = 0; i < refLen; i++) {
-    refEnergy += reference[i] * reference[i];
-  }
+  return new Promise<CrossCorrelationResult>((resolve, reject) => {
+    worker.onmessage = (event: MessageEvent) => {
+      const msg = event.data;
 
-  let tarEnergy = 0;
-  for (let i = 0; i < tarLen; i++) {
-    tarEnergy += target[i] * target[i];
-  }
+      if (msg?.type === 'result') {
+        resolve({ lagSamples: msg.lagSamples, confidence: msg.confidence });
+      } else if (msg?.type === 'error') {
+        reject(new Error(msg.message));
+      }
+    };
 
-  const normFactor = Math.sqrt(refEnergy * tarEnergy);
-  if (normFactor === 0) {
-    return { lagSamples: 0, confidence: 0 };
-  }
+    worker.onerror = (err) => {
+      reject(new Error(`Auto-sync worker error: ${err.message}`));
+    };
 
-  let bestCorrelation = -Infinity;
-  let bestLag = 0;
-
-  // Search both negative and positive lags.
-  const minLag = -Math.min(maxLagSamples, tarLen - 1);
-  const maxLag = Math.min(maxLagSamples, refLen - 1);
-
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    let sum = 0;
-    const startRef = Math.max(0, lag);
-    const startTar = Math.max(0, -lag);
-    const end = Math.min(refLen - lag, tarLen);
-
-    for (let i = startTar, j = startRef; i < end && j < refLen; i++, j++) {
-      sum += reference[j] * target[i];
-    }
-
-    if (sum > bestCorrelation) {
-      bestCorrelation = sum;
-      bestLag = lag;
-    }
-  }
-
-  const confidence = Math.max(0, Math.min(1, bestCorrelation / normFactor));
-  return { lagSamples: bestLag, confidence };
+    // Transfer the underlying buffers for zero-copy handoff.
+    worker.postMessage(
+      { type: 'correlate', reference, target, maxLagSamples },
+      [reference.buffer, target.buffer] as unknown as Transferable[],
+    );
+  }).finally(() => {
+    worker.terminate();
+  });
 }
 
 /**
@@ -123,7 +110,11 @@ export async function computeAutoSyncOffset(
   ]);
 
   const maxLagSamples = Math.ceil(MAX_LAG_SECONDS * ANALYSIS_SAMPLE_RATE);
-  const { lagSamples, confidence } = crossCorrelate(refSamples, tarSamples, maxLagSamples);
+  const { lagSamples, confidence } = await correlateInWorker(
+    refSamples,
+    tarSamples,
+    maxLagSamples,
+  );
 
   // A negative lag means the target should be placed later on the timeline.
   const offsetSeconds = -lagSamples / ANALYSIS_SAMPLE_RATE;
