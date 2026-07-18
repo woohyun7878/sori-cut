@@ -68,6 +68,9 @@ export function DropZone() {
         setIsDragging(true);
       }}
       onDrop={(event) => void handleDrop(event)}
+      role="group"
+      aria-label="Audio file upload"
+      aria-busy={isLoading}
       className={[
         'rounded-3xl border-2 border-dashed bg-gray-900/80 p-8 text-center transition-colors',
         isDragging ? 'border-brand-400 bg-brand-600/10' : 'border-gray-700 hover:border-brand-600/60',
@@ -78,13 +81,17 @@ export function DropZone() {
         type="file"
         accept={ACCEPTED_AUDIO_TYPES}
         className="hidden"
+        aria-label="Choose an audio file"
         onChange={(event) => {
           void handleFileSelection(event.target.files?.item(0) ?? null);
           event.currentTarget.value = '';
         }}
       />
 
-      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl">
+      <div
+        className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl"
+        aria-hidden="true"
+      >
         🎵
       </div>
 
@@ -101,14 +108,16 @@ export function DropZone() {
         {isLoading ? 'Loading...' : 'Browse Files'}
       </button>
 
-      {originalAudio ? (
-        <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
-          <p className="text-sm font-medium text-white">{originalAudio.name}</p>
-          <p className="mt-1 text-xs text-gray-400">
-            {originalAudio.duration.toFixed(1)}s · Ready to split
-          </p>
-        </div>
-      ) : null}
+      <div role="status" aria-live="polite">
+        {originalAudio ? (
+          <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
+            <p className="text-sm font-medium text-white">{originalAudio.name}</p>
+            <p className="mt-1 text-xs text-gray-400">
+              {originalAudio.duration.toFixed(1)}s · Ready to split
+            </p>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

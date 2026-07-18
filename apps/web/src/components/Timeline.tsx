@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateProjectDuration, type TimelineTrack, type TrackType, useProjectStore } from '../store/useProjectStore';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { ClipWaveform } from './ClipWaveform';
 
 const trackColors: Record<TrackType, string> = {
@@ -116,6 +117,16 @@ function TimelineClip({
   const clipWidth = Math.max(track.duration * zoom, 48);
   const clipHeight = 64; // h-16 = 64px
 
+  const clipLabel = [
+    track.name,
+    `${track.type} clip`,
+    `starts at ${track.startOffset.toFixed(1)} seconds`,
+    `${track.duration.toFixed(1)} seconds long`,
+    track.muted ? 'muted' : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
   return (
     <div
       className={[
@@ -130,9 +141,19 @@ function TimelineClip({
         width: clipWidth,
         opacity: track.muted ? 0.45 : 1,
       }}
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      aria-label={clipLabel}
       onClick={(e) => {
         e.stopPropagation();
         onSelect();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -153,6 +174,7 @@ function TimelineClip({
 
       {/* Left trim handle */}
       <div
+        aria-hidden="true"
         className={[
           'absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize rounded-l-2xl transition-colors',
           isSelected ? 'bg-brand-300' : 'bg-white/20 group-hover:bg-white/50',
@@ -165,6 +187,7 @@ function TimelineClip({
 
       {/* Right trim handle */}
       <div
+        aria-hidden="true"
         className={[
           'absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize rounded-r-2xl transition-colors',
           isSelected ? 'bg-brand-300' : 'bg-white/20 group-hover:bg-white/50',
@@ -206,6 +229,8 @@ export function Timeline() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(showDeleteConfirm !== null, deleteDialogRef, () => setShowDeleteConfirm(null));
 
   const totalDuration = useMemo(() => Math.max(calculateProjectDuration(tracks, video), 10), [tracks, video]);
   const timelineWidth = Math.max(totalDuration * zoom, 720);
@@ -335,7 +360,11 @@ export function Timeline() {
       </div>
 
       <div ref={containerRef} className="overflow-x-auto rounded-3xl border border-gray-800 bg-gray-950/70">
-        <div className="grid min-w-max grid-cols-[230px_minmax(720px,1fr)]">
+        <div
+          className="grid min-w-max grid-cols-[230px_minmax(720px,1fr)]"
+          role="group"
+          aria-label={`Timeline with ${tracks.length} track${tracks.length === 1 ? '' : 's'}`}
+        >
           <div className="sticky left-0 z-30 border-b border-r border-gray-800 bg-gray-950 px-4 py-3 text-xs uppercase tracking-[0.24em] text-gray-500">
             Tracks
           </div>
@@ -351,11 +380,13 @@ export function Timeline() {
                 className="absolute inset-y-0 z-20 w-px bg-brand-400 shadow-[0_0_0_1px_rgba(167,139,250,0.2)]"
                 style={{ left: playheadPosition * zoom }}
                 type="button"
+                aria-label={`Playhead at ${formatSeconds(playheadPosition)}`}
                 onClick={(event) => event.stopPropagation()}
               />
               <button
                 className="absolute inset-0"
                 type="button"
+                aria-label="Move playhead"
                 onClick={(event) => {
                   const rect = event.currentTarget.getBoundingClientRect();
                   const nextPosition = ((event.clientX - rect.left) / rect.width) * totalDuration;
@@ -367,9 +398,13 @@ export function Timeline() {
 
           {tracks.map((track) => (
             <Fragment key={track.id}>
-              <div className="sticky left-0 z-20 border-b border-r border-gray-800 bg-gray-950 px-4 py-4">
+              <div
+                className="sticky left-0 z-20 border-b border-r border-gray-800 bg-gray-950 px-4 py-4"
+                role="group"
+                aria-label={`${track.name} track controls`}
+              >
                 <div className="flex items-center gap-3">
-                  <span className="text-xl">{trackIcons[track.type]}</span>
+                  <span className="text-xl" aria-hidden="true">{trackIcons[track.type]}</span>
                   <div>
                     <p className="text-sm font-semibold text-white">{track.name}</p>
                     <p className="text-xs text-gray-500">
@@ -380,7 +415,7 @@ export function Timeline() {
                 <TrackInspector track={track} />
               </div>
 
-              <div className="relative border-b border-gray-800 bg-gray-950/40">
+              <div className="relative border-b border-gray-800 bg-gray-950/40" role="group" aria-label={`${track.name} timeline lane`}>
                 <div
                   className="relative h-28"
                   style={{ width: timelineWidth }}
@@ -424,6 +459,16 @@ export function Timeline() {
               </div>
             </Fragment>
           ))}
+
+          {tracks.length === 0 && (
+            <div className="col-span-2 flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
+              <p className="text-sm font-semibold text-gray-300">No tracks yet</p>
+              <p className="max-w-sm text-xs text-gray-500">
+                Add an audio, stem, or recording track to start arranging clips, or upload source audio below to
+                bring it onto the timeline.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -437,10 +482,13 @@ export function Timeline() {
         <div
           className="fixed z-50 min-w-[160px] rounded-xl border border-gray-700 bg-gray-900 py-1 shadow-2xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          aria-label="Clip actions"
         >
           <button
             className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
             type="button"
+            role="menuitem"
             onClick={() => {
               splitTrackAtPosition(contextMenu.trackId, playheadPosition);
               setContextMenu(null);
@@ -451,6 +499,7 @@ export function Timeline() {
           <button
             className="w-full px-4 py-2 text-left text-sm text-red-300 hover:bg-gray-800"
             type="button"
+            role="menuitem"
             onClick={() => {
               handleDeleteTrack(contextMenu.trackId);
               setContextMenu(null);
@@ -463,9 +512,20 @@ export function Timeline() {
 
       {/* Delete confirmation dialog */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
-            <p className="mb-4 text-sm text-white">Delete this clip?</p>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setShowDeleteConfirm(null)}
+        >
+          <div
+            ref={deleteDialogRef}
+            className="rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-clip-title"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p id="delete-clip-title" className="mb-4 text-sm text-white">Delete this clip?</p>
             <div className="flex gap-3">
               <button
                 className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"

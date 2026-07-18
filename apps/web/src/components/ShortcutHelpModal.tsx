@@ -1,3 +1,6 @@
+import { useRef } from 'react';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+
 interface ShortcutHelpModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -18,26 +21,34 @@ const shortcuts = [
 ];
 
 export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(isOpen, dialogRef, onClose);
+
   if (!isOpen) return null;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Keyboard shortcuts"
     >
       <div
+        ref={dialogRef}
         className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcut-help-title"
+        tabIndex={-1}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-white">⌨️ Shortcuts</h2>
+          <h2 id="shortcut-help-title" className="text-lg font-bold text-white">
+            ⌨️ Shortcuts
+          </h2>
           <button
             onClick={onClose}
             className="rounded-lg p-1 text-gray-400 hover:bg-gray-800 hover:text-white"
-            aria-label="Close"
+            aria-label="Close keyboard shortcuts"
+            type="button"
           >
             ✕
           </button>
