@@ -27,7 +27,7 @@ export function StemSplitter() {
       return 'Stems are ready to mix.';
     }
 
-    return 'Quickly extract stems using Web Audio API frequency filters.';
+    return 'ML-powered stem separation using ONNX Runtime.';
   }, [originalAudio, stems.length]);
 
   const handleSplit = async () => {
@@ -91,7 +91,7 @@ export function StemSplitter() {
       {isProcessing ? (
         <div className="mt-6">
           <div className="mb-2 flex items-center justify-between text-xs text-gray-400">
-            <span>Offline rendering in progress</span>
+            <span>ML separation in progress</span>
             <span>{Math.round(progress)}%</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-gray-800">
