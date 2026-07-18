@@ -30,7 +30,7 @@ export function Studio() {
     <div className="min-h-screen flex flex-col bg-gray-950 text-white">
       <nav className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <div className="flex items-center gap-6">
-          <Link to="/" className="text-xl font-bold">
+          <Link to="/studio" className="text-xl font-bold">
             <span className="text-brand-400">소리</span>컷
           </Link>
           <ProjectManager saveStatus={saveStatus} />
