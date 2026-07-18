@@ -56,6 +56,9 @@ export async function extractPeaks(sourceUrl: string): Promise<PeakData> {
 
 async function doExtract(sourceUrl: string): Promise<PeakData> {
   const response = await fetch(sourceUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audio: ${response.status}`);
+  }
   const arrayBuffer = await response.arrayBuffer();
   const ctx = getAudioContext();
   const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
