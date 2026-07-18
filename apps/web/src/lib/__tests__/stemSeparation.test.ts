@@ -189,4 +189,36 @@ describe('separateStems', () => {
     await separateStems(audioBuffer);
     expect(terminateSpy).toHaveBeenCalledOnce();
   });
+
+  it('revokes already-created URLs and rejects if building a stem fails partway', async () => {
+    const savedURL = globalThis.URL;
+    let created = 0;
+    const revoked: string[] = [];
+
+    vi.stubGlobal(
+      'URL',
+      class extends originalURL {
+        static createObjectURL = () => {
+          created += 1;
+          // Fail while building the third stem, after two URLs already exist.
+          if (created === 3) {
+            throw new Error('createObjectURL failed');
+          }
+          return `blob:mock-stem-${created}`;
+        };
+        static revokeObjectURL = (url: string) => {
+          revoked.push(url);
+        };
+      },
+    );
+
+    try {
+      const audioBuffer = createMockAudioBuffer();
+      await expect(separateStems(audioBuffer)).rejects.toThrow('createObjectURL failed');
+      // The two URLs created before the failure must be revoked, not orphaned.
+      expect(revoked).toEqual(['blob:mock-stem-1', 'blob:mock-stem-2']);
+    } finally {
+      vi.stubGlobal('URL', savedURL);
+    }
+  });
 });

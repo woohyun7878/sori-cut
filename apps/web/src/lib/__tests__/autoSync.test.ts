@@ -1,5 +1,71 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { computeAutoSyncOffset } from '../autoSync';
+import { crossCorrelate } from '../autoSyncCore';
+
+// --- Mock Worker for the auto-sync cross-correlation ---
+//
+// The real `computeAutoSyncOffset` offloads `crossCorrelate` to a Web Worker.
+// jsdom has no Worker, so we stub the global with a mock that runs the real
+// pure `crossCorrelate` synchronously (following the stemSeparation.worker
+// test pattern). This keeps the end-to-end behavior identical while the heavy
+// math itself is also covered directly in the `crossCorrelate` suite below.
+class MockAutoSyncWorker {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  private terminated = false;
+
+  postMessage(msg: unknown) {
+    if (this.terminated) return;
+
+    const data = msg as {
+      type: string;
+      reference: Float32Array;
+      target: Float32Array;
+      maxLagSamples: number;
+    };
+
+    if (data.type === 'correlate') {
+      setTimeout(() => {
+        if (this.terminated) return;
+        try {
+          const { lagSamples, confidence } = crossCorrelate(
+            data.reference,
+            data.target,
+            data.maxLagSamples,
+          );
+          this.onmessage?.({ data: { type: 'result', lagSamples, confidence } } as MessageEvent);
+        } catch (err) {
+          this.onmessage?.({
+            data: { type: 'error', message: err instanceof Error ? err.message : 'error' },
+          } as MessageEvent);
+        }
+      }, 0);
+    }
+  }
+
+  terminate() {
+    this.terminated = true;
+  }
+}
+
+/** Worker variant that always reports an error, to cover the rejection path. */
+class MockAutoSyncWorkerError {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+
+  postMessage(msg: unknown) {
+    const data = msg as { type: string };
+    if (data.type === 'correlate') {
+      setTimeout(() => {
+        this.onmessage?.({
+          data: { type: 'error', message: 'Correlation failed' },
+        } as MessageEvent);
+      }, 0);
+    }
+  }
+
+  terminate() {}
+}
 
 // --- Mocks for Web Audio API ---
 
@@ -42,6 +108,9 @@ const DELAY_SAMPLES = SAMPLE_RATE * 2; // target delayed by 2 seconds
 
 beforeEach(() => {
   fetchedUrls = [];
+
+  // Auto-sync offloads cross-correlation to a Web Worker; stub it globally.
+  vi.stubGlobal('Worker', MockAutoSyncWorker);
 
   // Use buffer size as a discriminator: reference = 100 bytes, target = 200 bytes.
   const REF_SIZE = 100;
@@ -179,5 +248,68 @@ describe('computeAutoSyncOffset', () => {
     );
 
     await expect(computeAutoSyncOffset('bad-url', 'bad-url')).rejects.toThrow(/Failed to fetch/);
+  });
+
+  it('rejects when the correlation worker reports an error', async () => {
+    vi.stubGlobal('Worker', MockAutoSyncWorkerError);
+
+    await expect(
+      computeAutoSyncOffset('blob:http://localhost/reference', 'blob:http://localhost/target'),
+    ).rejects.toThrow('Correlation failed');
+  });
+});
+
+describe('crossCorrelate', () => {
+  const SR = 8000;
+
+  it('finds the correct lag when the target is a delayed copy of the reference', () => {
+    const len = SR; // 1 second
+    const delay = 400; // samples
+    const reference = new Float32Array(len);
+    const target = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      const v = Math.sin(2 * Math.PI * (50 * (i / SR) + 30 * (i / SR) ** 2));
+      reference[i] = v;
+      target[i] = i >= delay ? reference[i - delay] : 0;
+    }
+
+    const { lagSamples, confidence } = crossCorrelate(reference, target, SR);
+
+    // The reference leads the target by `delay` samples, which corresponds to a
+    // best lag of -delay under this convention (offsetSeconds = -lag / rate > 0).
+    expect(lagSamples).toBe(-delay);
+    expect(confidence).toBeGreaterThan(0);
+    expect(confidence).toBeLessThanOrEqual(1);
+  });
+
+  it('returns lag 0 and full confidence for identical signals', () => {
+    const len = 2000;
+    const signal = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      signal[i] = Math.sin(i * 0.13);
+    }
+
+    const { lagSamples, confidence } = crossCorrelate(signal, signal.slice(), 200);
+
+    expect(lagSamples).toBe(0);
+    expect(confidence).toBeCloseTo(1, 5);
+  });
+
+  it('returns zero confidence when a signal has no energy', () => {
+    const silent = new Float32Array(1000);
+    const active = new Float32Array(1000).fill(0.5);
+
+    expect(crossCorrelate(silent, active, 100)).toEqual({ lagSamples: 0, confidence: 0 });
+    expect(crossCorrelate(active, silent, 100)).toEqual({ lagSamples: 0, confidence: 0 });
+  });
+
+  it('never searches beyond the requested maximum lag', () => {
+    const reference = new Float32Array(500).fill(1);
+    const target = new Float32Array(500).fill(1);
+
+    const maxLag = 10;
+    const { lagSamples } = crossCorrelate(reference, target, maxLag);
+
+    expect(Math.abs(lagSamples)).toBeLessThanOrEqual(maxLag);
   });
 });
