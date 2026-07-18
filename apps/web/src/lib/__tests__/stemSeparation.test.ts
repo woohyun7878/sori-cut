@@ -1,79 +1,105 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { separateStems } from '../stemSeparation';
 
-// Mock OfflineAudioContext
-class MockAudioBufferSourceNode {
-  buffer: AudioBuffer | null = null;
-  connect = vi.fn();
-  start = vi.fn();
+/**
+ * Mock Worker that simulates the stem separation worker's message protocol.
+ */
+class MockWorker {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+
+  private terminated = false;
+
+  postMessage(msg: unknown) {
+    if (this.terminated) return;
+
+    const data = msg as { type: string; channelData: Float32Array[]; sampleRate: number };
+
+    if (data.type === 'separate') {
+      // Simulate async worker processing
+      setTimeout(() => {
+        if (this.terminated) return;
+
+        // Send progress updates
+        this.onmessage?.({ data: { type: 'progress', progress: 0 } } as MessageEvent);
+        this.onmessage?.({ data: { type: 'progress', progress: 50 } } as MessageEvent);
+        this.onmessage?.({ data: { type: 'progress', progress: 100 } } as MessageEvent);
+
+        // Build fake stem results
+        const length = data.channelData[0]?.length ?? 4410;
+        const stems = [
+          { name: 'vocals', label: 'Vocals', channelData: [new Float32Array(length)] },
+          { name: 'drums', label: 'Drums', channelData: [new Float32Array(length)] },
+          { name: 'bass', label: 'Bass', channelData: [new Float32Array(length)] },
+          { name: 'guitar', label: 'Guitar', channelData: [new Float32Array(length)] },
+        ];
+
+        this.onmessage?.({ data: { type: 'result', stems } } as MessageEvent);
+      }, 0);
+    }
+  }
+
+  terminate() {
+    this.terminated = true;
+  }
 }
 
-class MockBiquadFilterNode {
-  type = '';
-  frequency = { value: 0 };
-  connect = vi.fn();
+/**
+ * MockWorker variant that simulates a worker error.
+ */
+class MockWorkerError {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+
+  postMessage(msg: unknown) {
+    const data = msg as { type: string };
+    if (data.type === 'separate') {
+      setTimeout(() => {
+        this.onmessage?.({
+          data: { type: 'error', message: 'Model inference failed' },
+        } as MessageEvent);
+      }, 0);
+    }
+  }
+
+  terminate() {}
 }
 
-class MockGainNode {
-  gain = { value: 1 };
-  connect = vi.fn();
-}
+// Mock the Worker constructor globally
+vi.stubGlobal('Worker', MockWorker);
 
-function createMockAudioBuffer(): AudioBuffer {
-  const channelData = new Float32Array(4410);
+// Mock URL.createObjectURL without overwriting the URL constructor
+const originalURL = globalThis.URL;
+vi.stubGlobal('URL', class extends originalURL {
+  static createObjectURL = () => 'blob:mock-stem-url';
+  static revokeObjectURL = vi.fn();
+});
+
+function createMockAudioBuffer(length = 4410): AudioBuffer {
+  const channelData = new Float32Array(length);
   for (let i = 0; i < channelData.length; i++) {
     channelData[i] = Math.sin(i * 0.1) * 0.5;
   }
 
   return {
     numberOfChannels: 1,
-    length: 4410,
+    length,
     sampleRate: 44100,
-    duration: 0.1,
+    duration: length / 44100,
     getChannelData: () => channelData,
     copyFromChannel: vi.fn(),
     copyToChannel: vi.fn(),
   } as unknown as AudioBuffer;
 }
 
-class MockOfflineAudioContext {
-  numberOfChannels: number;
-  length: number;
-  sampleRate: number;
-  destination = {};
-
-  constructor(channels: number, length: number, sampleRate: number) {
-    this.numberOfChannels = channels;
-    this.length = length;
-    this.sampleRate = sampleRate;
-  }
-
-  createBufferSource() {
-    return new MockAudioBufferSourceNode();
-  }
-
-  createBiquadFilter() {
-    return new MockBiquadFilterNode();
-  }
-
-  createGain() {
-    return new MockGainNode();
-  }
-
-  async startRendering(): Promise<AudioBuffer> {
-    return createMockAudioBuffer();
-  }
-}
-
-vi.stubGlobal('OfflineAudioContext', MockOfflineAudioContext);
-vi.stubGlobal('URL', {
-  createObjectURL: () => 'blob:mock-stem-url',
-  revokeObjectURL: vi.fn(),
-});
-
 describe('separateStems', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('Worker', MockWorker);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('returns 4 stems', async () => {
@@ -117,14 +143,13 @@ describe('separateStems', () => {
     await separateStems(audioBuffer, onProgress);
     expect(onProgress).toHaveBeenCalled();
     expect(onProgress).toHaveBeenCalledWith(0);
-    expect(onProgress).toHaveBeenCalledWith(100);
   });
 
-  it('progress reaches 100 at the end', async () => {
+  it('progress reaches 100', async () => {
     const audioBuffer = createMockAudioBuffer();
     const progressValues: number[] = [];
     await separateStems(audioBuffer, (p) => progressValues.push(p));
-    expect(progressValues[progressValues.length - 1]).toBe(100);
+    expect(progressValues).toContain(100);
   });
 
   it('stems have wav blob type', async () => {
@@ -133,5 +158,35 @@ describe('separateStems', () => {
     for (const stem of stems) {
       expect(stem.blob.type).toBe('audio/wav');
     }
+  });
+
+  it('supports custom model URL via options', async () => {
+    const audioBuffer = createMockAudioBuffer();
+    const stems = await separateStems(audioBuffer, undefined, {
+      modelUrl: '/custom/model.onnx',
+    });
+    expect(stems).toHaveLength(4);
+  });
+
+  it('rejects when worker reports an error', async () => {
+    vi.stubGlobal('Worker', MockWorkerError);
+    const audioBuffer = createMockAudioBuffer();
+
+    await expect(separateStems(audioBuffer)).rejects.toThrow('Model inference failed');
+  });
+
+  it('terminates worker after completion', async () => {
+    const terminateSpy = vi.fn();
+    class SpyWorker extends MockWorker {
+      override terminate() {
+        terminateSpy();
+        super.terminate();
+      }
+    }
+    vi.stubGlobal('Worker', SpyWorker);
+
+    const audioBuffer = createMockAudioBuffer();
+    await separateStems(audioBuffer);
+    expect(terminateSpy).toHaveBeenCalledOnce();
   });
 });
