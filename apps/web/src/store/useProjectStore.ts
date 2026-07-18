@@ -139,6 +139,46 @@ function revokeUrl(url?: string | null) {
   URL.revokeObjectURL(url);
 }
 
+/** The subset of project state that owns blob object URLs created via URL.createObjectURL. */
+type ProjectUrlSlice = Pick<ProjectState, 'originalAudio' | 'stems' | 'recordings' | 'video' | 'tracks'>;
+
+/** Gather every blob object URL referenced by a project-state slice (deduped). */
+function collectObjectUrls(state: Partial<ProjectUrlSlice>): string[] {
+  const urls = new Set<string>();
+  const add = (url?: string | null) => {
+    if (url && url.startsWith('blob:')) {
+      urls.add(url);
+    }
+  };
+
+  add(state.originalAudio?.url);
+  state.stems?.forEach((stem) => add(stem.url));
+  state.recordings?.forEach((recording) => add(recording.url));
+  add(state.video?.url);
+  state.tracks?.forEach((track) => add(track.sourceUrl));
+
+  return [...urls];
+}
+
+/**
+ * Revoke the blob object URLs held by an outgoing project state, skipping any URL
+ * the incoming state still references. Used when the whole project is replaced
+ * (load/switch) or reset so the previous project's audio/video/stem/recording
+ * URLs are not leaked — while never revoking a URL that is carried over.
+ */
+function revokeDiscardedObjectUrls(
+  outgoing: Partial<ProjectUrlSlice>,
+  incoming?: Partial<ProjectUrlSlice>,
+): void {
+  const retained = new Set(incoming ? collectObjectUrls(incoming) : []);
+
+  for (const url of collectObjectUrls(outgoing)) {
+    if (!retained.has(url)) {
+      revokeUrl(url);
+    }
+  }
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -187,24 +227,24 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
   setProjectName: (name) => set({ projectName: name }),
   loadFromSaved: (saved) =>
     set((state) => {
-      // Revoke old URLs
-      revokeUrl(state.originalAudio?.url);
-      state.stems.forEach((s) => revokeUrl(s.url));
-      state.recordings.forEach((r) => revokeUrl(r.url));
-      revokeUrl(state.video?.url);
-
       // Migrate tracks saved before sourceStartOffset existed.
       const migratedTracks = saved.tracks?.map((track) => ({
         ...track,
         sourceStartOffset: track.sourceStartOffset ?? 0,
       }));
 
-      return {
+      const nextState = {
         ...initialState,
         ...saved,
         ...(migratedTracks ? { tracks: migratedTracks } : {}),
         projectId: saved.projectId ?? crypto.randomUUID(),
       };
+
+      // Revoke the outgoing project's blob URLs, but keep any the incoming
+      // project still references so carried-over media stays playable.
+      revokeDiscardedObjectUrls(state, nextState);
+
+      return nextState;
     }),
   setOriginalAudio: (file) =>
     set((state) => {
@@ -498,10 +538,8 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
     })),
   reset: () =>
     set((state) => {
-      revokeUrl(state.originalAudio?.url);
-      state.stems.forEach((stem) => revokeUrl(stem.url));
-      state.recordings.forEach((recording) => revokeUrl(recording.url));
-      revokeUrl(state.video?.url);
+      // Reset discards the whole project, so revoke all of its blob URLs.
+      revokeDiscardedObjectUrls(state);
 
       return { ...initialState, projectId: crypto.randomUUID() };
     }),
