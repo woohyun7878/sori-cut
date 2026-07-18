@@ -36,7 +36,10 @@ export function computeSTFT(
   hopSize: number,
 ): { magnitude: Float32Array; phase: Float32Array; numFrames: number; numBins: number } {
   const numBins = fftSize / 2 + 1;
-  const numFrames = Math.floor((samples.length - fftSize) / hopSize) + 1;
+  // Clamp to 0: when the segment is shorter than fftSize the raw formula yields a
+  // negative frame count, which would make `new Float32Array(numFrames * numBins)`
+  // throw a RangeError. Short final/overlap segments simply produce zero frames.
+  const numFrames = Math.max(0, Math.floor((samples.length - fftSize) / hopSize) + 1);
   const window = hannWindow(fftSize);
 
   const magnitude = new Float32Array(numFrames * numBins);

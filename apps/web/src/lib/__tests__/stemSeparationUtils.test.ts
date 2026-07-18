@@ -107,6 +107,40 @@ describe('stemSeparationUtils', () => {
         expect(reconstructed[i]).toBeCloseTo(0, 5);
       }
     });
+
+    it('does not throw and yields zero frames for a segment shorter than fftSize', () => {
+      const fftSize = 256;
+      const hopSize = 64;
+      const length = 100; // shorter than fftSize -> raw formula would be negative
+      const samples = new Float32Array(length);
+      for (let i = 0; i < length; i++) {
+        samples[i] = Math.sin((2 * Math.PI * 440 * i) / 44100) * 0.8;
+      }
+
+      let result: ReturnType<typeof computeSTFT> | undefined;
+      expect(() => {
+        result = computeSTFT(samples, fftSize, hopSize);
+      }).not.toThrow();
+
+      const { magnitude, phase, numFrames, numBins } = result!;
+      expect(numFrames).toBeGreaterThanOrEqual(0);
+      expect(numFrames).toBe(0);
+      expect(numBins).toBe(fftSize / 2 + 1);
+      expect(magnitude).toBeInstanceOf(Float32Array);
+      expect(phase).toBeInstanceOf(Float32Array);
+      expect(magnitude.length).toBe(0);
+      expect(phase.length).toBe(0);
+
+      // The inverse round-trip on an empty STFT must also be safe and produce silence.
+      let reconstructed: Float32Array | undefined;
+      expect(() => {
+        reconstructed = computeISTFT(magnitude, phase, numFrames, numBins, fftSize, hopSize, length);
+      }).not.toThrow();
+      expect(reconstructed!.length).toBe(length);
+      for (let i = 0; i < length; i++) {
+        expect(reconstructed![i]).toBe(0);
+      }
+    });
   });
 
   describe('encodeWavBlob', () => {
