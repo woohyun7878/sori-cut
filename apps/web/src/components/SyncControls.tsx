@@ -198,7 +198,6 @@ export function SyncControls() {
                 return;
               }
 
-              // Determine the reference track: prefer the original audio, fall back to video.
               const referenceUrl = video.url;
               if (!referenceUrl) {
                 setMessage('No reference audio found.');
@@ -222,7 +221,7 @@ export function SyncControls() {
                 setMessage(
                   error instanceof Error
                     ? `Auto sync failed: ${error.message}`
-                    : 'Auto sync error.',
+                    : 'An error occurred during auto sync.',
                 );
               } finally {
                 setIsSyncing(false);
