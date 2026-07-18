@@ -59,6 +59,12 @@ pnpm build
 
 The dev server will start at `http://localhost:3000`.
 
+## Deployment (GitHub Pages)
+
+- This repository deploys `apps/web` to GitHub Pages via `.github/workflows/deploy-pages.yml`.
+- The deployed artifact includes `apps/web/public/CNAME` with `soricut.studio`.
+- Public reachability for `https://soricut.studio/` and `https://www.soricut.studio/` is monitored every 30 minutes by `.github/workflows/pages-uptime-check.yml`.
+
 ## Target Audience
 
 Guitar/music cover creators who film themselves playing — starting with the workflow of [@junewoomusic](https://instagram.com/junewoomusic).

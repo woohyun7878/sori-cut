@@ -1,0 +1,32 @@
+name: Pages Domain Reachability Check
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check public endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          urls=(
+            "https://soricut.studio/"
+            "https://www.soricut.studio/"
+          )
+
+          for url in "${urls[@]}"; do
+            code="$(curl --silent --show-error --location --output /dev/null --write-out "%{http_code}" --max-time 20 "$url")"
+            echo "$url -> HTTP $code"
+            if [[ "$code" -lt 200 || "$code" -ge 400 ]]; then
+              echo "Reachability check failed for $url"
+              exit 1
+            fi
+          done
