@@ -2,11 +2,18 @@
   "name": "sori-cut",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "description": "소리컷 — All-in-one browser-based editor for Korean music short-form content creators",
   "scripts": {
     "dev": "pnpm --filter @sori-cut/web dev",
     "build": "pnpm --filter @sori-cut/web build",
-    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "clean": "pnpm -r clean"
   },
   "keywords": [
@@ -23,5 +30,15 @@
   "license": "MIT",
   "dependencies": {
     "idb": "^8.0.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5",
+    "typescript": "^5.5.3",
+    "typescript-eslint": "^8.63.0"
   }
 }

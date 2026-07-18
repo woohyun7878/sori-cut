@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useProjectStore, type Recording } from '../store/useProjectStore';
 import { WaveformPlayer } from './WaveformPlayer';
 
-interface RecordingDraft extends Recording {}
+type RecordingDraft = Recording;
 
 function formatElapsed(milliseconds: number) {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
