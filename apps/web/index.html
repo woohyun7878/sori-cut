@@ -6,6 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>소리컷 | sori-cut</title>
     <meta name="description" content="All-in-one short-form editor for music cover creators" />
+    <!-- Register service worker to provide COOP/COEP headers on GitHub Pages
+         (required for SharedArrayBuffer used by FFmpeg.wasm and ONNX Runtime) -->
+    <script>
+      if (typeof SharedArrayBuffer === 'undefined') {
+        navigator.serviceWorker.register('/coi-serviceworker.js').then(function (reg) {
+          if (!navigator.serviceWorker.controller) {
+            window.location.reload();
+          }
+        });
+      }
+    </script>
   </head>
   <body class="bg-gray-950 text-white antialiased">
     <div id="root"></div>
