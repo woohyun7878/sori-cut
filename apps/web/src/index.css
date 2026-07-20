@@ -382,6 +382,7 @@
     .studio-context-panel:not(.is-open),
     .studio-inspector:not(.is-open) {
       visibility: visible;
+      transform: translateX(0);
     }
   }
 }
