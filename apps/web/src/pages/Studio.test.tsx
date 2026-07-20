@@ -49,6 +49,7 @@ describe('Studio shell', () => {
   afterEach(cleanup);
 
   beforeEach(() => {
+    localStorage.clear();
     storeState.originalAudio = null;
     storeState.stems = [];
     storeState.recordings = [];
@@ -113,5 +114,52 @@ describe('Studio shell', () => {
     ).toHaveStyle({
       transform: 'scale(1.25)',
     });
+  });
+
+  it('exposes accessible desktop splitters and explicit pane collapse controls', () => {
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('separator', { name: 'Resize asset panel' })).toHaveAttribute(
+      'aria-orientation',
+      'vertical',
+    );
+    expect(screen.getByRole('separator', { name: 'Resize inspector panel' })).toHaveAttribute(
+      'tabindex',
+      '0',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse asset panel' }));
+    expect(screen.getByLabelText('Media panel')).toHaveClass('is-collapsed');
+    expect(screen.getByRole('button', { name: 'Expand asset panel' })).toBeInTheDocument();
+    expect(screen.queryByRole('separator', { name: 'Resize asset panel' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand asset panel' }));
+    expect(screen.getByLabelText('Media panel')).not.toHaveClass('is-collapsed');
+    expect(screen.getByRole('separator', { name: 'Resize asset panel' })).toBeInTheDocument();
+  });
+
+  it('keeps responsive drawer content mounted when a desktop pane is persisted as collapsed', () => {
+    localStorage.setItem(
+      'sori-cut:workspace-layout:v1',
+      JSON.stringify({
+        version: 1,
+        left: { width: 420, collapsed: true },
+        right: { width: 360, collapsed: false },
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Audio', pressed: false }));
+    expect(screen.getByLabelText('Audio & Stems panel')).toHaveClass('is-open');
+    expect(screen.getByText('Audio uploader')).toBeInTheDocument();
   });
 });
