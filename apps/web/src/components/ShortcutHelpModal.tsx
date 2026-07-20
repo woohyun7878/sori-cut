@@ -28,25 +28,25 @@ export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
         ref={dialogRef}
-        className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl"
+        className="w-full max-w-md rounded-editor border border-editor-border bg-surface-raised p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcut-help-title"
         tabIndex={-1}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 id="shortcut-help-title" className="text-lg font-bold text-white">
+        <div className="mb-3 flex min-h-8 items-center justify-between">
+          <h2 id="shortcut-help-title" className="text-base font-semibold text-primary">
             ⌨️ Shortcuts
           </h2>
           <button
             onClick={onClose}
-            className="rounded-lg p-1 text-gray-400 hover:bg-gray-800 hover:text-white"
+            className="studio-icon-button"
             aria-label="Close keyboard shortcuts"
             type="button"
           >
@@ -54,11 +54,13 @@ export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
           </button>
         </div>
 
-        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+        <div className="grid grid-cols-[96px_1fr] items-center gap-x-3 gap-y-2">
           {shortcuts.map((s) => (
             <div key={s.key} className="contents">
-              <kbd className="rounded bg-gray-800 px-2 py-1 text-xs font-mono text-brand-300">{s.key}</kbd>
-              <span className="text-sm text-gray-300">{s.desc}</span>
+              <kbd className="rounded-control bg-hover px-2 py-1 text-center font-mono text-xs text-brand-300">
+                {s.key}
+              </kbd>
+              <span className="text-sm text-secondary">{s.desc}</span>
             </div>
           ))}
         </div>
