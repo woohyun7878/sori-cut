@@ -136,6 +136,12 @@ export function SyncControls() {
           </select>
         </label>
 
+        {!syncTracks.length ? (
+          <p className="rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-sm text-gray-400">
+            No audio tracks yet. Add an audio, stem, or recording track to sync it against your video.
+          </p>
+        ) : null}
+
         <label className="block text-sm text-gray-300">
           Offset slider ({offset.toFixed(2)}s)
           <input
@@ -164,7 +170,7 @@ export function SyncControls() {
 
         <div className="rounded-2xl border border-gray-800 bg-gray-950/70 p-4">
           <p className="mb-3 text-sm font-medium text-white">Visual alignment</p>
-          <div className="relative h-20 overflow-hidden rounded-xl bg-gray-950">
+          <div className="relative h-20 overflow-hidden rounded-xl bg-gray-950" aria-hidden="true">
             <div className="absolute inset-y-0 left-1/2 w-px bg-gray-700" />
             <div className="absolute left-[20%] top-5 h-4 w-[55%] rounded-full bg-blue-500/80">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Video</span>
@@ -259,11 +265,13 @@ export function SyncControls() {
           </button>
         </div>
 
-        {message ? (
-          <div className="rounded-2xl border border-brand-500/30 bg-brand-500/10 p-4 text-sm text-brand-100">
-            {message}
-          </div>
-        ) : null}
+        <div role="status" aria-live="polite">
+          {message ? (
+            <div className="rounded-2xl border border-brand-500/30 bg-brand-500/10 p-4 text-sm text-brand-100">
+              {message}
+            </div>
+          ) : null}
+        </div>
       </div>
     </section>
   );
