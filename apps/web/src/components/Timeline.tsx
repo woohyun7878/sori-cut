@@ -23,7 +23,7 @@ function TrackInspector({ track }: { track: TimelineTrack }) {
   const stem = stemId ? stems.find((item) => item.id === stemId) : null;
 
   return (
-    <div className="mt-1.5 flex items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
       <button
         className={track.muted ? 'timeline-track-toggle is-active' : 'timeline-track-toggle'}
         type="button"
@@ -110,7 +110,7 @@ function TimelineClip({
   onTrimStart: (edge: 'left' | 'right', e: React.MouseEvent) => void;
 }) {
   const clipWidth = Math.max(track.duration * zoom, 48);
-  const clipHeight = 44;
+  const clipHeight = 36;
   const palette = getTrackPalette(track);
 
   const clipLabel = [
@@ -126,7 +126,7 @@ function TimelineClip({
   return (
     <div
       className={[
-        'group absolute top-1/2 flex h-11 -translate-y-1/2 items-center justify-between overflow-hidden rounded-md border px-3 text-xs text-white transition-[border-color,box-shadow]',
+        'group absolute top-1/2 flex h-9 -translate-y-1/2 items-center justify-between overflow-hidden rounded-md border px-3 text-xs text-white transition-[border-color,box-shadow]',
         palette.clip,
         isSelected
           ? 'ring-2 ring-brand-400 ring-offset-1 ring-offset-gray-950 shadow-[0_0_12px_rgba(139,92,246,0.28)]'
@@ -252,10 +252,7 @@ export function Timeline() {
       const deltaTime = deltaX / zoom;
 
       if (trimDrag.edge === 'left') {
-        const newOffset = snapTimelineTime(
-          trimDrag.initialOffset + deltaTime,
-          snapEnabled,
-        );
+        const newOffset = snapTimelineTime(trimDrag.initialOffset + deltaTime, snapEnabled);
         const initialEnd = trimDrag.initialOffset + trimDrag.initialDuration;
         const newDuration = initialEnd - newOffset;
         if (newDuration >= 0.5) {
@@ -391,7 +388,7 @@ export function Timeline() {
 
       <div ref={containerRef} className="timeline-scroll">
         <div
-          className="grid min-w-max grid-cols-[188px_minmax(720px,1fr)]"
+          className="timeline-grid"
           role="group"
           aria-label={`Timeline with ${tracks.length} track${tracks.length === 1 ? '' : 's'}`}
         >
@@ -436,7 +433,7 @@ export function Timeline() {
                 role="group"
                 aria-label={`${track.name} track controls`}
               >
-                <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
                   <span
                     className={`h-7 w-1 shrink-0 rounded-full ${getTrackPalette(track).accent}`}
                     aria-hidden="true"
@@ -444,7 +441,7 @@ export function Timeline() {
                   <span className="timeline-type-badge">
                     {track.type === 'recording' ? 'REC' : track.type.slice(0, 3).toUpperCase()}
                   </span>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-semibold text-primary" title={track.name}>
                       {track.name}
                     </p>
@@ -462,7 +459,7 @@ export function Timeline() {
                 aria-label={`${track.name} timeline lane`}
               >
                 <div
-                  className="relative h-14"
+                  className="relative h-12"
                   style={{ width: timelineWidth }}
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect();
@@ -529,13 +526,13 @@ export function Timeline() {
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[160px] rounded-xl border border-gray-700 bg-gray-900 py-1 shadow-2xl"
+          className="fixed z-50 min-w-[160px] rounded-control border border-editor-border bg-surface-raised py-1 shadow-2xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label="Clip actions"
         >
           <button
-            className="w-full px-4 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+            className="h-8 w-full px-3 text-left text-sm text-secondary hover:bg-hover hover:text-primary"
             type="button"
             role="menuitem"
             onClick={() => {
@@ -546,7 +543,7 @@ export function Timeline() {
             Split at playhead
           </button>
           <button
-            className="w-full px-4 py-2 text-left text-sm text-red-300 hover:bg-gray-800"
+            className="h-8 w-full px-3 text-left text-sm text-red-300 hover:bg-hover hover:text-red-200"
             type="button"
             role="menuitem"
             onClick={() => {
@@ -562,31 +559,31 @@ export function Timeline() {
       {/* Delete confirmation dialog */}
       {showDeleteConfirm && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
           onClick={() => setShowDeleteConfirm(null)}
         >
           <div
             ref={deleteDialogRef}
-            className="rounded-2xl border border-gray-700 bg-gray-900 p-6 shadow-2xl"
+            className="w-full max-w-sm rounded-editor border border-editor-border bg-surface-raised p-4 shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="delete-clip-title"
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <p id="delete-clip-title" className="mb-4 text-sm text-white">
+            <p id="delete-clip-title" className="mb-4 text-sm font-medium text-primary">
               Delete this clip?
             </p>
-            <div className="flex gap-3">
+            <div className="flex justify-end gap-2">
               <button
-                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"
+                className="h-8 rounded-control bg-red-600 px-3 text-sm font-semibold text-white transition-colors hover:bg-red-700"
                 type="button"
                 onClick={confirmDelete}
               >
                 Delete
               </button>
               <button
-                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800"
+                className="h-8 rounded-control border border-editor-border px-3 text-sm text-secondary transition-colors hover:bg-hover hover:text-primary"
                 type="button"
                 onClick={() => setShowDeleteConfirm(null)}
               >

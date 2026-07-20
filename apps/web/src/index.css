@@ -25,6 +25,19 @@
   --color-stem-guitar: #eab308;
   --radius-control: 8px;
   --radius-panel: 10px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --control-height: 32px;
+  --primary-control-height: 36px;
+  --command-height: 52px;
+  --tool-rail-width: 56px;
+  --panel-width: 300px;
+  --timeline-header-width: 208px;
+  --timeline-row-height: 48px;
   --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-brand);
   color-scheme: dark;
 }
@@ -85,7 +98,9 @@
   }
 
   .studio-command-bar {
-    @apply z-50 flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-editor-border bg-surface px-3;
+    @apply z-50 flex shrink-0 items-center justify-between gap-3 border-b border-editor-border bg-surface;
+    height: var(--command-height);
+    padding-inline: var(--space-3);
   }
 
   .studio-command-group {
@@ -105,15 +120,19 @@
   }
 
   .studio-primary-button {
-    @apply inline-flex h-8 items-center justify-center gap-2 rounded-control bg-brand-600 px-3 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-brand-700;
+    @apply inline-flex items-center justify-center gap-2 rounded-control bg-brand-600 px-3 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-brand-700;
+    height: var(--primary-control-height);
   }
 
   .studio-secondary-button {
-    @apply inline-flex h-8 items-center justify-center gap-2 rounded-control border border-editor-border bg-surface-raised px-3 text-[13px] font-medium text-secondary transition-colors duration-150 hover:border-gray-500 hover:bg-hover hover:text-primary;
+    @apply inline-flex items-center justify-center gap-2 rounded-control border border-editor-border bg-surface-raised px-3 text-[13px] font-medium text-secondary transition-colors duration-150 hover:border-gray-500 hover:bg-hover hover:text-primary;
+    height: var(--control-height);
   }
 
   .studio-icon-button {
-    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
+    @apply inline-flex shrink-0 items-center justify-center rounded-control text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
+    width: var(--control-height);
+    height: var(--control-height);
   }
 
   .studio-main {
@@ -121,7 +140,8 @@
   }
 
   .studio-upper {
-    @apply relative grid min-h-[300px] flex-1 grid-cols-[56px_minmax(0,1fr)] overflow-hidden;
+    @apply relative grid min-h-[300px] flex-1 overflow-hidden;
+    grid-template-columns: var(--tool-rail-width) minmax(0, 1fr);
   }
 
   .studio-tool-rail {
@@ -151,11 +171,14 @@
 
   .studio-context-panel,
   .studio-inspector {
-    @apply fixed bottom-0 top-[52px] z-40 flex w-[min(320px,calc(100vw-56px))] flex-col overflow-hidden border-editor-border bg-surface shadow-2xl transition-transform duration-150 xl:static xl:z-20 xl:w-auto xl:translate-x-0 xl:shadow-none;
+    @apply fixed bottom-0 z-40 flex flex-col overflow-hidden border-editor-border bg-surface shadow-2xl transition-transform duration-150;
+    top: var(--command-height);
+    width: min(320px, calc(100vw - var(--tool-rail-width)));
   }
 
   .studio-context-panel {
-    @apply left-14 -translate-x-full border-r xl:left-auto;
+    @apply -translate-x-full border-r;
+    left: var(--tool-rail-width);
   }
 
   .studio-inspector {
@@ -174,7 +197,8 @@
   }
 
   .studio-drawer-scrim {
-    @apply fixed inset-0 top-[52px] z-[35] bg-black/60;
+    @apply fixed inset-0 z-[35] bg-black/60;
+    top: var(--command-height);
   }
 
   .studio-panel-header {
@@ -225,7 +249,7 @@
   }
 
   .studio-preview-toolbar {
-    @apply flex h-9 shrink-0 items-center justify-between border-b border-editor-border px-3 text-xs font-medium text-secondary;
+    @apply flex h-10 shrink-0 items-center justify-between border-b border-editor-border px-3 text-xs font-medium text-secondary;
   }
 
   .studio-preview-format {
@@ -237,11 +261,11 @@
   }
 
   .studio-device-frame {
-    @apply relative aspect-[9/16] h-full max-h-[calc(100%-8px)] max-w-full overflow-hidden rounded-control border border-gray-600 bg-black shadow-2xl transition-transform duration-150;
+    @apply relative aspect-[9/16] h-full max-h-full max-w-full overflow-hidden rounded-control border border-gray-600 bg-black shadow-2xl transition-transform duration-150;
   }
 
   .studio-preview-tool {
-    @apply h-6 rounded px-2 text-[11px] font-medium text-muted transition-colors hover:bg-hover hover:text-primary;
+    @apply h-7 rounded-control px-2 text-[11px] font-medium text-muted transition-colors hover:bg-hover hover:text-primary;
   }
 
   .studio-preview-tool.is-active {
@@ -249,7 +273,7 @@
   }
 
   .studio-preview-zoom {
-    @apply h-6 rounded border border-editor-border bg-surface-raised px-1.5 text-[11px] text-secondary outline-none focus:border-brand-500;
+    @apply h-7 rounded-control border border-editor-border bg-surface-raised px-2 text-[11px] text-secondary outline-none focus:border-brand-500;
   }
 
   .studio-safe-area {
@@ -279,7 +303,7 @@
   }
 
   .studio-preview-empty strong {
-    @apply mt-1 text-sm font-medium text-secondary;
+    @apply mt-1 text-sm font-medium leading-5 text-secondary;
   }
 
   .studio-preview-empty span {
@@ -311,7 +335,7 @@
   }
 
   .studio-timeline-content {
-    @apply min-h-0 flex-1 overflow-auto;
+    @apply min-h-0 flex-1 overflow-hidden;
   }
 
   .studio-inspector-empty {
@@ -413,7 +437,7 @@
   }
 
   .timeline-toolbar {
-    @apply flex h-9 shrink-0 items-center justify-between gap-2 border-b border-editor-border bg-surface px-2;
+    @apply flex h-9 shrink-0 items-center justify-between gap-2 overflow-x-auto border-b border-editor-border bg-surface px-2;
   }
 
   .timeline-timecode {
@@ -442,12 +466,19 @@
     scrollbar-width: thin;
   }
 
+  .timeline-grid {
+    display: grid;
+    min-width: max-content;
+    grid-template-columns: var(--timeline-header-width) minmax(720px, 1fr);
+  }
+
   .timeline-track-corner {
     @apply sticky left-0 z-30 flex h-7 items-center justify-between border-b border-r border-editor-border bg-surface px-2 text-[10px] font-semibold uppercase tracking-wider text-muted;
   }
 
   .timeline-track-header {
-    @apply sticky left-0 z-20 flex h-14 items-center justify-between gap-2 border-b border-r border-editor-border bg-surface px-2;
+    @apply sticky left-0 z-20 flex items-center justify-between gap-2 border-b border-r border-editor-border bg-surface px-2;
+    height: var(--timeline-row-height);
   }
 
   .timeline-type-badge {
@@ -487,9 +518,24 @@
     @apply flex h-6 shrink-0 items-center justify-between border-t border-editor-border bg-surface px-2 text-[10px] text-muted;
   }
 
-  @screen xl {
+  @media (min-width: 1360px) {
     .studio-upper {
-      grid-template-columns: 56px 300px minmax(360px, 1fr) 300px;
+      grid-template-columns:
+        var(--tool-rail-width) var(--panel-width) minmax(360px, 1fr)
+        var(--panel-width);
+    }
+
+    .studio-context-panel,
+    .studio-inspector {
+      position: static;
+      z-index: 20;
+      width: auto;
+      transform: translateX(0);
+      box-shadow: none;
+    }
+
+    .studio-context-panel {
+      left: auto;
     }
 
     .studio-context-panel:not(.is-open),

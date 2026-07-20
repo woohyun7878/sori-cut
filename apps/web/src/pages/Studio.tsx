@@ -104,7 +104,7 @@ function PanelHeader({
       </div>
       {onClose ? (
         <button
-          className="studio-icon-button xl:hidden"
+          className="studio-icon-button min-[1360px]:hidden"
           type="button"
           onClick={onClose}
           aria-label={`Close ${title} panel`}
@@ -422,7 +422,7 @@ export function Studio() {
         </div>
         <div className="studio-command-group">
           <button
-            className="studio-secondary-button xl:hidden"
+            className="studio-secondary-button min-[1360px]:hidden"
             type="button"
             onClick={() => setInspectorOpen(true)}
           >
@@ -471,7 +471,7 @@ export function Studio() {
 
           {toolDrawerOpen || inspectorOpen ? (
             <button
-              className="studio-drawer-scrim xl:hidden"
+              className="studio-drawer-scrim min-[1360px]:hidden"
               type="button"
               aria-label="Close open panel"
               onClick={() => {

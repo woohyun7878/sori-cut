@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useProjectStore } from '../store/useProjectStore';
-import { listProjects, deleteProject, loadProject, type ProjectSummary } from '../lib/projectStorage';
+import {
+  listProjects,
+  deleteProject,
+  loadProject,
+  type ProjectSummary,
+} from '../lib/projectStorage';
 import type { SaveStatus } from '../hooks/useAutoSave';
 
 interface ProjectManagerProps {
@@ -91,14 +96,20 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
 
   return (
     <div className="relative">
-      {/* Compact top bar */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm hover:bg-gray-700 transition-colors"
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+      <div className="flex min-w-0 items-center gap-2">
+        <button onClick={() => setIsOpen(!isOpen)} className="studio-secondary-button">
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+            />
           </svg>
           Projects
         </button>
@@ -107,7 +118,7 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
           type="text"
           value={projectName}
           onChange={(e) => setProjectName(e.target.value)}
-          className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-white focus:border-brand-500 focus:outline-none w-48"
+          className="h-8 w-48 min-w-0 rounded-control border border-editor-border bg-canvas px-2.5 text-[13px] text-primary focus:border-brand-500"
           placeholder="Project name"
         />
 
@@ -130,12 +141,12 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
 
       {/* Dropdown project list */}
       {isOpen && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-80 rounded-xl border border-gray-700 bg-gray-900 shadow-xl">
-          <div className="flex items-center justify-between border-b border-gray-700 px-4 py-3">
+        <div className="absolute left-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-editor border border-editor-border bg-surface-raised shadow-xl">
+          <div className="flex h-12 items-center justify-between border-b border-editor-border px-3">
             <h3 className="text-sm font-semibold text-white">Projects</h3>
             <button
               onClick={handleNewProject}
-              className="rounded-md bg-brand-600 px-3 py-1 text-xs font-medium text-white hover:bg-brand-700 transition-colors"
+              className="h-8 rounded-control bg-brand-600 px-3 text-xs font-medium text-white transition-colors hover:bg-brand-700"
             >
               + New Project
             </button>
@@ -143,14 +154,12 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
 
           <div className="max-h-64 overflow-y-auto">
             {projects.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-500">
-                No saved projects.
-              </p>
+              <p className="px-4 py-6 text-center text-sm text-gray-500">No saved projects.</p>
             ) : (
               projects.map((p) => (
                 <div
                   key={p.id}
-                  className={`flex items-center justify-between px-4 py-3 hover:bg-gray-800 transition-colors cursor-pointer border-b border-gray-800 last:border-b-0 ${
+                  className={`flex min-h-12 items-center justify-between border-b border-editor-border px-3 transition-colors last:border-b-0 hover:bg-hover ${
                     p.id === projectId ? 'bg-gray-800/50' : ''
                   }`}
                   onClick={() => handleLoad(p.id)}
@@ -167,8 +176,18 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
                     className="ml-2 rounded p-1 text-gray-500 hover:bg-red-900/30 hover:text-red-400 transition-colors"
                     title="Delete"
                   >
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
                     </svg>
                   </button>
                 </div>
