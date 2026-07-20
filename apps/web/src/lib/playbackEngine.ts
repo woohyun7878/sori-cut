@@ -174,11 +174,10 @@ export class PlaybackEngine {
       if (!this.state.isPlaying || !this.audioContext) return;
 
       const elapsed = this.audioContext.currentTime - this.startContextTime;
-      let currentPosition = this.startPlayheadPosition + elapsed;
+      const currentPosition = this.startPlayheadPosition + elapsed;
 
       if (currentPosition >= this.state.projectDuration) {
         if (this.state.loopEnabled) {
-          currentPosition = 0;
           this.startPlayheadPosition = 0;
           this.startContextTime = this.audioContext.currentTime;
           this.stopSources();

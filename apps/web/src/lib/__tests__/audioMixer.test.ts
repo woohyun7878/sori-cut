@@ -33,7 +33,7 @@ class MockAudioContext {
     return createMockAudioBuffer(length, channels, sampleRate);
   }
 
-  async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
+  async decodeAudioData(_data: ArrayBuffer): Promise<AudioBuffer> {
     return createMockAudioBuffer(DECODED_BUFFER_LENGTH);
   }
 

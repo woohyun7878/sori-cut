@@ -67,7 +67,6 @@ const undoMiddlewareImpl: UndoMiddlewareImpl =
   (creator) =>
   (set, get, api) => {
     let isUndoRedoing = false;
-    let lastSnapshot: Record<string, unknown> | null = null;
 
     const wrappedSet: typeof set = ((...args: unknown[]) => {
       if (!isUndoRedoing) {
@@ -94,8 +93,6 @@ const undoMiddlewareImpl: UndoMiddlewareImpl =
             canUndo: pastStates.length > 0,
             canRedo: false,
           });
-
-          lastSnapshot = nextSnapshot;
         }
 
         return;
@@ -125,7 +122,6 @@ const undoMiddlewareImpl: UndoMiddlewareImpl =
         canUndo: newPast.length > 0,
         canRedo: futureStates.length > 0,
       });
-      lastSnapshot = previousSnapshot;
       isUndoRedoing = false;
     };
 
@@ -148,12 +144,10 @@ const undoMiddlewareImpl: UndoMiddlewareImpl =
         canUndo: pastStates.length > 0,
         canRedo: newFuture.length > 0,
       });
-      lastSnapshot = nextSnapshot;
       isUndoRedoing = false;
     };
 
     const initialState = creator(wrappedSet, get, api);
-    lastSnapshot = getTrackedState(initialState);
 
     return {
       ...initialState,

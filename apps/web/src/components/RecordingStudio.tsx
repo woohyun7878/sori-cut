@@ -12,7 +12,7 @@ import {
 
 const TIME_SIGNATURE_OPTIONS = ['4/4', '3/4', '2/4', '6/8'] as const;
 
-interface RecordingDraft extends Recording {}
+type RecordingDraft = Recording;
 
 function formatElapsed(milliseconds: number) {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));

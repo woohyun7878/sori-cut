@@ -145,12 +145,14 @@ beforeEach(() => {
       }
 
       createBufferSource() {
-        const self = this;
+        const setConnectedBuffer = (b: AudioBuffer | null) => {
+          this.connectedBuffer = b;
+        };
         return {
           _buffer: null as AudioBuffer | null,
           set buffer(b: AudioBuffer | null) {
             this._buffer = b;
-            self.connectedBuffer = b;
+            setConnectedBuffer(b);
           },
           get buffer() { return this._buffer; },
           connect: vi.fn(),
