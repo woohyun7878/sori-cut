@@ -12,13 +12,22 @@ interface ClipWaveformProps {
   width: number;
   /** Pixel height to render. */
   height: number;
+  /** High-contrast semantic track color. */
+  color?: string;
 }
 
 /**
  * Renders a waveform for a timeline clip using a canvas element.
  * Respects sourceStartOffset so trimmed clips show the correct portion.
  */
-export function ClipWaveform({ sourceUrl, sourceStartOffset, duration, width, height }: ClipWaveformProps) {
+export function ClipWaveform({
+  sourceUrl,
+  sourceStartOffset,
+  duration,
+  width,
+  height,
+  color = '#ffffff',
+}: ClipWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [peakData, setPeakData] = useState<PeakData | null>(null);
 
@@ -30,7 +39,9 @@ export function ClipWaveform({ sourceUrl, sourceStartOffset, duration, width, he
       if (!cancelled) setPeakData(data);
     });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [sourceUrl]);
 
   useEffect(() => {
@@ -64,7 +75,8 @@ export function ClipWaveform({ sourceUrl, sourceStartOffset, duration, width, he
     const midY = canvasHeight / 2;
 
     // Draw waveform bars
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.82;
 
     const barWidth = Math.max(1, (canvasWidth / peakCount) * 0.7);
     const gap = canvasWidth / peakCount;
@@ -77,14 +89,9 @@ export function ClipWaveform({ sourceUrl, sourceStartOffset, duration, width, he
       const barHeight = Math.max(1 * dpr, amplitude * (canvasHeight * 0.8));
       const x = i * gap;
 
-      ctx.fillRect(
-        x,
-        midY - barHeight / 2,
-        Math.max(1, barWidth),
-        barHeight,
-      );
+      ctx.fillRect(x, midY - barHeight / 2, Math.max(1, barWidth), barHeight);
     }
-  }, [peakData, sourceStartOffset, duration, width, height]);
+  }, [peakData, sourceStartOffset, duration, width, height, color]);
 
   if (!sourceUrl) return null;
 
