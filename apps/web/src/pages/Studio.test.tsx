@@ -24,15 +24,23 @@ vi.mock('../store/useProjectStore', () => ({
 vi.mock('../hooks/useAutoSave', () => ({ useAutoSave: vi.fn() }));
 vi.mock('../hooks/useKeyboardShortcuts', () => ({ useKeyboardShortcuts: vi.fn() }));
 vi.mock('../hooks/usePlaybackEngine', () => ({ usePlaybackEngine: vi.fn() }));
-vi.mock('../components/ProjectManager', () => ({ ProjectManager: () => <div>Project controls</div> }));
-vi.mock('../components/UndoRedoButtons', () => ({ UndoRedoButtons: () => <div>History controls</div> }));
+vi.mock('../components/ProjectManager', () => ({
+  ProjectManager: () => <div>Project controls</div>,
+}));
+vi.mock('../components/UndoRedoButtons', () => ({
+  UndoRedoButtons: () => <div>History controls</div>,
+}));
 vi.mock('../components/VideoUpload', () => ({ VideoUpload: () => <div>Media uploader</div> }));
 vi.mock('../components/DropZone', () => ({ DropZone: () => <div>Audio uploader</div> }));
 vi.mock('../components/WaveformPlayer', () => ({ WaveformPlayer: () => <div>Waveform</div> }));
 vi.mock('../components/StemSplitter', () => ({ StemSplitter: () => <div>Stem splitter</div> }));
-vi.mock('../components/RecordingStudio', () => ({ RecordingStudio: () => <div>Recording studio</div> }));
+vi.mock('../components/RecordingStudio', () => ({
+  RecordingStudio: () => <div>Recording studio</div>,
+}));
 vi.mock('../components/SyncControls', () => ({ SyncControls: () => <div>Sync controls</div> }));
-vi.mock('../components/TransportBar', () => ({ TransportBar: () => <div>Transport controls</div> }));
+vi.mock('../components/TransportBar', () => ({
+  TransportBar: () => <div>Transport controls</div>,
+}));
 vi.mock('../components/Timeline', () => ({ Timeline: () => <div>Timeline controls</div> }));
 vi.mock('../components/Toast', () => ({ Toast: () => null }));
 vi.mock('../components/ShortcutHelpModal', () => ({ ShortcutHelpModal: () => null }));
@@ -50,7 +58,11 @@ describe('Studio shell', () => {
   });
 
   it('renders the editor zones and defaults to the Media workspace', () => {
-    render(<MemoryRouter><Studio /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
 
     expect(screen.getByRole('banner', { name: 'Studio command bar' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Studio tools' })).toBeInTheDocument();
@@ -61,7 +73,11 @@ describe('Studio shell', () => {
   });
 
   it('switches contextual content and exposes responsive drawers', () => {
-    render(<MemoryRouter><Studio /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Audio', pressed: false }));
     expect(screen.getByLabelText('Audio & Stems panel')).toHaveClass('is-open');
@@ -73,5 +89,29 @@ describe('Studio shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Inspector' }));
     expect(screen.getByLabelText('Inspector')).toHaveClass('is-open');
+  });
+
+  it('toggles preview safe-area guides and changes preview zoom', () => {
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    const safeAreaToggle = screen.getByRole('button', { name: 'Safe area' });
+    expect(safeAreaToggle).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(safeAreaToggle);
+    expect(safeAreaToggle).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Preview zoom' }), {
+      target: { value: '1.25' },
+    });
+    expect(
+      screen
+        .getByRole('region', { name: 'Preview workspace' })
+        .querySelector('.studio-device-frame'),
+    ).toHaveStyle({
+      transform: 'scale(1.25)',
+    });
   });
 });

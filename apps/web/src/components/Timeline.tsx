@@ -1,86 +1,81 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { calculateProjectDuration, type TimelineTrack, type TrackType, useProjectStore } from '../store/useProjectStore';
+import {
+  calculateProjectDuration,
+  type TimelineTrack,
+  type TrackType,
+  useProjectStore,
+} from '../store/useProjectStore';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { ClipWaveform } from './ClipWaveform';
-
-const trackColors: Record<TrackType, string> = {
-  audio: 'from-purple-500/90 to-fuchsia-400/90',
-  video: 'from-blue-500/90 to-cyan-400/90',
-  stem: 'from-green-500/90 to-emerald-400/90',
-  recording: 'from-orange-500/90 to-amber-400/90',
-};
-
-const trackIcons: Record<TrackType, string> = {
-  audio: '🎵',
-  video: '🎬',
-  stem: '🌿',
-  recording: '🎙️',
-};
-
-function formatSeconds(seconds: number) {
-  const safeSeconds = Math.max(0, seconds);
-  const minutes = Math.floor(safeSeconds / 60);
-  const remaining = Math.floor(safeSeconds % 60);
-
-  return minutes > 0 ? `${minutes}:${String(remaining).padStart(2, '0')}` : `${remaining}s`;
-}
-
-function getMarkerStep(zoom: number) {
-  if (zoom <= 40) {
-    return 5;
-  }
-
-  if (zoom <= 80) {
-    return 2;
-  }
-
-  return 1;
-}
+import {
+  formatTimelineTime,
+  getMarkerStep,
+  getTrackPalette,
+  snapTimelineTime,
+} from './timelineHelpers';
 
 function TrackInspector({ track }: { track: TimelineTrack }) {
   const toggleTrackMute = useProjectStore((state) => state.toggleTrackMute);
+  const stems = useProjectStore((state) => state.stems);
+  const toggleStemSolo = useProjectStore((state) => state.toggleStemSolo);
   const setTrackVolume = useProjectStore((state) => state.setTrackVolume);
-  const updateTrack = useProjectStore((state) => state.updateTrack);
+  const stemId = track.type === 'stem' && track.id.startsWith('stem-') ? track.id.slice(5) : null;
+  const stem = stemId ? stems.find((item) => item.id === stemId) : null;
 
   return (
-    <div className="mt-3 space-y-2">
+    <div className="mt-1.5 flex items-center gap-1">
       <button
-        className={[
-          'w-full rounded-xl border px-3 py-2 text-xs font-semibold transition-colors',
-          track.muted
-            ? 'border-red-400/50 bg-red-500/20 text-red-200'
-            : 'border-gray-700 bg-gray-900 text-gray-300 hover:border-brand-400/60',
-        ].join(' ')}
+        className={track.muted ? 'timeline-track-toggle is-active' : 'timeline-track-toggle'}
         type="button"
+        title={
+          track.type === 'video'
+            ? track.muted
+              ? 'Show video track'
+              : 'Hide video track'
+            : track.muted
+              ? 'Unmute track'
+              : 'Mute track'
+        }
+        aria-label={
+          track.type === 'video'
+            ? track.muted
+              ? `Show ${track.name}`
+              : `Hide ${track.name}`
+            : track.muted
+              ? `Unmute ${track.name}`
+              : `Mute ${track.name}`
+        }
+        aria-pressed={track.muted}
         onClick={() => toggleTrackMute(track.id)}
       >
-        {track.muted ? 'Unmute' : 'Mute'}
+        {track.type === 'video' ? 'V' : 'M'}
       </button>
-
-      <label className="block text-xs text-gray-400">
-        Volume
-        <input
-          className="mt-1 h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-800 accent-brand-500"
-          max={1}
-          min={0}
-          step={0.01}
-          type="range"
-          value={track.volume}
-          onChange={(event) => setTrackVolume(track.id, Number(event.target.value))}
-        />
-      </label>
-
-      <label className="block text-xs text-gray-400">
-        Start offset
-        <input
-          className="mt-1 w-full rounded-xl border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
-          min={0}
-          step={0.01}
-          type="number"
-          value={track.startOffset}
-          onChange={(event) => updateTrack(track.id, { startOffset: Number(event.target.value) })}
-        />
-      </label>
+      {stem ? (
+        <button
+          className={stem.solo ? 'timeline-track-toggle is-solo' : 'timeline-track-toggle'}
+          type="button"
+          title={stem.solo ? 'Disable solo' : 'Solo stem'}
+          aria-label={`${stem.solo ? 'Unsolo' : 'Solo'} ${track.name}`}
+          aria-pressed={stem.solo}
+          onClick={() => toggleStemSolo(stem.id)}
+        >
+          S
+        </button>
+      ) : null}
+      {track.type !== 'video' ? (
+        <label className="timeline-volume" title={`${Math.round(track.volume * 100)}% volume`}>
+          <span className="sr-only">{track.name} volume</span>
+          <input
+            aria-label={`${track.name} volume`}
+            max={1}
+            min={0}
+            step={0.01}
+            type="range"
+            value={track.volume}
+            onChange={(event) => setTrackVolume(track.id, Number(event.target.value))}
+          />
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -115,7 +110,8 @@ function TimelineClip({
   onTrimStart: (edge: 'left' | 'right', e: React.MouseEvent) => void;
 }) {
   const clipWidth = Math.max(track.duration * zoom, 48);
-  const clipHeight = 64; // h-16 = 64px
+  const clipHeight = 44;
+  const palette = getTrackPalette(track);
 
   const clipLabel = [
     track.name,
@@ -130,11 +126,11 @@ function TimelineClip({
   return (
     <div
       className={[
-        'group absolute top-1/2 flex h-16 -translate-y-1/2 items-center justify-between overflow-hidden rounded-2xl border bg-gradient-to-r px-4 text-sm text-white shadow-lg transition-shadow',
-        trackColors[track.type],
+        'group absolute top-1/2 flex h-11 -translate-y-1/2 items-center justify-between overflow-hidden rounded-md border px-3 text-xs text-white transition-[border-color,box-shadow]',
+        palette.clip,
         isSelected
-          ? 'border-brand-400 shadow-[0_0_12px_rgba(167,139,250,0.4)]'
-          : 'border-white/10 hover:border-white/30',
+          ? 'ring-2 ring-brand-400 ring-offset-1 ring-offset-gray-950 shadow-[0_0_12px_rgba(139,92,246,0.28)]'
+          : 'hover:brightness-125',
       ].join(' ')}
       style={{
         left: track.startOffset * zoom,
@@ -170,6 +166,7 @@ function TimelineClip({
           duration={track.duration}
           width={clipWidth}
           height={clipHeight}
+          color={palette.waveform}
         />
       )}
 
@@ -177,8 +174,8 @@ function TimelineClip({
       <div
         aria-hidden="true"
         className={[
-          'absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize rounded-l-2xl transition-colors',
-          isSelected ? 'bg-brand-300' : 'bg-white/20 group-hover:bg-white/50',
+          'absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize transition-colors',
+          isSelected ? 'bg-white' : 'bg-white/20 group-hover:bg-white/70',
         ].join(' ')}
         onMouseDown={(e) => {
           e.stopPropagation();
@@ -190,8 +187,8 @@ function TimelineClip({
       <div
         aria-hidden="true"
         className={[
-          'absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize rounded-r-2xl transition-colors',
-          isSelected ? 'bg-brand-300' : 'bg-white/20 group-hover:bg-white/50',
+          'absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize transition-colors',
+          isSelected ? 'bg-white' : 'bg-white/20 group-hover:bg-white/70',
         ].join(' ')}
         onMouseDown={(e) => {
           e.stopPropagation();
@@ -200,11 +197,12 @@ function TimelineClip({
       />
 
       <div className="pointer-events-none relative z-[5] min-w-0 flex-1 truncate">
-        <p className="truncate font-medium drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{track.name}</p>
-        <p className="text-xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{track.startOffset.toFixed(2)}s</p>
+        <p className="truncate font-semibold drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+          {track.name}
+        </p>
       </div>
       <span className="pointer-events-none relative z-[5] ml-2 shrink-0 text-xs text-white/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-        {track.duration.toFixed(2)}s
+        {formatTimelineTime(track.duration, true)}
       </span>
     </div>
   );
@@ -228,15 +226,22 @@ export function Timeline() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [trimDrag, setTrimDrag] = useState<TrimDragState | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [snapEnabled, setSnapEnabled] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(showDeleteConfirm !== null, deleteDialogRef, () => setShowDeleteConfirm(null));
 
-  const totalDuration = useMemo(() => Math.max(calculateProjectDuration(tracks, video), 10), [tracks, video]);
+  const totalDuration = useMemo(
+    () => Math.max(calculateProjectDuration(tracks, video), 10),
+    [tracks, video],
+  );
   const timelineWidth = Math.max(totalDuration * zoom, 720);
   const markerStep = getMarkerStep(zoom);
-  const markers = Array.from({ length: Math.ceil(totalDuration / markerStep) + 1 }, (_, index) => index * markerStep);
+  const markers = Array.from(
+    { length: Math.ceil(totalDuration / markerStep) + 1 },
+    (_, index) => index * markerStep,
+  );
 
   // Handle trim drag
   const handleTrimMouseMove = useCallback(
@@ -247,18 +252,23 @@ export function Timeline() {
       const deltaTime = deltaX / zoom;
 
       if (trimDrag.edge === 'left') {
-        const newOffset = Math.max(0, trimDrag.initialOffset + deltaTime);
-        const offsetDelta = newOffset - trimDrag.initialOffset;
-        const newDuration = trimDrag.initialDuration - offsetDelta;
+        const newOffset = snapTimelineTime(
+          trimDrag.initialOffset + deltaTime,
+          snapEnabled,
+        );
+        const initialEnd = trimDrag.initialOffset + trimDrag.initialDuration;
+        const newDuration = initialEnd - newOffset;
         if (newDuration >= 0.5) {
           trimTrack(trimDrag.trackId, newOffset, newDuration);
         }
       } else {
-        const newDuration = Math.max(0.5, trimDrag.initialDuration + deltaTime);
+        const initialEnd = trimDrag.initialOffset + trimDrag.initialDuration;
+        const newEnd = snapTimelineTime(initialEnd + deltaTime, snapEnabled);
+        const newDuration = Math.max(0.5, newEnd - trimDrag.initialOffset);
         trimTrack(trimDrag.trackId, trimDrag.initialOffset, newDuration);
       }
     },
-    [trimDrag, zoom, trimTrack],
+    [snapEnabled, trimDrag, zoom, trimTrack],
   );
 
   const handleTrimMouseUp = useCallback(() => {
@@ -304,45 +314,42 @@ export function Timeline() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
-      <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-white">Timeline</h2>
-          <p className="mt-2 text-sm text-gray-400">Position clips and adjust timing.</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-300">
-            Total <span className="text-brand-300">{formatSeconds(totalDuration)}</span>
-          </div>
-          <div className="flex items-center rounded-xl border border-gray-800 bg-gray-950 p-1">
-            <button
-              className="rounded-lg px-3 py-2 text-sm text-gray-200 transition-colors hover:bg-gray-900"
-              type="button"
-              onClick={() => setZoom((value) => Math.max(24, value - 16))}
-            >
-              -
-            </button>
-            <span className="min-w-20 text-center text-xs text-gray-400">Zoom {zoom}px/s</span>
-            <button
-              className="rounded-lg px-3 py-2 text-sm text-gray-200 transition-colors hover:bg-gray-900"
-              type="button"
-              onClick={() => setZoom((value) => Math.min(160, value + 16))}
-            >
-              +
-            </button>
-          </div>
+    <section className="timeline-editor">
+      <div className="timeline-toolbar" aria-label="Timeline toolbar">
+        <div className="flex min-w-0 items-center gap-1">
+          <span
+            className="timeline-timecode"
+            aria-label={`Playhead ${formatTimelineTime(playheadPosition, true)}`}
+          >
+            {formatTimelineTime(playheadPosition, true)}
+          </span>
+          <span className="hidden text-[11px] text-muted sm:inline">
+            / {formatTimelineTime(totalDuration, true)}
+          </span>
+          <span className="mx-1 h-4 w-px bg-editor-border" />
           <button
-            className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 transition-colors hover:border-brand-400/60 disabled:opacity-40 disabled:cursor-not-allowed"
+            className={snapEnabled ? 'timeline-tool-button is-active' : 'timeline-tool-button'}
+            type="button"
+            title="Magnetic snap indicator"
+            aria-pressed={snapEnabled}
+            onClick={() => setSnapEnabled((value) => !value)}
+          >
+            <span aria-hidden="true">⌁</span> Snap
+          </button>
+          <button
+            className="timeline-tool-button"
             disabled={!selectedTrackId}
-            title="Split at playhead"
+            title="Split selected clip at playhead"
             type="button"
             onClick={handleSplitAtPlayhead}
           >
-            ✂️ Split
+            <span aria-hidden="true">✂</span> Split
           </button>
+        </div>
+        <div className="flex items-center gap-1">
           <select
-            className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none transition focus:border-brand-500"
+            aria-label="New track type"
+            className="timeline-track-select"
             value={newTrackType}
             onChange={(event) => setNewTrackType(event.target.value as TrackType)}
           >
@@ -351,47 +358,72 @@ export function Timeline() {
             <option value="recording">Recording</option>
           </select>
           <button
-            className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
+            className="timeline-tool-button"
             type="button"
             onClick={() => addTrack({ type: newTrackType })}
           >
-            Add Track
+            + Track
           </button>
+          <span className="mx-1 h-4 w-px bg-editor-border" />
+          <div className="flex items-center" aria-label={`Timeline zoom ${zoom} pixels per second`}>
+            <button
+              className="timeline-zoom-button"
+              aria-label="Zoom out"
+              type="button"
+              onClick={() => setZoom((value) => Math.max(24, value - 16))}
+            >
+              −
+            </button>
+            <span className="min-w-10 text-center text-[10px] tabular-nums text-muted">
+              {Math.round((zoom / 64) * 100)}%
+            </span>
+            <button
+              className="timeline-zoom-button"
+              aria-label="Zoom in"
+              type="button"
+              onClick={() => setZoom((value) => Math.min(160, value + 16))}
+            >
+              +
+            </button>
+          </div>
         </div>
       </div>
 
-      <div ref={containerRef} className="overflow-x-auto rounded-3xl border border-gray-800 bg-gray-950/70">
+      <div ref={containerRef} className="timeline-scroll">
         <div
-          className="grid min-w-max grid-cols-[230px_minmax(720px,1fr)]"
+          className="grid min-w-max grid-cols-[188px_minmax(720px,1fr)]"
           role="group"
           aria-label={`Timeline with ${tracks.length} track${tracks.length === 1 ? '' : 's'}`}
         >
-          <div className="sticky left-0 z-30 border-b border-r border-gray-800 bg-gray-950 px-4 py-3 text-xs uppercase tracking-[0.24em] text-gray-500">
-            Tracks
+          <div className="timeline-track-corner">
+            <span>Tracks</span>
+            <span>{tracks.length}</span>
           </div>
-          <div className="relative border-b border-gray-800 bg-gray-900/70">
-            <div className="relative h-14" style={{ width: timelineWidth }}>
+          <div className="relative border-b border-editor-border bg-surface">
+            <div className="relative h-7" style={{ width: timelineWidth }}>
               {markers.map((marker) => (
                 <div key={marker} className="absolute inset-y-0" style={{ left: marker * zoom }}>
-                  <div className="h-full w-px bg-gray-800" />
-                  <span className="absolute left-2 top-2 text-xs text-gray-500">{formatSeconds(marker)}</span>
+                  <div className="h-full w-px bg-editor-border" />
+                  <span className="absolute left-1.5 top-1 text-[10px] tabular-nums text-muted">
+                    {formatTimelineTime(marker)}
+                  </span>
                 </div>
               ))}
               <button
-                className="absolute inset-y-0 z-20 w-px bg-brand-400 shadow-[0_0_0_1px_rgba(167,139,250,0.2)]"
+                className="timeline-playhead ruler"
                 style={{ left: playheadPosition * zoom }}
                 type="button"
-                aria-label={`Playhead at ${formatSeconds(playheadPosition)}`}
+                aria-label={`Playhead at ${formatTimelineTime(playheadPosition, true)}`}
                 onClick={(event) => event.stopPropagation()}
               />
               <button
-                className="absolute inset-0"
+                className="absolute inset-0 cursor-col-resize"
                 type="button"
                 aria-label="Move playhead"
                 onClick={(event) => {
                   const rect = event.currentTarget.getBoundingClientRect();
                   const nextPosition = ((event.clientX - rect.left) / rect.width) * totalDuration;
-                  setPlayheadPosition(nextPosition);
+                  setPlayheadPosition(snapTimelineTime(nextPosition, snapEnabled));
                 }}
               />
             </div>
@@ -400,36 +432,52 @@ export function Timeline() {
           {tracks.map((track) => (
             <Fragment key={track.id}>
               <div
-                className="sticky left-0 z-20 border-b border-r border-gray-800 bg-gray-950 px-4 py-4"
+                className="timeline-track-header"
                 role="group"
                 aria-label={`${track.name} track controls`}
               >
-                <div className="flex items-center gap-3">
-                  <span className="text-xl" aria-hidden="true">{trackIcons[track.type]}</span>
-                  <div>
-                    <p className="text-sm font-semibold text-white">{track.name}</p>
-                    <p className="text-xs text-gray-500">
-                      {track.type.toUpperCase()} · {formatSeconds(track.duration)}
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={`h-7 w-1 shrink-0 rounded-full ${getTrackPalette(track).accent}`}
+                    aria-hidden="true"
+                  />
+                  <span className="timeline-type-badge">
+                    {track.type === 'recording' ? 'REC' : track.type.slice(0, 3).toUpperCase()}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-primary" title={track.name}>
+                      {track.name}
+                    </p>
+                    <p className="text-[10px] tabular-nums text-muted">
+                      {formatTimelineTime(track.duration, true)}
                     </p>
                   </div>
                 </div>
                 <TrackInspector track={track} />
               </div>
 
-              <div className="relative border-b border-gray-800 bg-gray-950/40" role="group" aria-label={`${track.name} timeline lane`}>
+              <div
+                className="relative border-b border-editor-border bg-canvas/70"
+                role="group"
+                aria-label={`${track.name} timeline lane`}
+              >
                 <div
-                  className="relative h-28"
+                  className="relative h-14"
                   style={{ width: timelineWidth }}
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect();
                     const nextPosition = ((event.clientX - rect.left) / rect.width) * totalDuration;
-                    setPlayheadPosition(nextPosition);
+                    setPlayheadPosition(snapTimelineTime(nextPosition, snapEnabled));
                     setSelectedTrack(null);
                   }}
                 >
                   {markers.map((marker) => (
-                    <div key={`${track.id}-${marker}`} className="absolute inset-y-0" style={{ left: marker * zoom }}>
-                      <div className="h-full w-px bg-gray-900" />
+                    <div
+                      key={`${track.id}-${marker}`}
+                      className="absolute inset-y-0"
+                      style={{ left: marker * zoom }}
+                    >
+                      <div className="h-full w-px bg-editor-border/40" />
                     </div>
                   ))}
 
@@ -452,30 +500,30 @@ export function Timeline() {
                     }}
                   />
 
-                  <div
-                    className="absolute inset-y-0 z-10 w-px bg-brand-400 shadow-[0_0_0_1px_rgba(167,139,250,0.2)]"
-                    style={{ left: playheadPosition * zoom }}
-                  />
+                  <div className="timeline-playhead" style={{ left: playheadPosition * zoom }} />
                 </div>
               </div>
             </Fragment>
           ))}
 
           {tracks.length === 0 && (
-            <div className="col-span-2 flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
+            <div className="col-span-2 flex min-h-32 flex-col items-center justify-center gap-2 px-6 text-center">
               <p className="text-sm font-semibold text-gray-300">No tracks yet</p>
               <p className="max-w-sm text-xs text-gray-500">
-                Add an audio, stem, or recording track to start arranging clips, or upload source audio below to
-                bring it onto the timeline.
+                Import media from the Assets panel or add a track above to start arranging your
+                edit.
               </p>
             </div>
           )}
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-        <span>Click to move the playhead. Select a clip to edit.</span>
-        <span>{isPlaying ? 'Playing' : 'Stopped'}</span>
+      <div className="timeline-footer">
+        <span>
+          {snapEnabled ? 'Snap active' : 'Free positioning'} · Select a clip for trim and split
+          controls
+        </span>
+        <span className={isPlaying ? 'text-success' : ''}>{isPlaying ? 'Playing' : 'Ready'}</span>
       </div>
 
       {/* Context menu */}
@@ -495,7 +543,7 @@ export function Timeline() {
               setContextMenu(null);
             }}
           >
-            ✂️ Split at playhead
+            Split at playhead
           </button>
           <button
             className="w-full px-4 py-2 text-left text-sm text-red-300 hover:bg-gray-800"
@@ -506,7 +554,7 @@ export function Timeline() {
               setContextMenu(null);
             }}
           >
-            🗑️ Delete clip
+            Delete clip
           </button>
         </div>
       )}
@@ -526,7 +574,9 @@ export function Timeline() {
             tabIndex={-1}
             onClick={(event) => event.stopPropagation()}
           >
-            <p id="delete-clip-title" className="mb-4 text-sm text-white">Delete this clip?</p>
+            <p id="delete-clip-title" className="mb-4 text-sm text-white">
+              Delete this clip?
+            </p>
             <div className="flex gap-3">
               <button
                 className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700"
