@@ -4,6 +4,17 @@ export default {
   theme: {
     extend: {
       colors: {
+        canvas: 'var(--color-canvas)',
+        surface: 'var(--color-surface)',
+        'surface-raised': 'var(--color-surface-raised)',
+        hover: 'var(--color-hover)',
+        'editor-border': 'var(--color-border)',
+        primary: 'var(--color-text-primary)',
+        secondary: 'var(--color-text-secondary)',
+        muted: 'var(--color-text-muted)',
+        success: 'var(--color-success)',
+        warning: 'var(--color-warning)',
+        danger: 'var(--color-danger)',
         brand: {
           50: '#f5f3ff',
           100: '#ede9fe',
@@ -18,8 +29,12 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['Pretendard', 'system-ui', 'sans-serif'],
-        display: ['Pretendard', 'system-ui', 'sans-serif'],
+        sans: ['Inter', 'Pretendard', 'Segoe UI', 'system-ui', 'sans-serif'],
+        display: ['Inter', 'Pretendard', 'Segoe UI', 'system-ui', 'sans-serif'],
+      },
+      borderRadius: {
+        control: 'var(--radius-control)',
+        editor: 'var(--radius-panel)',
       },
       keyframes: {
         'fade-in': {
