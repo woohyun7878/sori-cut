@@ -68,7 +68,8 @@
   button:focus-visible,
   a:focus-visible,
   input:focus-visible,
-  select:focus-visible {
+  select:focus-visible,
+  [tabindex]:focus-visible {
     box-shadow: var(--focus-ring);
   }
 
@@ -194,6 +195,16 @@
   .studio-context-panel:not(.is-open),
   .studio-inspector:not(.is-open) {
     visibility: hidden;
+  }
+
+  .studio-pane-body {
+    @apply flex min-h-0 flex-1 flex-col;
+  }
+
+  .studio-pane-collapse,
+  .studio-pane-expand,
+  .studio-splitter {
+    display: none;
   }
 
   .studio-drawer-scrim {
@@ -521,8 +532,9 @@
   @media (min-width: 1360px) {
     .studio-upper {
       grid-template-columns:
-        var(--tool-rail-width) var(--panel-width) minmax(360px, 1fr)
-        var(--panel-width);
+        var(--tool-rail-width) var(--left-pane-column) var(--left-splitter-width)
+        minmax(var(--min-preview-width, 480px), 1fr) var(--right-splitter-width)
+        var(--right-pane-column);
     }
 
     .studio-context-panel,
@@ -532,6 +544,71 @@
       width: auto;
       transform: translateX(0);
       box-shadow: none;
+    }
+
+    .studio-tool-rail {
+      grid-column: 1;
+    }
+
+    .studio-context-panel {
+      grid-column: 2;
+    }
+
+    .studio-splitter.is-left {
+      grid-column: 3;
+    }
+
+    .studio-preview {
+      grid-column: 4;
+    }
+
+    .studio-splitter.is-right {
+      grid-column: 5;
+    }
+
+    .studio-inspector {
+      grid-column: 6;
+    }
+
+    .studio-pane-collapse {
+      display: inline-flex;
+    }
+
+    .studio-pane-expand {
+      @apply m-auto h-10 w-7 items-center justify-center rounded-control text-muted transition-colors hover:bg-hover hover:text-primary;
+    }
+
+    .studio-context-panel.is-collapsed,
+    .studio-inspector.is-collapsed {
+      @apply border-editor-border bg-surface;
+    }
+
+    .studio-context-panel.is-collapsed .studio-pane-body,
+    .studio-inspector.is-collapsed .studio-pane-body {
+      display: none;
+    }
+
+    .studio-context-panel.is-collapsed .studio-pane-expand,
+    .studio-inspector.is-collapsed .studio-pane-expand {
+      display: inline-flex;
+    }
+
+    .studio-splitter {
+      @apply relative z-30 flex cursor-col-resize touch-none items-center justify-center bg-surface transition-colors hover:bg-brand-500/15;
+    }
+
+    .studio-splitter::before {
+      content: '';
+      @apply absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-editor-border;
+    }
+
+    .studio-splitter span {
+      @apply relative z-10 h-8 w-[3px] rounded-full bg-gray-600 transition-colors;
+    }
+
+    .studio-splitter:hover span,
+    .studio-splitter:focus-visible span {
+      @apply bg-brand-400;
     }
 
     .studio-context-panel {

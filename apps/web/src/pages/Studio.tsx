@@ -15,6 +15,7 @@ import { WaveformPlayer } from '../components/WaveformPlayer';
 import { useAutoSave, type SaveStatus } from '../hooks/useAutoSave';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
+import { useResizablePanels, type PanelSide } from '../hooks/useResizablePanels';
 import { useProjectStore } from '../store/useProjectStore';
 import { formatTimelineTime } from '../components/timelineHelpers';
 
@@ -69,6 +70,8 @@ function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: strin
       </>
     ),
     close: <path d="m6 6 12 12M18 6 6 18" />,
+    'chevron-left': <path d="m15 18-6-6 6-6" />,
+    'chevron-right': <path d="m9 18 6-6-6-6" />,
   };
 
   return (
@@ -91,10 +94,14 @@ function PanelHeader({
   title,
   eyebrow,
   onClose,
+  desktopSide,
+  onCollapse,
 }: {
   title: string;
   eyebrow: string;
   onClose?: () => void;
+  desktopSide?: PanelSide;
+  onCollapse?: () => void;
 }) {
   return (
     <div className="studio-panel-header">
@@ -102,16 +109,29 @@ function PanelHeader({
         <p className="studio-eyebrow">{eyebrow}</p>
         <h2>{title}</h2>
       </div>
-      {onClose ? (
-        <button
-          className="studio-icon-button min-[1360px]:hidden"
-          type="button"
-          onClick={onClose}
-          aria-label={`Close ${title} panel`}
-        >
-          <Icon name="close" />
-        </button>
-      ) : null}
+      <div className="flex items-center">
+        {onCollapse && desktopSide ? (
+          <button
+            className="studio-icon-button studio-pane-collapse"
+            type="button"
+            onClick={onCollapse}
+            aria-label={`Collapse ${desktopSide === 'left' ? 'asset' : 'inspector'} panel`}
+            title={`Collapse ${desktopSide === 'left' ? 'asset' : 'inspector'} panel`}
+          >
+            <Icon name={desktopSide === 'left' ? 'chevron-left' : 'chevron-right'} />
+          </button>
+        ) : null}
+        {onClose ? (
+          <button
+            className="studio-icon-button min-[1360px]:hidden"
+            type="button"
+            onClick={onClose}
+            aria-label={`Close ${title} panel`}
+          >
+            <Icon name="close" />
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -380,6 +400,7 @@ function SelectionInspector() {
 
 export function Studio() {
   usePlaybackEngine();
+  const panels = useResizablePanels();
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   useAutoSave(setSaveStatus);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -443,7 +464,7 @@ export function Studio() {
       </header>
 
       <main className="studio-main">
-        <div className="studio-upper">
+        <div ref={panels.containerRef} className="studio-upper" style={panels.style}>
           <nav className="studio-tool-rail" aria-label="Studio tools">
             {studioTools.map((tool) => (
               <button
@@ -482,30 +503,80 @@ export function Studio() {
           ) : null}
 
           <aside
-            className={toolDrawerOpen ? 'studio-context-panel is-open' : 'studio-context-panel'}
+            className={[
+              'studio-context-panel',
+              toolDrawerOpen ? 'is-open' : '',
+              panels.layout.left.collapsed ? 'is-collapsed' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
             aria-label={`${activeToolMeta.label} panel`}
           >
-            <PanelHeader
-              title={activeToolMeta.label}
-              eyebrow="Assets"
-              onClose={() => setToolDrawerOpen(false)}
-            />
-            {panelContent[activeTool]}
+            <button
+              className="studio-pane-expand"
+              type="button"
+              onClick={() => panels.setPanelCollapsed('left', false)}
+              aria-label="Expand asset panel"
+              title="Expand asset panel"
+            >
+              <Icon name="chevron-right" />
+            </button>
+            <div className="studio-pane-body">
+              <PanelHeader
+                title={activeToolMeta.label}
+                eyebrow="Assets"
+                onClose={() => setToolDrawerOpen(false)}
+                desktopSide="left"
+                onCollapse={() => panels.setPanelCollapsed('left', true)}
+              />
+              {panelContent[activeTool]}
+            </div>
           </aside>
+
+          {!panels.layout.left.collapsed ? (
+            <div className="studio-splitter is-left" {...panels.getSeparatorProps('left')}>
+              <span aria-hidden="true" />
+            </div>
+          ) : null}
 
           <PreviewWorkspace />
 
+          {!panels.layout.right.collapsed ? (
+            <div className="studio-splitter is-right" {...panels.getSeparatorProps('right')}>
+              <span aria-hidden="true" />
+            </div>
+          ) : null}
+
           <aside
-            className={inspectorOpen ? 'studio-inspector is-open' : 'studio-inspector'}
+            className={[
+              'studio-inspector',
+              inspectorOpen ? 'is-open' : '',
+              panels.layout.right.collapsed ? 'is-collapsed' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
             aria-label="Inspector"
           >
-            <PanelHeader
-              title={activeTool === 'sync' ? 'Sync settings' : 'Inspector'}
-              eyebrow="Edit"
-              onClose={() => setInspectorOpen(false)}
-            />
-            <div className={activeTool === 'sync' ? 'studio-context studio-panel-scroll' : ''}>
-              {activeTool === 'sync' ? <SyncControls /> : <SelectionInspector />}
+            <button
+              className="studio-pane-expand"
+              type="button"
+              onClick={() => panels.setPanelCollapsed('right', false)}
+              aria-label="Expand inspector panel"
+              title="Expand inspector panel"
+            >
+              <Icon name="chevron-left" />
+            </button>
+            <div className="studio-pane-body">
+              <PanelHeader
+                title={activeTool === 'sync' ? 'Sync settings' : 'Inspector'}
+                eyebrow="Edit"
+                onClose={() => setInspectorOpen(false)}
+                desktopSide="right"
+                onCollapse={() => panels.setPanelCollapsed('right', true)}
+              />
+              <div className={activeTool === 'sync' ? 'studio-context studio-panel-scroll' : ''}>
+                {activeTool === 'sync' ? <SyncControls /> : <SelectionInspector />}
+              </div>
             </div>
           </aside>
         </div>
