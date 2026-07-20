@@ -45,7 +45,12 @@ function getVideoMetadata(file: File) {
   });
 }
 
-export function VideoUpload() {
+interface VideoUploadProps {
+  compact?: boolean;
+  showPreview?: boolean;
+}
+
+export function VideoUpload({ compact = false, showPreview = true }: VideoUploadProps) {
   const video = useProjectStore((state) => state.video);
   const setVideo = useProjectStore((state) => state.setVideo);
   const [isDragging, setIsDragging] = useState(false);
@@ -104,10 +109,12 @@ export function VideoUpload() {
   };
 
   return (
-    <section className="rounded-3xl border border-gray-800 bg-gray-900 p-6">
+    <section className={compact ? 'studio-media-upload' : 'rounded-3xl border border-gray-800 bg-gray-900 p-6'}>
       <div
         className={[
-          'rounded-3xl border-2 border-dashed bg-gray-950/70 p-8 text-center transition-colors',
+          compact
+            ? 'rounded-editor border border-dashed bg-canvas/70 p-4 text-center transition-colors'
+            : 'rounded-3xl border-2 border-dashed bg-gray-950/70 p-8 text-center transition-colors',
           isDragging ? 'border-brand-400 bg-brand-600/10' : 'border-gray-700 hover:border-brand-500/70',
         ].join(' ')}
         onDragEnter={() => setIsDragging(true)}
@@ -120,16 +127,16 @@ export function VideoUpload() {
       >
         <input accept={ACCEPTED_VIDEO_TYPES} className="hidden" id="video-upload" type="file" onChange={(event) => void handleInputChange(event)} />
 
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl">
+        <div className={compact ? 'mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-control bg-hover text-xl' : 'mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl'}>
           🎬
         </div>
 
-        <h3 className="text-xl font-semibold text-white">Drop your video file here</h3>
-        <p className="mt-2 text-sm text-gray-400">or click to browse</p>
-        <p className="mt-4 text-xs text-gray-500">MP4 · MOV · WEBM</p>
+        <h3 className={compact ? 'text-sm font-semibold text-primary' : 'text-xl font-semibold text-white'}>Drop your video file here</h3>
+        <p className="mt-1 text-xs text-secondary">or click to browse</p>
+        <p className="mt-2 text-[11px] text-muted">MP4 · MOV · WEBM</p>
 
         <label
-          className="mt-6 inline-flex cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
+          className={compact ? 'studio-primary-button mt-4 cursor-pointer' : 'mt-6 inline-flex cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700'}
           htmlFor="video-upload"
         >
           {isLoading ? 'Loading...' : 'Browse Video'}
@@ -141,7 +148,7 @@ export function VideoUpload() {
           </div>
         ) : null}
 
-        {video ? (
+        {video && showPreview ? (
           <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
             <div className="overflow-hidden rounded-2xl border border-gray-800 bg-black">
               <video className="aspect-video w-full bg-black" controls src={video.url} />
@@ -163,6 +170,12 @@ export function VideoUpload() {
             >
               Remove Video
             </button>
+          </div>
+        ) : video ? (
+          <div className="mt-4 rounded-control border border-editor-border bg-surface p-3 text-left">
+            <p className="truncate text-xs font-medium text-primary">{video.name}</p>
+            <p className="mt-1 text-[11px] text-secondary">{formatDuration(video.duration)} · {video.width ?? 0} × {video.height ?? 0}</p>
+            <button className="mt-3 text-xs font-medium text-red-300 hover:text-red-200" type="button" onClick={() => setVideo(null)}>Remove video</button>
           </div>
         ) : null}
       </div>

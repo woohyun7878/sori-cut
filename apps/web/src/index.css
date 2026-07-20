@@ -2,10 +2,61 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-canvas: #0b0d10;
+  --color-surface: #12161b;
+  --color-surface-raised: #161b21;
+  --color-hover: #1a2027;
+  --color-border: #29313a;
+  --color-border-strong: #3a4652;
+  --color-text-primary: #f7f8fa;
+  --color-text-secondary: #a7b0ba;
+  --color-text-muted: #818c97;
+  --color-brand: #8b5cf6;
+  --color-brand-strong: #7c3aed;
+  --color-brand-expression: #d946ef;
+  --color-success: #4ade80;
+  --color-warning: #f59e0b;
+  --color-danger: #f87171;
+  --color-stem-vocals: #8b5cf6;
+  --color-stem-drums: #3b82f6;
+  --color-stem-bass: #14b8a6;
+  --color-stem-other: #f97316;
+  --color-stem-guitar: #eab308;
+  --radius-control: 8px;
+  --radius-panel: 10px;
+  --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-brand);
+  color-scheme: dark;
+}
+
 @layer base {
+  * {
+    scrollbar-color: var(--color-border-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  html {
+    background: var(--color-canvas);
+  }
+
   body {
-    @apply bg-gray-950 text-white;
+    @apply bg-canvas font-sans text-primary antialiased;
     -webkit-text-size-adjust: 100%;
+    font-size: 14px;
+  }
+
+  button,
+  a,
+  input,
+  select {
+    @apply focus-visible:outline-none;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible {
+    box-shadow: var(--focus-ring);
   }
 
   /* Safe area insets for notched phones */
@@ -27,6 +78,336 @@
   /* Prevent double-tap zoom on interactive controls */
   .touch-control {
     touch-action: manipulation;
+  }
+
+  .studio-shell {
+    @apply flex h-screen min-h-0 flex-col overflow-hidden bg-canvas text-primary;
+  }
+
+  .studio-command-bar {
+    @apply z-50 flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-editor-border bg-surface px-3;
+  }
+
+  .studio-command-group {
+    @apply flex items-center gap-2;
+  }
+
+  .studio-command-divider {
+    @apply hidden h-5 w-px bg-editor-border sm:block;
+  }
+
+  .studio-logo {
+    @apply shrink-0 text-[17px] font-bold tracking-tight text-primary;
+  }
+
+  .studio-logo span {
+    @apply bg-gradient-to-r from-brand-400 to-fuchsia-400 bg-clip-text text-transparent;
+  }
+
+  .studio-primary-button {
+    @apply inline-flex h-8 items-center justify-center gap-2 rounded-control bg-brand-600 px-3 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-brand-700;
+  }
+
+  .studio-secondary-button {
+    @apply inline-flex h-8 items-center justify-center gap-2 rounded-control border border-editor-border bg-surface-raised px-3 text-[13px] font-medium text-secondary transition-colors duration-150 hover:border-gray-500 hover:bg-hover hover:text-primary;
+  }
+
+  .studio-icon-button {
+    @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
+  }
+
+  .studio-main {
+    @apply flex min-h-0 flex-1 flex-col overflow-hidden;
+  }
+
+  .studio-upper {
+    @apply relative grid min-h-[300px] flex-1 grid-cols-[56px_minmax(0,1fr)] overflow-hidden;
+  }
+
+  .studio-tool-rail {
+    @apply z-30 flex min-h-0 flex-col items-center gap-1 border-r border-editor-border bg-surface py-2;
+  }
+
+  .studio-tool-button {
+    @apply relative flex h-[54px] w-12 flex-col items-center justify-center gap-1 rounded-control text-[10px] font-medium text-muted transition-colors duration-150 hover:bg-hover hover:text-primary;
+  }
+
+  .studio-tool-button::before {
+    content: '';
+    @apply absolute inset-y-2 left-0 w-0.5 rounded-full bg-transparent;
+  }
+
+  .studio-tool-button.is-active {
+    @apply bg-brand-500/10 text-brand-300;
+  }
+
+  .studio-tool-button.is-active::before {
+    @apply bg-gradient-to-b from-brand-400 to-fuchsia-400;
+  }
+
+  .studio-tool-badge {
+    @apply absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-500 px-1 text-[9px] font-bold text-white;
+  }
+
+  .studio-context-panel,
+  .studio-inspector {
+    @apply fixed bottom-0 top-[52px] z-40 flex w-[min(320px,calc(100vw-56px))] flex-col overflow-hidden border-editor-border bg-surface shadow-2xl transition-transform duration-150 xl:static xl:z-20 xl:w-auto xl:translate-x-0 xl:shadow-none;
+  }
+
+  .studio-context-panel {
+    @apply left-14 -translate-x-full border-r xl:left-auto;
+  }
+
+  .studio-inspector {
+    @apply right-0 translate-x-full border-l;
+  }
+
+  .studio-context-panel.is-open,
+  .studio-inspector.is-open {
+    @apply translate-x-0;
+    visibility: visible;
+  }
+
+  .studio-context-panel:not(.is-open),
+  .studio-inspector:not(.is-open) {
+    visibility: hidden;
+  }
+
+  .studio-drawer-scrim {
+    @apply fixed inset-0 top-[52px] z-[35] bg-black/60;
+  }
+
+  .studio-panel-header {
+    @apply flex h-[58px] shrink-0 items-center justify-between border-b border-editor-border px-4;
+  }
+
+  .studio-panel-header h2 {
+    @apply mt-0.5 text-[15px] font-semibold text-primary;
+  }
+
+  .studio-eyebrow {
+    @apply text-[10px] font-semibold uppercase tracking-[0.16em] text-muted;
+  }
+
+  .studio-panel-scroll {
+    @apply min-h-0 flex-1 space-y-3 overflow-y-auto p-3;
+  }
+
+  .studio-panel-section {
+    @apply space-y-3 border-b border-editor-border pb-4 last:border-0;
+  }
+
+  .studio-section-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-secondary;
+  }
+
+  .studio-muted-copy {
+    @apply text-xs leading-5 text-muted;
+  }
+
+  .studio-status-row,
+  .studio-property-grid {
+    @apply grid grid-cols-[1fr_auto] gap-2 text-xs;
+  }
+
+  .studio-status-row span,
+  .studio-property-grid span {
+    @apply text-secondary;
+  }
+
+  .studio-status-row strong,
+  .studio-property-grid strong {
+    @apply font-medium capitalize text-primary;
+  }
+
+  .studio-preview {
+    @apply flex min-h-0 flex-col overflow-hidden bg-canvas;
+  }
+
+  .studio-preview-toolbar {
+    @apply flex h-9 shrink-0 items-center justify-between border-b border-editor-border px-4 text-xs font-medium text-secondary;
+  }
+
+  .studio-preview-format {
+    @apply text-[11px] text-muted;
+  }
+
+  .studio-preview-stage {
+    @apply flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_center,#1a2027_0,#0b0d10_68%)] p-4;
+  }
+
+  .studio-device-frame {
+    @apply relative aspect-[9/16] h-full max-h-[calc(100%-8px)] max-w-full overflow-hidden rounded-editor border border-editor-border bg-black shadow-2xl;
+  }
+
+  .studio-preview-empty {
+    @apply flex h-full flex-col items-center justify-center gap-2 px-5 text-center text-muted;
+  }
+
+  .studio-preview-empty strong {
+    @apply mt-1 text-sm font-medium text-secondary;
+  }
+
+  .studio-preview-empty span {
+    @apply text-xs;
+  }
+
+  .studio-transport {
+    @apply shrink-0 border-t border-editor-border bg-surface;
+  }
+
+  .studio-timeline-region {
+    @apply flex h-[38vh] min-h-[280px] max-h-[430px] shrink-0 flex-col border-t border-editor-border bg-surface;
+  }
+
+  .studio-timeline-title {
+    @apply flex h-10 shrink-0 items-center justify-between border-b border-editor-border px-4 text-xs font-semibold text-primary;
+  }
+
+  .studio-timeline-title div {
+    @apply flex items-baseline gap-2;
+  }
+
+  .studio-timeline-title small {
+    @apply text-[11px] font-normal text-muted;
+  }
+
+  .studio-timeline-status {
+    @apply text-[11px] font-normal text-success;
+  }
+
+  .studio-timeline-content {
+    @apply min-h-0 flex-1 overflow-auto;
+  }
+
+  .studio-inspector-empty {
+    @apply flex flex-1 flex-col items-center justify-center gap-2 px-8 text-center text-muted;
+  }
+
+  .studio-inspector-empty strong {
+    @apply mt-1 text-sm font-medium text-secondary;
+  }
+
+  .studio-inspector-empty span {
+    @apply text-xs leading-5;
+  }
+
+  .studio-field {
+    @apply grid grid-cols-[1fr_auto] gap-2 text-xs text-secondary;
+  }
+
+  .studio-field input:not([type='range']) {
+    @apply col-span-2 h-8 rounded-control border border-editor-border bg-canvas px-2.5 text-[13px] text-primary;
+  }
+
+  .studio-field input[type='range'] {
+    @apply col-span-2 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-hover accent-brand-500;
+  }
+
+  .studio-context > section,
+  .studio-context > div > section,
+  .studio-context .rounded-3xl {
+    @apply rounded-editor border-editor-border bg-transparent p-0;
+  }
+
+  .studio-context h2 {
+    @apply text-base;
+  }
+
+  .studio-context h3 {
+    @apply text-sm;
+  }
+
+  .studio-context .grid {
+    @apply grid-cols-1;
+  }
+
+  .studio-transport > section {
+    @apply rounded-none border-0 bg-transparent px-3 py-2;
+  }
+
+  .studio-transport > section > div:first-child {
+    @apply justify-center;
+  }
+
+  .studio-transport > section > div:first-child > div:first-child {
+    @apply hidden;
+  }
+
+  .studio-transport > section > div:first-child > div:last-child {
+    @apply rounded-control border-0 bg-transparent p-0;
+  }
+
+  .studio-transport > section > div:first-child button {
+    @apply h-8 rounded-control px-3 py-0 text-xs;
+  }
+
+  .studio-transport > section > div:first-child button:nth-child(3) {
+    @apply h-9 w-9 rounded-full p-0;
+  }
+
+  .studio-transport > section > div:last-child {
+    @apply mt-2;
+  }
+
+  .studio-transport > section > div:last-child > div {
+    @apply mb-1 text-[11px];
+  }
+
+  .studio-transport > section > div:last-child > button {
+    @apply h-2;
+  }
+
+  .studio-timeline-content > section {
+    @apply min-h-full rounded-none border-0 bg-transparent p-3;
+  }
+
+  .studio-timeline-content > section > div:first-child {
+    @apply mb-3;
+  }
+
+  .studio-timeline-content > section > div:first-child > div:first-child {
+    @apply hidden;
+  }
+
+  .studio-timeline-content .rounded-3xl {
+    @apply rounded-editor;
+  }
+
+  @screen xl {
+    .studio-upper {
+      grid-template-columns: 56px 300px minmax(360px, 1fr) 300px;
+    }
+
+    .studio-context-panel,
+    .studio-inspector {
+      visibility: visible;
+    }
+  }
+}
+
+@media (max-height: 700px) {
+  .studio-upper {
+    min-height: 220px;
+  }
+
+  .studio-timeline-region {
+    height: 34vh;
+    min-height: 220px;
+  }
+}
+
+@media (max-height: 560px) {
+  .studio-upper {
+    min-height: 180px;
+  }
+
+  .studio-timeline-region {
+    min-height: 180px;
+  }
+
+  .studio-preview-toolbar {
+    display: none;
   }
 }
 

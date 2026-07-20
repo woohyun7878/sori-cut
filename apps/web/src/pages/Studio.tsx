@@ -1,11 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
 import { ProjectManager } from '../components/ProjectManager';
 import { RecordingStudio } from '../components/RecordingStudio';
 import { ShortcutHelpModal } from '../components/ShortcutHelpModal';
 import { StemSplitter } from '../components/StemSplitter';
-import { StudioDialog } from '../components/StudioDialog';
 import { SyncControls } from '../components/SyncControls';
 import { Timeline } from '../components/Timeline';
 import { Toast } from '../components/Toast';
@@ -18,74 +17,249 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { usePlaybackEngine } from '../hooks/usePlaybackEngine';
 import { useProjectStore } from '../store/useProjectStore';
 
-type DialogPanel = 'audio' | 'recording' | 'stems' | null;
+type StudioTool = 'media' | 'audio' | 'record' | 'sync';
 
-const toolbarButtons: { id: DialogPanel & string; icon: string; label: string }[] = [
-  { id: 'audio', icon: '🎵', label: 'Audio Prep' },
-  { id: 'recording', icon: '🎙️', label: 'Record' },
-  { id: 'stems', icon: '🎛️', label: 'Stems' },
+const studioTools: { id: StudioTool; label: string; icon: 'media' | 'audio' | 'record' | 'sync' }[] = [
+  { id: 'media', label: 'Media', icon: 'media' },
+  { id: 'audio', label: 'Audio & Stems', icon: 'audio' },
+  { id: 'record', label: 'Record', icon: 'record' },
+  { id: 'sync', label: 'Sync', icon: 'sync' },
 ];
+
+function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: string }) {
+  const paths: Record<string, React.ReactNode> = {
+    media: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m8 13 2.5-2.5L15 15l2-2 3 3" /><circle cx="8" cy="9" r="1" /></>,
+    audio: <><path d="M9 18V5l10-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="16" cy="16" r="3" /></>,
+    record: <><circle cx="12" cy="9" r="4" /><path d="M5 9a7 7 0 0 0 14 0M12 16v5M9 21h6" /></>,
+    sync: <><path d="M20 7h-7a4 4 0 0 0-4 4v1" /><path d="m17 4 3 3-3 3M4 17h7a4 4 0 0 0 4-4v-1" /><path d="m7 20-3-3 3-3" /></>,
+    inspector: <><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="11" cy="18" r="2" /></>,
+    close: <path d="m6 6 12 12M18 6 6 18" />,
+  };
+
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
+
+function PanelHeader({ title, eyebrow, onClose }: { title: string; eyebrow: string; onClose?: () => void }) {
+  return (
+    <div className="studio-panel-header">
+      <div>
+        <p className="studio-eyebrow">{eyebrow}</p>
+        <h2>{title}</h2>
+      </div>
+      {onClose ? (
+        <button className="studio-icon-button xl:hidden" type="button" onClick={onClose} aria-label={`Close ${title} panel`}>
+          <Icon name="close" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function MediaPanel() {
+  return (
+    <div className="studio-panel-scroll">
+      <VideoUpload compact showPreview={false} />
+      <div className="studio-panel-section">
+        <p className="studio-section-label">Media workflow</p>
+        <p className="studio-muted-copy">Video is added to the timeline automatically and stays available in the preview workspace.</p>
+      </div>
+    </div>
+  );
+}
+
+function AudioPanel() {
+  const originalAudio = useProjectStore((state) => state.originalAudio);
+
+  return (
+    <div className="studio-panel-scroll studio-context">
+      <div className="studio-panel-section">
+        <p className="studio-section-label">Source audio</p>
+        <DropZone />
+        {originalAudio ? (
+          <WaveformPlayer audioUrl={originalAudio.url} label={`Source audio / ${originalAudio.name}`} />
+        ) : null}
+      </div>
+      <div className="studio-panel-section">
+        <p className="studio-section-label">Stem separation</p>
+        <StemSplitter />
+      </div>
+    </div>
+  );
+}
+
+function RecordPanel() {
+  return <div className="studio-panel-scroll studio-context"><RecordingStudio /></div>;
+}
+
+function SyncSummary() {
+  const video = useProjectStore((state) => state.video);
+  const tracks = useProjectStore((state) => state.tracks);
+
+  return (
+    <div className="studio-panel-scroll">
+      <div className="studio-panel-section">
+        <p className="studio-section-label">Sync readiness</p>
+        <div className="studio-status-row"><span>Reference video</span><strong>{video ? 'Ready' : 'Needed'}</strong></div>
+        <div className="studio-status-row"><span>Audio tracks</span><strong>{tracks.filter((track) => track.type !== 'video').length}</strong></div>
+        <p className="studio-muted-copy">Choose a target and fine-tune alignment in the inspector.</p>
+      </div>
+    </div>
+  );
+}
+
+function PreviewWorkspace() {
+  const video = useProjectStore((state) => state.video);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const playheadPosition = useProjectStore((state) => state.playheadPosition);
+  const isPlaying = useProjectStore((state) => state.isPlaying);
+  const setIsPlaying = useProjectStore((state) => state.setIsPlaying);
+  const setPlayheadPosition = useProjectStore((state) => state.setPlayheadPosition);
+
+  useEffect(() => {
+    const player = videoRef.current;
+    if (player && Math.abs(player.currentTime - playheadPosition) > 0.35) {
+      player.currentTime = Math.min(playheadPosition, player.duration || playheadPosition);
+    }
+  }, [playheadPosition]);
+
+  useEffect(() => {
+    const player = videoRef.current;
+    if (!player) {
+      return;
+    }
+
+    if (isPlaying) {
+      void player.play().catch(() => setIsPlaying(false));
+    } else {
+      player.pause();
+    }
+  }, [isPlaying, setIsPlaying]);
+
+  return (
+    <section className="studio-preview" aria-label="Preview workspace">
+      <div className="studio-preview-toolbar">
+        <span>Preview</span>
+        <span className="studio-preview-format">9:16 · Portrait</span>
+      </div>
+      <div className="studio-preview-stage">
+        <div className="studio-device-frame">
+          {video ? (
+            <video
+              ref={videoRef}
+              className="h-full w-full bg-black object-contain"
+              src={video.url}
+              controls
+              muted
+              playsInline
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onSeeked={(event) => setPlayheadPosition(event.currentTarget.currentTime)}
+            />
+          ) : (
+            <div className="studio-preview-empty">
+              <Icon name="media" className="h-8 w-8" />
+              <strong>No video selected</strong>
+              <span>Add media from the left panel</span>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="studio-transport"><TransportBar /></div>
+    </section>
+  );
+}
+
+function SelectionInspector() {
+  const selectedTrackId = useProjectStore((state) => state.selectedTrackId);
+  const tracks = useProjectStore((state) => state.tracks);
+  const updateTrack = useProjectStore((state) => state.updateTrack);
+  const toggleTrackMute = useProjectStore((state) => state.toggleTrackMute);
+  const selectedTrack = useMemo(() => tracks.find((track) => track.id === selectedTrackId) ?? null, [selectedTrackId, tracks]);
+
+  if (!selectedTrack) {
+    return (
+      <div className="studio-inspector-empty">
+        <Icon name="inspector" />
+        <strong>Nothing selected</strong>
+        <span>Select a timeline clip to inspect its settings.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="studio-panel-scroll">
+      <div className="studio-panel-section">
+        <p className="studio-section-label">Clip</p>
+        <label className="studio-field">Name
+          <input value={selectedTrack.name} onChange={(event) => updateTrack(selectedTrack.id, { name: event.target.value })} />
+        </label>
+        <div className="studio-property-grid">
+          <span>Type</span><strong>{selectedTrack.type}</strong>
+          <span>Duration</span><strong>{selectedTrack.duration.toFixed(2)}s</strong>
+        </div>
+      </div>
+      <div className="studio-panel-section">
+        <p className="studio-section-label">Audio</p>
+        <label className="studio-field">Volume <span>{Math.round(selectedTrack.volume * 100)}%</span>
+          <input type="range" min={0} max={1} step={0.01} value={selectedTrack.volume} onChange={(event) => updateTrack(selectedTrack.id, { volume: Number(event.target.value) })} />
+        </label>
+        <button className="studio-secondary-button w-full" type="button" onClick={() => toggleTrackMute(selectedTrack.id)}>
+          {selectedTrack.muted ? 'Unmute track' : 'Mute track'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function Studio() {
   usePlaybackEngine();
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   useAutoSave(setSaveStatus);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [activeDialog, setActiveDialog] = useState<DialogPanel>(null);
+  const [activeTool, setActiveTool] = useState<StudioTool>('media');
+  const [toolDrawerOpen, setToolDrawerOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const openHelp = useCallback(() => setHelpOpen(true), []);
   useKeyboardShortcuts(openHelp);
   const originalAudio = useProjectStore((state) => state.originalAudio);
   const stems = useProjectStore((state) => state.stems);
   const recordings = useProjectStore((state) => state.recordings);
+  const activeToolMeta = studioTools.find((tool) => tool.id === activeTool) ?? studioTools[0];
+
+  const badges: Partial<Record<StudioTool, number>> = {
+    audio: stems.length || (originalAudio ? 1 : 0),
+    record: recordings.length,
+  };
+
+  const panelContent: Record<StudioTool, React.ReactNode> = {
+    media: <MediaPanel />,
+    audio: <AudioPanel />,
+    record: <RecordPanel />,
+    sync: <SyncSummary />,
+  };
 
   return (
-    <div className="flex h-screen flex-col bg-gray-950 text-white overflow-hidden">
-      {/* Top nav */}
-      <nav className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-gray-800 lg:px-6">
-        <div className="flex items-center gap-4 lg:gap-6">
-          <Link to="/studio" className="text-xl font-bold">
-            <span className="text-brand-400">소리</span>컷
+    <div className="studio-shell">
+      <header className="studio-command-bar" aria-label="Studio command bar">
+        <div className="studio-command-group min-w-0">
+          <Link to="/studio" className="studio-logo" aria-label="Sori-cut studio">
+            <span>소리</span>컷
           </Link>
-          <ProjectManager saveStatus={saveStatus} />
-          <UndoRedoButtons />
+          <div className="studio-command-divider" />
+          <div className="hidden min-w-0 sm:block"><ProjectManager saveStatus={saveStatus} /></div>
+          <div className="hidden md:block"><UndoRedoButtons /></div>
         </div>
-        <div className="flex items-center gap-2 lg:gap-3">
-          {/* Toolbar buttons to open dialog panels */}
-          {toolbarButtons.map((btn) => {
-            const isActive = activeDialog === btn.id;
-            let badge: number | null = null;
-            if (btn.id === 'audio' && originalAudio) badge = 1;
-            if (btn.id === 'stems' && stems.length > 0) badge = stems.length;
-            if (btn.id === 'recording' && recordings.length > 0) badge = recordings.length;
-
-            return (
-              <button
-                key={btn.id}
-                onClick={() => setActiveDialog(isActive ? null : btn.id)}
-                className={[
-                  'relative flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-brand-600/20 text-brand-300 border border-brand-500/40'
-                    : 'border border-gray-700 text-gray-300 hover:bg-gray-800 hover:text-white',
-                ].join(' ')}
-                title={btn.label}
-              >
-                <span className="text-base">{btn.icon}</span>
-                <span className="hidden sm:inline">{btn.label}</span>
-                {badge !== null && (
-                  <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-500 px-1.5 text-[10px] font-bold text-white">
-                    {badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-
-          <div className="mx-1 h-6 w-px bg-gray-800" />
-
+        <div className="studio-command-group">
+          <button className="studio-secondary-button xl:hidden" type="button" onClick={() => setInspectorOpen(true)}>
+            <Icon name="inspector" className="h-4 w-4" /> Inspector
+          </button>
           <button
             onClick={() => setHelpOpen(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white"
+            className="studio-icon-button"
             aria-label="Keyboard shortcuts"
             title="Shortcuts"
           >
@@ -93,69 +267,65 @@ export function Studio() {
           </button>
           <Link
             to="/export"
-            className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium transition-colors"
+            className="studio-primary-button"
           >
             Export
           </Link>
         </div>
-      </nav>
+      </header>
 
-      {/* Main content — single screen, no scroll */}
-      <main className="flex-1 overflow-hidden px-4 py-4 lg:px-6 lg:py-5">
-        <div className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-4">
-          <div className="grid flex-1 gap-4 overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)]">
-            {/* Left column */}
-            <div className="flex flex-col gap-4 overflow-y-auto">
-              <VideoUpload />
-              <SyncControls />
-            </div>
+      <main className="studio-main">
+        <div className="studio-upper">
+          <nav className="studio-tool-rail" aria-label="Studio tools">
+            {studioTools.map((tool) => (
+              <button
+                key={tool.id}
+                className={activeTool === tool.id ? 'studio-tool-button is-active' : 'studio-tool-button'}
+                type="button"
+                aria-pressed={activeTool === tool.id}
+                onClick={() => {
+                  setActiveTool(tool.id);
+                  setToolDrawerOpen(true);
+                }}
+              >
+                <span className="relative">
+                  <Icon name={tool.icon} />
+                  {badges[tool.id] ? <span className="studio-tool-badge">{badges[tool.id]}</span> : null}
+                </span>
+                <span>{tool.label === 'Audio & Stems' ? 'Audio' : tool.label}</span>
+              </button>
+            ))}
+          </nav>
 
-            {/* Right column */}
-            <div className="flex flex-col gap-4 overflow-hidden">
-              <TransportBar />
-              <div className="flex-1 overflow-hidden">
-                <Timeline />
-              </div>
+          {(toolDrawerOpen || inspectorOpen) ? (
+            <button className="studio-drawer-scrim xl:hidden" type="button" aria-label="Close open panel" onClick={() => { setToolDrawerOpen(false); setInspectorOpen(false); }} />
+          ) : null}
+
+          <aside className={toolDrawerOpen ? 'studio-context-panel is-open' : 'studio-context-panel'} aria-label={`${activeToolMeta.label} panel`}>
+            <PanelHeader title={activeToolMeta.label} eyebrow="Workspace" onClose={() => setToolDrawerOpen(false)} />
+            {panelContent[activeTool]}
+          </aside>
+
+          <PreviewWorkspace />
+
+          <aside className={inspectorOpen ? 'studio-inspector is-open' : 'studio-inspector'} aria-label="Inspector">
+            <PanelHeader title={activeTool === 'sync' ? 'Sync settings' : 'Inspector'} eyebrow="Properties" onClose={() => setInspectorOpen(false)} />
+            <div className={activeTool === 'sync' ? 'studio-context studio-panel-scroll' : ''}>
+              {activeTool === 'sync' ? <SyncControls /> : <SelectionInspector />}
             </div>
-          </div>
+          </aside>
         </div>
-      </main>
 
-      {/* Dialog panels */}
-      <StudioDialog
-        isOpen={activeDialog === 'audio'}
-        onClose={() => setActiveDialog(null)}
-        title="Audio Prep"
-        icon="🎵"
-      >
-        <p className="mb-6 text-gray-400">
-          Upload your source audio to automatically connect it to the timeline and export.
-        </p>
-        <DropZone />
-        {originalAudio ? (
-          <div className="mt-6">
-            <WaveformPlayer audioUrl={originalAudio.url} label={`Source audio / ${originalAudio.name}`} />
+        <section className="studio-timeline-region" aria-label="Timeline editor">
+          <div className="studio-timeline-title">
+            <div><span>Timeline</span><small>Arrange and refine your edit</small></div>
+            <span className="studio-timeline-status">Auto-save {saveStatus === 'error' ? 'failed' : 'on'}</span>
           </div>
-        ) : null}
-      </StudioDialog>
-
-      <StudioDialog
-        isOpen={activeDialog === 'recording'}
-        onClose={() => setActiveDialog(null)}
-        title="Recording Studio"
-        icon="🎙️"
-      >
-        <RecordingStudio />
-      </StudioDialog>
-
-      <StudioDialog
-        isOpen={activeDialog === 'stems'}
-        onClose={() => setActiveDialog(null)}
-        title="Stem Splitter"
-        icon="🎛️"
-      >
-        <StemSplitter />
-      </StudioDialog>
+          <div className="studio-timeline-content">
+            <Timeline />
+          </div>
+        </section>
+      </main>
 
       <Toast />
       <ShortcutHelpModal isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
