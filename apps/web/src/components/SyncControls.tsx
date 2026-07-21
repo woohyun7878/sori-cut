@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeAutoSyncOffset } from '../lib/autoSync';
-import {
-  clampSyncOffset,
-  mapSignedSyncOffset,
-  SYNC_OFFSET_LIMIT_SECONDS,
-} from '../lib/syncOffset';
+import { clampSyncOffset, mapSignedSyncOffset, SYNC_OFFSET_LIMIT_SECONDS } from '../lib/syncOffset';
 import { useProjectStore } from '../store/useProjectStore';
 
 /** Below this normalized confidence, the auto-sync offset is likely unreliable. */
@@ -24,14 +20,17 @@ export function SyncControls() {
   const [message, setMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const selectedTrackIdRef = useRef('');
 
   useEffect(() => {
     if (!syncTracks.length) {
+      selectedTrackIdRef.current = '';
       setSelectedTrackId('');
       return;
     }
 
     if (!selectedTrackId || !syncTracks.some((track) => track.id === selectedTrackId)) {
+      selectedTrackIdRef.current = syncTracks[0].id;
       setSelectedTrackId(syncTracks[0].id);
     }
   }, [selectedTrackId, syncTracks]);
@@ -118,11 +117,14 @@ export function SyncControls() {
       } else {
         await previewAudio.play();
         timers.push(
-          window.setTimeout(() => {
-            void previewVideo.play().catch(() => {
-              setMessage('Browser blocked autoplay.');
-            });
-          }, Math.abs(offset) * 1000),
+          window.setTimeout(
+            () => {
+              void previewVideo.play().catch(() => {
+                setMessage('Browser blocked autoplay.');
+              });
+            },
+            Math.abs(offset) * 1000,
+          ),
         );
       }
     } catch (caughtError) {
@@ -147,7 +149,10 @@ export function SyncControls() {
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
             value={selectedTrackId}
-            onChange={(event) => setSelectedTrackId(event.target.value)}
+            onChange={(event) => {
+              selectedTrackIdRef.current = event.target.value;
+              setSelectedTrackId(event.target.value);
+            }}
           >
             {syncTracks.length ? (
               syncTracks.map((track) => (
@@ -163,7 +168,8 @@ export function SyncControls() {
 
         {!syncTracks.length ? (
           <p className="rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-sm text-gray-400">
-            No audio tracks yet. Add an audio, stem, or recording track to sync it against your video.
+            No audio tracks yet. Add an audio, stem, or recording track to sync it against your
+            video.
           </p>
         ) : null}
 
@@ -198,13 +204,17 @@ export function SyncControls() {
           <div className="relative h-20 overflow-hidden rounded-xl bg-gray-950" aria-hidden="true">
             <div className="absolute inset-y-0 left-1/2 w-px bg-gray-700" />
             <div className="absolute left-[20%] top-5 h-4 w-[55%] rounded-full bg-blue-500/80">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Video</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">
+                Video
+              </span>
             </div>
             <div
               className="absolute top-11 h-4 w-[55%] rounded-full bg-brand-500/80 transition-all"
               style={{ left: `${offsetToPercent(offset)}%`, transform: 'translateX(-50%)' }}
             >
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Audio</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">
+                Audio
+              </span>
             </div>
           </div>
         </div>
@@ -234,6 +244,7 @@ export function SyncControls() {
 
               const referenceUrl = video.url;
               const targetUrl = selectedTrack.sourceUrl;
+              const targetTrackId = selectedTrack.id;
               if (!referenceUrl) {
                 setMessage('No reference audio found.');
                 return;
@@ -245,11 +256,10 @@ export function SyncControls() {
               try {
                 const result = await computeAutoSyncOffset(referenceUrl, targetUrl);
                 const latestState = useProjectStore.getState();
-                const latestTrack = latestState.tracks.find(
-                  (track) => track.id === selectedTrack.id,
-                );
+                const latestTrack = latestState.tracks.find((track) => track.id === targetTrackId);
                 if (
                   latestState.video?.url !== referenceUrl ||
+                  selectedTrackIdRef.current !== targetTrackId ||
                   latestTrack?.sourceUrl !== targetUrl
                 ) {
                   setMessage(

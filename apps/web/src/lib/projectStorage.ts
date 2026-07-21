@@ -1,5 +1,12 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { AudioFile, Stem, Recording, VideoFile, TimelineTrack } from '../store/useProjectStore';
+import type {
+  AudioFile,
+  Stem,
+  Recording,
+  VideoFile,
+  TimelineTrack,
+} from '../store/useProjectStore';
+import { getEffectiveSyncOffset } from './syncOffset';
 
 // --- Types ---
 
@@ -282,7 +289,7 @@ export async function loadProject(id: string): Promise<LoadedProject | null> {
       sourceUrl,
       // Migrate projects saved before sourceStartOffset and syncOffset existed.
       sourceStartOffset: t.sourceStartOffset ?? 0,
-      syncOffset: t.syncOffset ?? t.startOffset,
+      syncOffset: getEffectiveSyncOffset(t),
     };
   });
 

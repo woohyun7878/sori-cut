@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getEffectiveSyncOffset,
   mapSignedSyncOffset,
   SYNC_OFFSET_LIMIT_SECONDS,
   type SyncOffsetTrack,
@@ -15,6 +16,30 @@ function track(overrides: Partial<SyncOffsetTrack> = {}): SyncOffsetTrack {
 }
 
 describe('mapSignedSyncOffset', () => {
+  it.each([
+    {
+      legacy: { startOffset: 2.5, sourceStartOffset: 0 },
+      expectedOffset: 2.5,
+      reapplied: { startOffset: 2.5, sourceStartOffset: 0, syncOffset: 2.5 },
+    },
+    {
+      legacy: { startOffset: 0, sourceStartOffset: 2.5 },
+      expectedOffset: -2.5,
+      reapplied: { startOffset: 0, sourceStartOffset: 2.5, syncOffset: -2.5 },
+    },
+    {
+      legacy: { startOffset: 4, sourceStartOffset: 1.5 },
+      expectedOffset: 2.5,
+      reapplied: { startOffset: 4, sourceStartOffset: 1.5, syncOffset: 2.5 },
+    },
+  ])(
+    'derives and reapplies legacy effective offset $expectedOffset without losing common trim',
+    ({ legacy, expectedOffset, reapplied }) => {
+      expect(getEffectiveSyncOffset(legacy)).toBe(expectedOffset);
+      expect(mapSignedSyncOffset(legacy, expectedOffset)).toEqual(reapplied);
+    },
+  );
+
   it('maps positive alignment to timeline delay and negative alignment to source advance', () => {
     expect(mapSignedSyncOffset(track(), 2.5)).toEqual({
       startOffset: 2.5,
@@ -62,10 +87,7 @@ describe('mapSignedSyncOffset', () => {
   });
 
   it('preserves split-like timeline and source deltas across same and new sync values', () => {
-    const first = mapSignedSyncOffset(
-      track({ sourceStartOffset: 1, startOffset: 4 }),
-      -2,
-    );
+    const first = mapSignedSyncOffset(track({ sourceStartOffset: 1, startOffset: 4 }), -2);
     const splitTrack = {
       ...first,
       startOffset: first.startOffset + 5,

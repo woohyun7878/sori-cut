@@ -17,8 +17,85 @@ import {
 } from '../autoSyncCore';
 
 const SAMPLE_RATE = AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
-const REFERENCE_BYTES = 100;
-const TARGET_BYTES = 200;
+const REFERENCE_BYTES = 16_044;
+const TARGET_BYTES = 32_044;
+
+function createPcmWave(byteLength: number, channels = 1, sampleRate = 8_000): ArrayBuffer {
+  const dataBytes = byteLength - 44;
+  const blockAlign = channels * 2;
+  if (dataBytes % blockAlign !== 0) {
+    throw new Error('Test WAVE byte length must contain whole sample frames');
+  }
+  const buffer = new ArrayBuffer(byteLength);
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  bytes.set(
+    [...'RIFF'].map((value) => value.charCodeAt(0)),
+    0,
+  );
+  view.setUint32(4, byteLength - 8, true);
+  bytes.set(
+    [...'WAVEfmt '].map((value) => value.charCodeAt(0)),
+    8,
+  );
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  bytes.set(
+    [...'data'].map((value) => value.charCodeAt(0)),
+    36,
+  );
+  view.setUint32(40, dataBytes, true);
+  return buffer;
+}
+
+function createFlacMetadata(
+  channels: number,
+  sampleRate: number,
+  totalSamples: number,
+): ArrayBuffer {
+  const buffer = new ArrayBuffer(42);
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  bytes.set(
+    [...'fLaC'].map((value) => value.charCodeAt(0)),
+    0,
+  );
+  bytes[4] = 0x80;
+  bytes[7] = 34;
+  const totalHigh = Math.floor(totalSamples / 0x1_0000_0000);
+  view.setUint32(18, (sampleRate << 12) | ((channels - 1) << 9) | (15 << 4) | totalHigh);
+  view.setUint32(22, totalSamples);
+  return buffer;
+}
+
+function declaredResponse(encoded: ArrayBuffer, declaredBytes = encoded.byteLength) {
+  const chunks = [
+    new Uint8Array(encoded, 0, Math.floor(encoded.byteLength / 2)),
+    new Uint8Array(encoded, Math.floor(encoded.byteLength / 2)),
+  ];
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-length': String(declaredBytes) }),
+    body: {
+      getReader: () => ({
+        read: vi
+          .fn()
+          .mockResolvedValueOnce({ done: false, value: chunks[0] })
+          .mockResolvedValueOnce({ done: false, value: chunks[1] })
+          .mockResolvedValueOnce({ done: true, value: undefined }),
+        cancel: vi.fn(async () => {}),
+        releaseLock: vi.fn(),
+      }),
+    },
+    arrayBuffer: vi.fn(),
+  };
+}
 
 function frameAmplitude(frame: number): number {
   let hash = frame + 1;
@@ -237,7 +314,7 @@ beforeEach(() => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
+        arrayBuffer: async () => createPcmWave(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
       };
     }),
   );
@@ -294,7 +371,7 @@ describe('computeAutoSyncOffset', () => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(REFERENCE_BYTES),
+        arrayBuffer: async () => createPcmWave(REFERENCE_BYTES),
       })),
     );
     vi.stubGlobal(
@@ -336,20 +413,28 @@ describe('computeAutoSyncOffset', () => {
       message: expect.stringContaining('shorter or more compressed'),
     } satisfies Partial<AutoSyncResourceLimitError>);
 
-    const firstBytes = AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES + 1;
+    const firstBytes =
+      44 +
+      Math.ceil((AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES + 1 - 44) / 16) * 16;
     const secondBytes = AUTO_SYNC_MAX_FILE_BYTES;
+    const aggregateCancel = vi.fn(async () => {});
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
         const isTarget = url === 'blob:tar';
+        if (!isTarget) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            arrayBuffer: async () => createPcmWave(firstBytes, 8, 192_000),
+          };
+        }
         return {
           ok: true,
           status: 200,
-          headers: new Headers({
-            'content-length': String(isTarget ? secondBytes : firstBytes),
-          }),
-          arrayBuffer: async () =>
-            ({ byteLength: isTarget ? secondBytes : firstBytes }) as ArrayBuffer,
+          headers: new Headers({ 'content-length': String(secondBytes) }),
+          body: { cancel: aggregateCancel },
         };
       }),
     );
@@ -359,44 +444,111 @@ describe('computeAutoSyncOffset', () => {
       code: 'aggregate-input',
       message: expect.stringContaining('Combined auto-sync inputs'),
     } satisfies Partial<AutoSyncResourceLimitError>);
+    expect(aggregateCancel).toHaveBeenCalledOnce();
   });
 
-  it('accepts exact individual and aggregate boundaries through the declared-length path', async () => {
-    const referenceBuffer = {
-      byteLength: AUTO_SYNC_MAX_FILE_BYTES,
-    } as ArrayBuffer;
-    const targetBuffer = {
-      byteLength: AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES,
-    } as ArrayBuffer;
-    const arrayBufferCalls: string[] = [];
+  it('streams declared-length responses into exact bounded buffers without arrayBuffer', async () => {
+    const responses: ReturnType<typeof declaredResponse>[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
         const isTarget = url === 'blob:tar';
-        const encoded = isTarget ? targetBuffer : referenceBuffer;
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({
-            'content-length': String(encoded.byteLength),
-          }),
-          body: {
-            getReader: () => {
-              throw new Error('Declared-length responses must not retain streamed chunks');
-            },
-          },
-          arrayBuffer: async () => {
-            arrayBufferCalls.push(url);
-            return encoded;
-          },
-        };
+        const response = declaredResponse(createPcmWave(isTarget ? TARGET_BYTES : REFERENCE_BYTES));
+        responses.push(response);
+        return response;
       }),
     );
 
     await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).resolves.toMatchObject({
-      offsetSeconds: 0,
+      offsetSeconds: -0.5,
     });
-    expect(arrayBufferCalls).toEqual(['blob:ref', 'blob:tar']);
+    expect(responses).toHaveLength(2);
+    expect(responses.every((response) => response.arrayBuffer.mock.calls.length === 0)).toBe(true);
+  });
+
+  it('cancels short and long declared bodies and preserves the primary typed failure', async () => {
+    const shortCancel = vi.fn(async () => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': '5' }),
+        body: {
+          getReader: () => ({
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new Uint8Array(4) })
+              .mockResolvedValueOnce({ done: true }),
+            cancel: shortCancel,
+            releaseLock: vi.fn(),
+          }),
+        },
+      })),
+    );
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'ended before its declared Content-Length',
+    );
+    expect(shortCancel).toHaveBeenCalledOnce();
+
+    const cancelError = new Error('cancel failed');
+    const longCancel = vi.fn(async () => {
+      throw cancelError;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': '1' }),
+        body: {
+          getReader: () => ({
+            read: vi.fn().mockResolvedValueOnce({
+              done: false,
+              value: new Uint8Array(2),
+            }),
+            cancel: longCancel,
+            releaseLock: vi.fn(),
+          }),
+        },
+      })),
+    );
+    const error = await computeAutoSyncOffset('blob:ref', 'blob:tar').catch(
+      (caughtError: unknown) => caughtError,
+    );
+    expect(error).toMatchObject({ cleanupError: cancelError });
+    expect(error).toHaveProperty(
+      'message',
+      'reference audio response exceeded its declared Content-Length',
+    );
+    expect(longCancel).toHaveBeenCalledOnce();
+  });
+
+  it('rejects oversized decoded metadata before calling decodeAudioData', async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+    const encoded = createFlacMetadata(8, 48_000, 48_000 * 300);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => encoded,
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      name: 'AutoSyncResourceLimitError',
+      code: 'decoded-audio',
+    });
+    expect(decodeAudioData).not.toHaveBeenCalled();
   });
 
   it('conservatively rejects an unknown-length response before its final copy exceeds peak budget', async () => {
@@ -410,12 +562,10 @@ describe('computeAutoSyncOffset', () => {
         headers: new Headers(),
         body: {
           getReader: () => ({
-            read: vi
-              .fn()
-              .mockResolvedValueOnce({
-                done: false,
-                value: { byteLength: AUTO_SYNC_MAX_TOTAL_FILE_BYTES / 2 + 1 },
-              }),
+            read: vi.fn().mockResolvedValueOnce({
+              done: false,
+              value: { byteLength: AUTO_SYNC_MAX_TOTAL_FILE_BYTES / 2 + 1 },
+            }),
             cancel,
             releaseLock,
           }),

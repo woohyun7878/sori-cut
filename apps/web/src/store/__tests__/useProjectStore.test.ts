@@ -267,25 +267,32 @@ describe('useProjectStore', () => {
       expect(useProjectStore.getState().recordings).toHaveLength(0);
     });
 
-    it('migrates a legacy timeline offset into the signed sync offset', () => {
-      useProjectStore.getState().loadFromSaved({
-        tracks: [
-          {
-            id: 'legacy-track',
-            name: 'Legacy',
-            type: 'audio',
-            sourceUrl: 'blob:legacy',
-            startOffset: 2.5,
-            duration: 10,
-            sourceStartOffset: 1,
-            muted: false,
-            volume: 1,
-          },
-        ],
-      });
+    it.each([
+      { startOffset: 2.5, sourceStartOffset: 0, expected: 2.5 },
+      { startOffset: 0, sourceStartOffset: 2.5, expected: -2.5 },
+      { startOffset: 4, sourceStartOffset: 1.5, expected: 2.5 },
+    ])(
+      'migrates legacy timeline/source offsets into signed sync offset $expected',
+      ({ startOffset, sourceStartOffset, expected }) => {
+        useProjectStore.getState().loadFromSaved({
+          tracks: [
+            {
+              id: 'legacy-track',
+              name: 'Legacy',
+              type: 'audio',
+              sourceUrl: 'blob:legacy',
+              startOffset,
+              duration: 10,
+              sourceStartOffset,
+              muted: false,
+              volume: 1,
+            },
+          ],
+        });
 
-      expect(useProjectStore.getState().tracks[0].syncOffset).toBe(2.5);
-    });
+        expect(useProjectStore.getState().tracks[0].syncOffset).toBe(expected);
+      },
+    );
   });
 
   describe('blob URL lifecycle', () => {
@@ -484,7 +491,9 @@ describe('useProjectStore', () => {
       expect(track.sourceStartOffset).toBe(1);
 
       useProjectStore.getState().trimTrack('track-1', 0, 10);
-      expect(useProjectStore.getState().tracks.find((t) => t.id === 'track-1')!.sourceStartOffset).toBe(0);
+      expect(
+        useProjectStore.getState().tracks.find((t) => t.id === 'track-1')!.sourceStartOffset,
+      ).toBe(0);
     });
   });
 

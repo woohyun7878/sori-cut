@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getEffectiveSyncOffset } from '../lib/syncOffset';
 import { type UndoRedoState, undoMiddleware } from './undoMiddleware';
 
 export interface AudioFile {
@@ -235,7 +236,7 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
       const migratedTracks = saved.tracks?.map((track) => ({
         ...track,
         sourceStartOffset: track.sourceStartOffset ?? 0,
-        syncOffset: track.syncOffset ?? track.startOffset,
+        syncOffset: getEffectiveSyncOffset(track),
       }));
 
       const nextState = {

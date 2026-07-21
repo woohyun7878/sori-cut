@@ -43,8 +43,7 @@ vi.mock('../lib/autoSync', () => ({
 }));
 
 vi.mock('../store/useProjectStore', () => {
-  const useProjectStore = (selector: (state: typeof storeState) => unknown) =>
-    selector(storeState);
+  const useProjectStore = (selector: (state: typeof storeState) => unknown) => selector(storeState);
   useProjectStore.getState = () => storeState;
   return { useProjectStore };
 });
@@ -153,6 +152,38 @@ describe('SyncControls offset application', () => {
     await waitFor(() => {
       expect(screen.getByRole('status')).toHaveTextContent('video or target track changed');
     });
+    expect(mocks.updateTrack).not.toHaveBeenCalled();
+  });
+
+  it('discards a deferred result when the selected target changes', async () => {
+    let finishAnalysis!: (result: { offsetSeconds: number; confidence: number }) => void;
+    mocks.computeAutoSyncOffset.mockReturnValue(
+      new Promise((resolve) => {
+        finishAnalysis = resolve;
+      }),
+    );
+    storeState.tracks = [
+      selectedTrack,
+      {
+        ...selectedTrack,
+        id: 'track-2',
+        name: 'Alternate',
+        sourceUrl: 'blob:alternate',
+        syncOffset: 4,
+      },
+    ];
+    render(<SyncControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto Sync' }));
+    fireEvent.change(screen.getByLabelText('Target track'), {
+      target: { value: 'track-2' },
+    });
+    finishAnalysis({ offsetSeconds: 7, confidence: 0.9 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('target track changed');
+    });
+    expect(screen.getByLabelText('Precise offset')).toHaveValue(4);
     expect(mocks.updateTrack).not.toHaveBeenCalled();
   });
 });

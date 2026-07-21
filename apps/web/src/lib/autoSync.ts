@@ -13,6 +13,7 @@ import {
   AUTO_SYNC_MIN_DURATION_SECONDS,
   type CrossCorrelationResult,
 } from './autoSyncCore';
+import { parseEncodedAudioMetadata } from './audioMetadata';
 
 export const AUTO_SYNC_MAX_FILE_BYTES = 64 * 1024 * 1024;
 export const AUTO_SYNC_MAX_TOTAL_FILE_BYTES = 96 * 1024 * 1024;
@@ -174,21 +175,7 @@ async function decodeToMono(
       `${label} audio expands beyond the 64 MB decoded-audio budget. Use fewer channels or a shorter file.`,
     );
   }
-  if (!Number.isFinite(decoded.duration) || decoded.duration <= 0) {
-    throw new Error(`${label} audio has no usable duration for auto-sync`);
-  }
-  if (decoded.duration < AUTO_SYNC_MIN_DURATION_SECONDS) {
-    throw new Error(
-      `${label} audio is too short for auto-sync; at least ` +
-        `${AUTO_SYNC_MIN_DURATION_SECONDS} second is required`,
-    );
-  }
-  if (decoded.duration > AUTO_SYNC_MAX_DURATION_SECONDS) {
-    throw new Error(
-      `${label} audio is too long for auto-sync; the limit is ` +
-        `${AUTO_SYNC_MAX_DURATION_SECONDS / 60} minutes`,
-    );
-  }
+  assertDuration(label, decoded.duration);
   throwIfAborted(signal);
 
   const analysisLength = Math.ceil(decoded.duration * AUTO_SYNC_ANALYSIS_SAMPLE_RATE);
@@ -244,7 +231,21 @@ async function decodeResponseAudio(
   );
   const encodedBytes = encoded.byteLength;
   throwIfAborted(signal);
-
+  const metadata = parseEncodedAudioMetadata(encoded);
+  assertDuration(label, metadata.durationSeconds);
+  const preflightDecodedBytes =
+    Math.ceil(metadata.durationSeconds * AUTO_SYNC_ANALYSIS_SAMPLE_RATE) *
+    metadata.channels *
+    Float32Array.BYTES_PER_ELEMENT;
+  if (
+    !Number.isSafeInteger(preflightDecodedBytes) ||
+    preflightDecodedBytes > AUTO_SYNC_MAX_DECODED_BYTES
+  ) {
+    throw new AutoSyncResourceLimitError(
+      'decoded-audio',
+      `${label} audio expands beyond the 64 MB decoded-audio budget. Use fewer channels or a shorter file.`,
+    );
+  }
   const temporaryContext = new AudioContext({
     sampleRate: AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
   });
@@ -280,13 +281,49 @@ async function readResponseWithinBudget(
   signal: AbortSignal | undefined,
   declaredBytes: number | undefined,
 ): Promise<ArrayBuffer> {
-  if (!response.body || declaredBytes !== undefined) {
+  if (!response.body) {
+    if (declaredBytes !== undefined) {
+      throw new Error(`${label} audio response cannot be safely streamed`);
+    }
     const encoded = await response.arrayBuffer();
     assertInputBudget(label, encoded.byteLength, consumedBytes);
     return encoded;
   }
 
   const reader = response.body.getReader();
+  if (declaredBytes !== undefined) {
+    const encoded = new Uint8Array(declaredBytes);
+    let totalBytes = 0;
+    try {
+      while (true) {
+        throwIfAborted(signal);
+        const { done, value } = await reader.read();
+        if (done) {
+          if (totalBytes !== declaredBytes) {
+            throw new Error(`${label} audio response ended before its declared Content-Length`);
+          }
+          return encoded.buffer;
+        }
+        const nextTotal = totalBytes + value.byteLength;
+        assertInputBudget(label, nextTotal, consumedBytes);
+        if (nextTotal > declaredBytes) {
+          throw new Error(`${label} audio response exceeded its declared Content-Length`);
+        }
+        encoded.set(value, totalBytes);
+        totalBytes = nextTotal;
+      }
+    } catch (error) {
+      try {
+        await reader.cancel(error);
+      } catch (cancelError) {
+        attachCleanupError(error, cancelError);
+      }
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
 
@@ -325,6 +362,24 @@ async function readResponseWithinBudget(
     offset += chunk.byteLength;
   }
   return encoded.buffer;
+}
+
+function assertDuration(label: string, duration: number): void {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`${label} audio has no usable duration for auto-sync`);
+  }
+  if (duration < AUTO_SYNC_MIN_DURATION_SECONDS) {
+    throw new Error(
+      `${label} audio is too short for auto-sync; at least ` +
+        `${AUTO_SYNC_MIN_DURATION_SECONDS} second is required`,
+    );
+  }
+  if (duration > AUTO_SYNC_MAX_DURATION_SECONDS) {
+    throw new Error(
+      `${label} audio is too long for auto-sync; the limit is ` +
+        `${AUTO_SYNC_MAX_DURATION_SECONDS / 60} minutes`,
+    );
+  }
 }
 
 function parseWorkerResponse(value: unknown, maxLagSamples: number): CrossCorrelationResult {

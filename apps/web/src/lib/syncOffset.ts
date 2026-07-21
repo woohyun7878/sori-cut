@@ -13,14 +13,18 @@ export type SyncOffsetUpdate = Pick<
   'sourceStartOffset' | 'startOffset' | 'syncOffset'
 >;
 
+export function getEffectiveSyncOffset(
+  track: Pick<TimelineTrack, 'startOffset'> &
+    Partial<Pick<TimelineTrack, 'sourceStartOffset' | 'syncOffset'>>,
+): number {
+  return track.syncOffset ?? track.startOffset - (track.sourceStartOffset ?? 0);
+}
+
 export function clampSyncOffset(offsetSeconds: number): number {
   if (!Number.isFinite(offsetSeconds)) {
     return 0;
   }
-  return Math.max(
-    -SYNC_OFFSET_LIMIT_SECONDS,
-    Math.min(SYNC_OFFSET_LIMIT_SECONDS, offsetSeconds),
-  );
+  return Math.max(-SYNC_OFFSET_LIMIT_SECONDS, Math.min(SYNC_OFFSET_LIMIT_SECONDS, offsetSeconds));
 }
 
 /**
@@ -32,11 +36,8 @@ export function mapSignedSyncOffset(
   track: SyncOffsetTrack,
   offsetSeconds: number,
 ): SyncOffsetUpdate {
-  const previousOffset = clampSyncOffset(track.syncOffset ?? track.startOffset);
-  const baseSourceStart = Math.max(
-    0,
-    track.sourceStartOffset - Math.max(0, -previousOffset),
-  );
+  const previousOffset = clampSyncOffset(getEffectiveSyncOffset(track));
+  const baseSourceStart = Math.max(0, track.sourceStartOffset - Math.max(0, -previousOffset));
   const baseTimelineStart = Math.max(0, track.startOffset - Math.max(0, previousOffset));
   const syncOffset = clampSyncOffset(offsetSeconds);
 
