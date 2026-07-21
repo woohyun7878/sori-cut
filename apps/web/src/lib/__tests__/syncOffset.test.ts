@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deriveSignedSyncOffset,
   mapSignedSyncOffset,
   SYNC_OFFSET_LIMIT_SECONDS,
   type SyncOffsetTrack,
@@ -15,6 +16,32 @@ function track(overrides: Partial<SyncOffsetTrack> = {}): SyncOffsetTrack {
 }
 
 describe('mapSignedSyncOffset', () => {
+  it('derives legacy positive, negative, and common-trim alignment', () => {
+    expect(
+      deriveSignedSyncOffset(track({ startOffset: 3, sourceStartOffset: 1, syncOffset: undefined })),
+    ).toBe(2);
+    expect(
+      deriveSignedSyncOffset(track({ startOffset: 1, sourceStartOffset: 3, syncOffset: undefined })),
+    ).toBe(-2);
+    expect(
+      deriveSignedSyncOffset(track({ startOffset: 2, sourceStartOffset: 2, syncOffset: undefined })),
+    ).toBe(0);
+  });
+
+  it('preserves legacy common trim when applying its derived alignment', () => {
+    const legacy = track({
+      startOffset: 2,
+      sourceStartOffset: 2,
+      syncOffset: undefined,
+    });
+
+    expect(mapSignedSyncOffset(legacy, deriveSignedSyncOffset(legacy))).toEqual({
+      startOffset: 2,
+      sourceStartOffset: 2,
+      syncOffset: 0,
+    });
+  });
+
   it('maps positive alignment to timeline delay and negative alignment to source advance', () => {
     expect(mapSignedSyncOffset(track(), 2.5)).toEqual({
       startOffset: 2.5,

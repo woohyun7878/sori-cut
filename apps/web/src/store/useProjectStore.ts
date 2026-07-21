@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { deriveSignedSyncOffset } from '../lib/syncOffset';
 import { type UndoRedoState, undoMiddleware } from './undoMiddleware';
 
 export interface AudioFile {
@@ -198,7 +199,11 @@ function sanitizeTrack(track: AddTrackInput, existingTracks: TimelineTrack[], fa
     startOffset: Math.max(track.startOffset ?? 0, 0),
     duration: Math.max(track.duration ?? fallbackDuration, 0.5),
     sourceStartOffset: Math.max(track.sourceStartOffset ?? 0, 0),
-    syncOffset: track.syncOffset ?? track.startOffset ?? 0,
+    syncOffset: deriveSignedSyncOffset({
+      sourceStartOffset: track.sourceStartOffset ?? 0,
+      startOffset: track.startOffset ?? 0,
+      syncOffset: track.syncOffset,
+    }),
     muted: track.muted ?? false,
     volume: clamp(track.volume ?? 0.9, 0, 1),
   };
@@ -232,11 +237,14 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
   loadFromSaved: (saved) =>
     set((state) => {
       // Migrate tracks saved before sourceStartOffset and syncOffset existed.
-      const migratedTracks = saved.tracks?.map((track) => ({
-        ...track,
-        sourceStartOffset: track.sourceStartOffset ?? 0,
-        syncOffset: track.syncOffset ?? track.startOffset,
-      }));
+      const migratedTracks = saved.tracks?.map((track) => {
+        const sourceStartOffset = track.sourceStartOffset ?? 0;
+        return {
+          ...track,
+          sourceStartOffset,
+          syncOffset: deriveSignedSyncOffset({ ...track, sourceStartOffset }),
+        };
+      });
 
       const nextState = {
         ...initialState,

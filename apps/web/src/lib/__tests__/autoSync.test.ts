@@ -3,6 +3,7 @@ import {
   AUTO_SYNC_MAX_FILE_BYTES,
   AUTO_SYNC_MAX_TOTAL_FILE_BYTES,
   AutoSyncResourceLimitError,
+  assertAutoSyncInputBudget,
   computeAutoSyncOffset,
 } from '../autoSync';
 import {
@@ -19,6 +20,59 @@ import {
 const SAMPLE_RATE = AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
 const REFERENCE_BYTES = 100;
 const TARGET_BYTES = 200;
+
+function createWavEncoded(byteLength: number): ArrayBuffer {
+  const encoded = new ArrayBuffer(byteLength);
+  const bytes = new Uint8Array(encoded);
+  const view = new DataView(encoded);
+  const writeAscii = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index++) {
+      bytes[offset + index] = value.charCodeAt(index);
+    }
+  };
+
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, byteLength - 8, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, SAMPLE_RATE, true);
+  view.setUint32(28, SAMPLE_RATE, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, byteLength - 44, true);
+  return encoded;
+}
+
+function createWavWithShape(durationSeconds: number, channels: number): ArrayBuffer {
+  const dataBytes = durationSeconds * SAMPLE_RATE * channels;
+  const encoded = createWavEncoded(44 + dataBytes);
+  const view = new DataView(encoded);
+  view.setUint16(22, channels, true);
+  view.setUint32(28, SAMPLE_RATE * channels, true);
+  view.setUint16(32, channels, true);
+  return encoded;
+}
+
+function createWavWithDuplicateFormat(): ArrayBuffer {
+  const original = new Uint8Array(createWavEncoded(REFERENCE_BYTES));
+  const encoded = new Uint8Array(original.length + 24);
+  encoded.set(original);
+  const view = new DataView(encoded.buffer);
+  view.setUint32(4, encoded.length - 8, true);
+  encoded.set([0x66, 0x6d, 0x74, 0x20], original.length);
+  view.setUint32(original.length + 4, 16, true);
+  view.setUint16(original.length + 8, 1, true);
+  view.setUint16(original.length + 10, 1, true);
+  view.setUint32(original.length + 12, SAMPLE_RATE, true);
+  view.setUint32(original.length + 16, SAMPLE_RATE, true);
+  view.setUint16(original.length + 20, 1, true);
+  view.setUint16(original.length + 22, 8, true);
+  return encoded.buffer;
+}
 
 function frameAmplitude(frame: number): number {
   let hash = frame + 1;
@@ -237,7 +291,8 @@ beforeEach(() => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
+        arrayBuffer: async () =>
+          createWavEncoded(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
       };
     }),
   );
@@ -294,7 +349,7 @@ describe('computeAutoSyncOffset', () => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(REFERENCE_BYTES),
+        arrayBuffer: async () => createWavEncoded(REFERENCE_BYTES),
       })),
     );
     vi.stubGlobal(
@@ -317,6 +372,58 @@ describe('computeAutoSyncOffset', () => {
     );
   });
 
+  it('rejects decoded shapes over budget before decodeAudioData is called', async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => createWavWithShape(300, 8),
+      })),
+    );
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      name: 'AutoSyncResourceLimitError',
+      code: 'decoded-audio',
+      message: expect.stringContaining('metadata predicts'),
+    });
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('rejects ambiguous duplicate WAV format metadata before decoding', async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => createWavWithDuplicateFormat(),
+      })),
+    );
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'duplicate format metadata',
+    );
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
   it('rejects individual and aggregate encoded input budgets with typed errors', async () => {
     vi.stubGlobal(
       'fetch',
@@ -336,67 +443,127 @@ describe('computeAutoSyncOffset', () => {
       message: expect.stringContaining('shorter or more compressed'),
     } satisfies Partial<AutoSyncResourceLimitError>);
 
-    const firstBytes = AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES + 1;
-    const secondBytes = AUTO_SYNC_MAX_FILE_BYTES;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        const isTarget = url === 'blob:tar';
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({
-            'content-length': String(isTarget ? secondBytes : firstBytes),
-          }),
-          arrayBuffer: async () =>
-            ({ byteLength: isTarget ? secondBytes : firstBytes }) as ArrayBuffer,
-        };
+    expect(() =>
+      assertAutoSyncInputBudget(
+        'target',
+        AUTO_SYNC_MAX_FILE_BYTES,
+        AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES + 1,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        name: 'AutoSyncResourceLimitError',
+        code: 'aggregate-input',
       }),
     );
-
-    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
-      name: 'AutoSyncResourceLimitError',
-      code: 'aggregate-input',
-      message: expect.stringContaining('Combined auto-sync inputs'),
-    } satisfies Partial<AutoSyncResourceLimitError>);
   });
 
-  it('accepts exact individual and aggregate boundaries through the declared-length path', async () => {
-    const referenceBuffer = {
-      byteLength: AUTO_SYNC_MAX_FILE_BYTES,
-    } as ArrayBuffer;
-    const targetBuffer = {
-      byteLength: AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES,
-    } as ArrayBuffer;
-    const arrayBufferCalls: string[] = [];
+  it('accepts exact individual and aggregate budget boundaries', () => {
+    expect(() =>
+      assertAutoSyncInputBudget('reference', AUTO_SYNC_MAX_FILE_BYTES, 0),
+    ).not.toThrow();
+    expect(() =>
+      assertAutoSyncInputBudget(
+        'target',
+        AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES,
+        AUTO_SYNC_MAX_FILE_BYTES,
+      ),
+    ).not.toThrow();
+  });
+
+  it('streams declared bodies into one bounded buffer without arrayBuffer copying', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
         const isTarget = url === 'blob:tar';
-        const encoded = isTarget ? targetBuffer : referenceBuffer;
+        const encoded = new Uint8Array(
+          createWavEncoded(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
+        );
+        const read = vi
+          .fn()
+          .mockResolvedValueOnce({ done: false, value: encoded.subarray(0, 45) })
+          .mockResolvedValueOnce({ done: false, value: encoded.subarray(45) })
+          .mockResolvedValueOnce({ done: true, value: undefined });
         return {
           ok: true,
           status: 200,
           headers: new Headers({
-            'content-length': String(encoded.byteLength),
+            'content-length': String(encoded.length),
           }),
           body: {
-            getReader: () => {
-              throw new Error('Declared-length responses must not retain streamed chunks');
-            },
+            getReader: () => ({
+              read,
+              cancel: vi.fn(),
+              releaseLock: vi.fn(),
+            }),
           },
-          arrayBuffer: async () => {
-            arrayBufferCalls.push(url);
-            return encoded;
-          },
+          arrayBuffer: vi.fn(() => {
+            throw new Error('Declared streaming must not call response.arrayBuffer()');
+          }),
         };
       }),
     );
 
     await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).resolves.toMatchObject({
-      offsetSeconds: 0,
+      offsetSeconds: -0.5,
     });
-    expect(arrayBufferCalls).toEqual(['blob:ref', 'blob:tar']);
+  });
+
+  it('rejects and cancels short and underdeclared bodies while preserving the primary error', async () => {
+    const shortCancel = vi.fn(async () => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': '10' }),
+        body: {
+          getReader: () => ({
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new Uint8Array(5) })
+              .mockResolvedValueOnce({ done: true, value: undefined }),
+            cancel: shortCancel,
+            releaseLock: vi.fn(),
+          }),
+        },
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'ended before its declared Content-Length',
+    );
+    expect(shortCancel).toHaveBeenCalledOnce();
+
+    const cleanupError = new Error('cancel failed');
+    const longCancel = vi.fn(async () => {
+      throw cleanupError;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': '1' }),
+        body: {
+          getReader: () => ({
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({ done: false, value: new Uint8Array(2) }),
+            cancel: longCancel,
+            releaseLock: vi.fn(),
+          }),
+        },
+      })),
+    );
+
+    const error = await computeAutoSyncOffset('blob:ref', 'blob:tar').catch(
+      (caughtError: unknown) => caughtError,
+    );
+    expect(error).toMatchObject({
+      message: expect.stringContaining('exceeded its declared Content-Length'),
+      cleanupError,
+    });
+    expect(longCancel).toHaveBeenCalledOnce();
   });
 
   it('conservatively rejects an unknown-length response before its final copy exceeds peak budget', async () => {

@@ -151,8 +151,39 @@ describe('SyncControls offset application', () => {
     finishAnalysis({ offsetSeconds: 2, confidence: 0.9 });
 
     await waitFor(() => {
-      expect(screen.getByRole('status')).toHaveTextContent('video or target track changed');
+      expect(screen.getByRole('status')).toHaveTextContent('video');
     });
+    expect(mocks.updateTrack).not.toHaveBeenCalled();
+  });
+
+  it('discards an auto-sync result when another target is selected', async () => {
+    let finishAnalysis!: (result: { offsetSeconds: number; confidence: number }) => void;
+    mocks.computeAutoSyncOffset.mockReturnValue(
+      new Promise((resolve) => {
+        finishAnalysis = resolve;
+      }),
+    );
+    storeState.tracks = [
+      selectedTrack,
+      {
+        ...selectedTrack,
+        id: 'track-2',
+        name: 'Replacement target',
+        sourceUrl: 'blob:track-2',
+      },
+    ];
+    render(<SyncControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto Sync' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Target track' }), {
+      target: { value: 'track-2' },
+    });
+    finishAnalysis({ offsetSeconds: 2, confidence: 0.9 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('selection');
+    });
+    expect(screen.getByLabelText('Precise offset')).toHaveValue(0);
     expect(mocks.updateTrack).not.toHaveBeenCalled();
   });
 });

@@ -267,7 +267,7 @@ describe('useProjectStore', () => {
       expect(useProjectStore.getState().recordings).toHaveLength(0);
     });
 
-    it('migrates a legacy timeline offset into the signed sync offset', () => {
+    it('migrates positive, negative, and common legacy trim into signed sync offsets', () => {
       useProjectStore.getState().loadFromSaved({
         tracks: [
           {
@@ -281,10 +281,48 @@ describe('useProjectStore', () => {
             muted: false,
             volume: 1,
           },
+          {
+            id: 'legacy-negative',
+            name: 'Legacy negative',
+            type: 'audio',
+            sourceUrl: 'blob:legacy-negative',
+            startOffset: 1,
+            duration: 10,
+            sourceStartOffset: 3,
+            muted: false,
+            volume: 1,
+          },
+          {
+            id: 'legacy-common-trim',
+            name: 'Legacy common trim',
+            type: 'audio',
+            sourceUrl: 'blob:legacy-common',
+            startOffset: 2,
+            duration: 10,
+            sourceStartOffset: 2,
+            muted: false,
+            volume: 1,
+          },
+          {
+            id: 'legacy-before-source-trim',
+            name: 'Legacy before source trim',
+            type: 'audio',
+            sourceUrl: 'blob:legacy-before-source',
+            startOffset: 4,
+            duration: 10,
+            sourceStartOffset: undefined as unknown as number,
+            muted: false,
+            volume: 1,
+          },
         ],
       });
 
-      expect(useProjectStore.getState().tracks[0].syncOffset).toBe(2.5);
+      expect(useProjectStore.getState().tracks.map((track) => track.syncOffset)).toEqual([
+        1.5,
+        -2,
+        0,
+        4,
+      ]);
     });
   });
 

@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { AudioFile, Stem, Recording, VideoFile, TimelineTrack } from '../store/useProjectStore';
+import { deriveSignedSyncOffset } from './syncOffset';
 
 // --- Types ---
 
@@ -50,6 +51,17 @@ const DB_NAME = 'sori-cut-projects';
 const DB_VERSION = 1;
 
 let dbPromise: Promise<IDBPDatabase<SoriCutDB>> | null = null;
+
+export function migrateStoredTimelineTrack(track: TimelineTrack): TimelineTrack {
+  return {
+    ...track,
+    sourceStartOffset: track.sourceStartOffset ?? 0,
+    syncOffset: deriveSignedSyncOffset({
+      ...track,
+      sourceStartOffset: track.sourceStartOffset ?? 0,
+    }),
+  };
+}
 
 function getDB(): Promise<IDBPDatabase<SoriCutDB>> {
   if (!dbPromise) {
@@ -278,11 +290,8 @@ export async function loadProject(id: string): Promise<LoadedProject | null> {
       sourceUrl = video.url;
     }
     return {
-      ...t,
+      ...migrateStoredTimelineTrack(t),
       sourceUrl,
-      // Migrate projects saved before sourceStartOffset and syncOffset existed.
-      sourceStartOffset: t.sourceStartOffset ?? 0,
-      syncOffset: t.syncOffset ?? t.startOffset,
     };
   });
 

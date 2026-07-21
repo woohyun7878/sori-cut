@@ -1,17 +1,18 @@
-import type { TimelineTrack } from '../store/useProjectStore';
 import { AUTO_SYNC_MAX_LAG_SECONDS } from './autoSyncCore';
 
 export const SYNC_OFFSET_LIMIT_SECONDS = AUTO_SYNC_MAX_LAG_SECONDS;
 
-export type SyncOffsetTrack = Pick<
-  TimelineTrack,
-  'sourceStartOffset' | 'startOffset' | 'syncOffset'
->;
+export interface SyncOffsetTrack {
+  sourceStartOffset: number;
+  startOffset: number;
+  syncOffset?: number;
+}
 
-export type SyncOffsetUpdate = Pick<
-  TimelineTrack,
-  'sourceStartOffset' | 'startOffset' | 'syncOffset'
->;
+export interface SyncOffsetUpdate {
+  sourceStartOffset: number;
+  startOffset: number;
+  syncOffset: number;
+}
 
 export function clampSyncOffset(offsetSeconds: number): number {
   if (!Number.isFinite(offsetSeconds)) {
@@ -20,6 +21,12 @@ export function clampSyncOffset(offsetSeconds: number): number {
   return Math.max(
     -SYNC_OFFSET_LIMIT_SECONDS,
     Math.min(SYNC_OFFSET_LIMIT_SECONDS, offsetSeconds),
+  );
+}
+
+export function deriveSignedSyncOffset(track: SyncOffsetTrack): number {
+  return clampSyncOffset(
+    track.syncOffset ?? track.startOffset - track.sourceStartOffset,
   );
 }
 
@@ -32,7 +39,7 @@ export function mapSignedSyncOffset(
   track: SyncOffsetTrack,
   offsetSeconds: number,
 ): SyncOffsetUpdate {
-  const previousOffset = clampSyncOffset(track.syncOffset ?? track.startOffset);
+  const previousOffset = deriveSignedSyncOffset(track);
   const baseSourceStart = Math.max(
     0,
     track.sourceStartOffset - Math.max(0, -previousOffset),

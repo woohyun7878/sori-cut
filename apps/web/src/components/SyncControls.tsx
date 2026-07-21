@@ -24,6 +24,7 @@ export function SyncControls() {
   const [message, setMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const selectedTrackIdRef = useRef('');
 
   useEffect(() => {
     if (!syncTracks.length) {
@@ -39,10 +40,11 @@ export function SyncControls() {
   const selectedTrack = syncTracks.find((track) => track.id === selectedTrackId) ?? null;
 
   useEffect(() => {
+    selectedTrackIdRef.current = selectedTrackId;
     if (selectedTrack) {
       setOffset(selectedTrack.syncOffset ?? selectedTrack.startOffset);
     }
-  }, [selectedTrack]);
+  }, [selectedTrack, selectedTrackId]);
 
   useEffect(() => () => cleanupRef.current?.(), []);
 
@@ -147,7 +149,10 @@ export function SyncControls() {
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
             value={selectedTrackId}
-            onChange={(event) => setSelectedTrackId(event.target.value)}
+            onChange={(event) => {
+              selectedTrackIdRef.current = event.target.value;
+              setSelectedTrackId(event.target.value);
+            }}
           >
             {syncTracks.length ? (
               syncTracks.map((track) => (
@@ -234,6 +239,7 @@ export function SyncControls() {
 
               const referenceUrl = video.url;
               const targetUrl = selectedTrack.sourceUrl;
+              const targetTrackId = selectedTrack.id;
               if (!referenceUrl) {
                 setMessage('No reference audio found.');
                 return;
@@ -246,14 +252,15 @@ export function SyncControls() {
                 const result = await computeAutoSyncOffset(referenceUrl, targetUrl);
                 const latestState = useProjectStore.getState();
                 const latestTrack = latestState.tracks.find(
-                  (track) => track.id === selectedTrack.id,
+                  (track) => track.id === targetTrackId,
                 );
                 if (
+                  selectedTrackIdRef.current !== targetTrackId ||
                   latestState.video?.url !== referenceUrl ||
                   latestTrack?.sourceUrl !== targetUrl
                 ) {
                   setMessage(
-                    'Auto sync result discarded because the video or target track changed. Run auto sync again.',
+                    'Auto sync result discarded because the selection, video, or target track changed. Run auto sync again.',
                   );
                   return;
                 }
