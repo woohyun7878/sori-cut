@@ -58,6 +58,10 @@ function Harness() {
 describe('usePlaybackEngine', () => {
   beforeEach(() => {
     playbackMocks.instances.length = 0;
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
     useProjectStore.getState().reset();
     vi.spyOn(performance, 'now').mockReturnValue(100);
   });

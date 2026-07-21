@@ -1,6 +1,46 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { PlaybackEngine, type PlaybackError } from '../lib/playbackEngine';
-import { calculateProjectDuration, useProjectStore } from '../store/useProjectStore';
+import {
+  calculateProjectDuration,
+  type TimelineTrack,
+  useProjectStore,
+} from '../store/useProjectStore';
+
+interface TrackMixSnapshot {
+  muted: boolean;
+  sourceUrl: string;
+  volume: number;
+}
+
+function snapshotTrackMix(tracks: TimelineTrack[]) {
+  return new Map<string, TrackMixSnapshot>(
+    tracks.map((track) => [
+      track.id,
+      { muted: track.muted, sourceUrl: track.sourceUrl, volume: track.volume },
+    ]),
+  );
+}
+
+function hasMeaningfulTrackMixChange(
+  previous: Map<string, TrackMixSnapshot>,
+  next: Map<string, TrackMixSnapshot>,
+) {
+  if (previous.size !== next.size) return true;
+
+  for (const [trackId, nextTrack] of next) {
+    const previousTrack = previous.get(trackId);
+    if (
+      !previousTrack ||
+      previousTrack.muted !== nextTrack.muted ||
+      previousTrack.volume !== nextTrack.volume ||
+      previousTrack.sourceUrl !== nextTrack.sourceUrl
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Manages the PlaybackEngine lifecycle and connects it to the Zustand store.
@@ -27,6 +67,7 @@ export function usePlaybackEngine() {
   const loopEnabledRef = useRef(loopEnabled);
   const playheadRef = useRef(playheadPosition);
   const videoRef = useRef(video);
+  const trackMixRef = useRef(snapshotTrackMix(tracks));
 
   useEffect(() => { playheadRef.current = playheadPosition; }, [playheadPosition]);
   useEffect(() => { videoRef.current = video; }, [video]);
@@ -131,6 +172,17 @@ export function usePlaybackEngine() {
       .seek(tracksRef.current, playheadPosition, duration, loopEnabledRef.current)
       .catch(handlePlaybackError);
   }, [playheadPosition, getEngine, handlePlaybackError]);
+
+  useEffect(() => {
+    const nextMix = snapshotTrackMix(tracks);
+    const mixChanged = hasMeaningfulTrackMixChange(trackMixRef.current, nextMix);
+    trackMixRef.current = nextMix;
+    if (!mixChanged) return;
+
+    const engine = getEngine();
+    const duration = calculateProjectDuration(tracks, videoRef.current);
+    void engine.updateTracks(tracks, duration).catch(handlePlaybackError);
+  }, [tracks, getEngine, handlePlaybackError]);
 
   // Preload buffers when tracks change
   useEffect(() => {

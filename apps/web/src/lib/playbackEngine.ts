@@ -26,11 +26,7 @@ interface PendingTrackStart {
 }
 
 export type PlaybackErrorCode =
-  | 'CONTEXT_FAILED'
-  | 'DECODE_FAILED'
-  | 'FETCH_FAILED'
-  | 'NODE_CLEANUP_FAILED'
-  | 'SCHEDULE_FAILED';
+  'CONTEXT_FAILED' | 'DECODE_FAILED' | 'FETCH_FAILED' | 'NODE_CLEANUP_FAILED' | 'SCHEDULE_FAILED';
 
 export class PlaybackError extends Error {
   readonly code: PlaybackErrorCode;
@@ -162,6 +158,13 @@ export class PlaybackEngine {
 
     try {
       const audioBuffer = await this.getContext().decodeAudioData(arrayBuffer);
+      if (this.destroyed) {
+        throw new PlaybackError(
+          'CONTEXT_FAILED',
+          'Playback engine was destroyed before audio decoding completed.',
+          { sourceUrl: url },
+        );
+      }
       this.bufferCache.set(url, audioBuffer);
       return audioBuffer;
     } catch (error) {
@@ -297,11 +300,10 @@ export class PlaybackEngine {
     source.buffer = buffer;
     gain.gain.value = track.volume;
     source.onended = () => {
-      try {
-        this.cleanupNode(node, false);
-      } catch (error) {
+      const failures = this.cleanupNode(node, false);
+      if (failures.length > 0) {
         this.reportInternalError(
-          this.toPlaybackError(error, 'NODE_CLEANUP_FAILED', 'Failed to release an ended audio node.'),
+          this.createCleanupError('Failed to release an ended audio node.', failures),
         );
       }
     };
@@ -312,14 +314,12 @@ export class PlaybackEngine {
       this.addActiveNode(node);
       source.start(schedule.when, schedule.offset, schedule.duration);
     } catch (error) {
-      try {
-        this.cleanupNode(node, true);
-      } catch (cleanupError) {
+      const failures = this.cleanupNode(node, true);
+      if (failures.length > 0) {
         this.reportInternalError(
-          this.toPlaybackError(
-            cleanupError,
-            'NODE_CLEANUP_FAILED',
+          this.createCleanupError(
             'Failed to roll back an audio node after scheduling failed.',
+            failures,
           ),
         );
       }
@@ -608,9 +608,41 @@ export class PlaybackEngine {
     const track = tracks.find((candidate) => candidate.id === trackId);
     if (!track) return;
 
-    const nodes = this.activeNodes.get(trackId);
-    if (!nodes) return;
+    this.currentTracks = [...tracks];
+    this.state.projectDuration = projectDuration;
 
+    if (!this.state.isPlaying && !this.state.isStarting) return;
+
+    const isRestartingLoop = this.loopRestartGeneration === this.operationGeneration;
+    if (this.state.isStarting || isRestartingLoop || topologyChanged) {
+      const currentPosition = isRestartingLoop
+        ? this.state.playheadPosition
+        : this.getCurrentPlayheadPosition();
+      await this.play(tracks, currentPosition, projectDuration, this.state.loopEnabled);
+      return;
+    }
+
+    const generation = this.operationGeneration;
+    const newlyAudible: Promise<void>[] = [];
+
+    for (const track of tracks) {
+      const previous = previousById.get(track.id);
+      if (!previous || (previous.volume === track.volume && previous.muted === track.muted)) {
+        continue;
+      }
+
+      const nodes = this.activeNodes.get(track.id);
+      if (nodes && nodes.length > 0) {
+        this.rampTrackNodes(nodes, track);
+      } else if (previous.muted && !track.muted && track.sourceUrl) {
+        newlyAudible.push(this.scheduleNewlyAudibleTrack(track, generation));
+      }
+    }
+
+    await Promise.all(newlyAudible);
+  }
+
+  private rampTrackNodes(nodes: ActivePlaybackNode[], track: TimelineTrack) {
     const now = this.getContext().currentTime;
     const targetVolume = track.muted ? 0 : track.volume;
     for (const { gain } of nodes) {
@@ -642,11 +674,7 @@ export class PlaybackEngine {
 
     const tick = () => {
       this.rafId = null;
-      if (
-        !this.isCurrentOperation(generation) ||
-        !this.state.isPlaying ||
-        !this.audioContext
-      ) {
+      if (!this.isCurrentOperation(generation) || !this.state.isPlaying || !this.audioContext) {
         return;
       }
 
@@ -765,8 +793,8 @@ export class PlaybackEngine {
     }
   }
 
-  private cleanupNode(node: ActivePlaybackNode, stopSource: boolean) {
-    if (node.cleanedUp) return;
+  private cleanupNode(node: ActivePlaybackNode, stopSource: boolean): NodeCleanupFailure[] {
+    if (node.cleanedUp) return [];
     node.cleanedUp = true;
     node.source.onended = null;
 
@@ -858,11 +886,7 @@ export class PlaybackEngine {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private toPlaybackError(
-    error: unknown,
-    code: PlaybackErrorCode,
-    message: string,
-  ): PlaybackError {
+  private toPlaybackError(error: unknown, code: PlaybackErrorCode, message: string): PlaybackError {
     return error instanceof PlaybackError
       ? error
       : new PlaybackError(code, `${message} ${this.describeError(error)}`, { cause: error });
@@ -885,6 +909,9 @@ export class PlaybackEngine {
   }
 
   destroy() {
+    if (this.destroyed) return;
+
+    const errorCallback = this.onPlaybackError;
     this.destroyed = true;
     this.operationGeneration++;
     this.loopRestartGeneration = null;

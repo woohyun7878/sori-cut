@@ -64,6 +64,7 @@ describe('Studio shell', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.clearAllMocks();
     storeState.originalAudio = null;
     storeState.stems = [];
     storeState.recordings = [];
@@ -132,6 +133,88 @@ describe('Studio shell', () => {
     ).toHaveStyle({
       transform: 'scale(1.25)',
     });
+  });
+
+  it('keeps project playback active when the shorter video ends naturally', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'Short video',
+      blob: new Blob(),
+      url: 'blob:video-1',
+      duration: 1,
+    };
+    storeState.playheadPosition = 1;
+    storeState.isPlaying = true;
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    const { rerender } = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const preview = document.querySelector('video');
+    expect(preview).not.toBeNull();
+    Object.defineProperty(preview, 'duration', { configurable: true, value: 1 });
+    Object.defineProperty(preview, 'ended', { configurable: true, value: true });
+
+    fireEvent.pause(preview as HTMLVideoElement);
+
+    expect(storeState.setIsPlaying).not.toHaveBeenCalledWith(false);
+
+    let currentTime = 1;
+    const setCurrentTime = vi.fn((value: number) => {
+      currentTime = value;
+    });
+    Object.defineProperty(preview, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: setCurrentTime,
+    });
+    storeState.playheadPosition = 2;
+    rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(setCurrentTime).not.toHaveBeenCalled();
+
+    play.mockClear();
+    storeState.setPlayheadPosition.mockClear();
+    storeState.playheadPosition = 0;
+    rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(setCurrentTime).toHaveBeenCalledWith(0);
+    expect(play).toHaveBeenCalledTimes(1);
+    fireEvent.seeked(preview as HTMLVideoElement);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
+  it('stops project playback for an explicit video pause', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'Video',
+      blob: new Blob(),
+      url: 'blob:video-1',
+      duration: 5,
+    };
+    storeState.isPlaying = true;
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const preview = document.querySelector('video');
+    expect(preview).not.toBeNull();
+    Object.defineProperty(preview, 'ended', { configurable: true, value: false });
+
+    fireEvent.pause(preview as HTMLVideoElement);
+
+    expect(storeState.setIsPlaying).toHaveBeenCalledWith(false);
   });
 
   it('exposes accessible desktop splitters and explicit pane collapse controls', () => {
