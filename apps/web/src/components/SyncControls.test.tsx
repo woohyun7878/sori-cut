@@ -53,6 +53,7 @@ describe('SyncControls offset application', () => {
   beforeEach(() => {
     mocks.computeAutoSyncOffset.mockReset();
     mocks.updateTrack.mockReset();
+    storeState.video = video;
     storeState.tracks = [selectedTrack];
   });
 
@@ -115,5 +116,43 @@ describe('SyncControls offset application', () => {
         syncOffset: -2,
       });
     });
+  });
+
+  it('discards an auto-sync result when the target URL was replaced', async () => {
+    let finishAnalysis!: (result: { offsetSeconds: number; confidence: number }) => void;
+    mocks.computeAutoSyncOffset.mockReturnValue(
+      new Promise((resolve) => {
+        finishAnalysis = resolve;
+      }),
+    );
+    render(<SyncControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto Sync' }));
+    storeState.tracks = [{ ...selectedTrack, sourceUrl: 'blob:replacement-track' }];
+    finishAnalysis({ offsetSeconds: 2, confidence: 0.9 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('target track changed');
+    });
+    expect(mocks.updateTrack).not.toHaveBeenCalled();
+  });
+
+  it('discards an auto-sync result when the video URL was replaced', async () => {
+    let finishAnalysis!: (result: { offsetSeconds: number; confidence: number }) => void;
+    mocks.computeAutoSyncOffset.mockReturnValue(
+      new Promise((resolve) => {
+        finishAnalysis = resolve;
+      }),
+    );
+    render(<SyncControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto Sync' }));
+    storeState.video = { ...video, url: 'blob:replacement-video' };
+    finishAnalysis({ offsetSeconds: 2, confidence: 0.9 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('video or target track changed');
+    });
+    expect(mocks.updateTrack).not.toHaveBeenCalled();
   });
 });

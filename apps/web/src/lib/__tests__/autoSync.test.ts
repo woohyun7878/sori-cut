@@ -361,7 +361,45 @@ describe('computeAutoSyncOffset', () => {
     } satisfies Partial<AutoSyncResourceLimitError>);
   });
 
-  it('cancels an unknown-length response stream before assembling oversized input', async () => {
+  it('accepts exact individual and aggregate boundaries through the declared-length path', async () => {
+    const referenceBuffer = {
+      byteLength: AUTO_SYNC_MAX_FILE_BYTES,
+    } as ArrayBuffer;
+    const targetBuffer = {
+      byteLength: AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES,
+    } as ArrayBuffer;
+    const arrayBufferCalls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const isTarget = url === 'blob:tar';
+        const encoded = isTarget ? targetBuffer : referenceBuffer;
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            'content-length': String(encoded.byteLength),
+          }),
+          body: {
+            getReader: () => {
+              throw new Error('Declared-length responses must not retain streamed chunks');
+            },
+          },
+          arrayBuffer: async () => {
+            arrayBufferCalls.push(url);
+            return encoded;
+          },
+        };
+      }),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).resolves.toMatchObject({
+      offsetSeconds: 0,
+    });
+    expect(arrayBufferCalls).toEqual(['blob:ref', 'blob:tar']);
+  });
+
+  it('conservatively rejects an unknown-length response before its final copy exceeds peak budget', async () => {
     const cancel = vi.fn(async () => {});
     const releaseLock = vi.fn();
     vi.stubGlobal(
@@ -376,7 +414,7 @@ describe('computeAutoSyncOffset', () => {
               .fn()
               .mockResolvedValueOnce({
                 done: false,
-                value: { byteLength: AUTO_SYNC_MAX_FILE_BYTES + 1 },
+                value: { byteLength: AUTO_SYNC_MAX_TOTAL_FILE_BYTES / 2 + 1 },
               }),
             cancel,
             releaseLock,
@@ -388,10 +426,90 @@ describe('computeAutoSyncOffset', () => {
 
     await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
       name: 'AutoSyncResourceLimitError',
-      code: 'individual-input',
+      code: 'aggregate-input',
     });
     expect(cancel).toHaveBeenCalledOnce();
     expect(releaseLock).toHaveBeenCalledOnce();
+  });
+
+  it('preserves AbortError when stream cancellation cleanup rejects', async () => {
+    const controller = new AbortController();
+    const cancelError = new Error('cancel failed');
+    const cancel = vi.fn(async () => {
+      throw cancelError;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body: {
+          getReader: () => ({
+            read: vi.fn(async () => {
+              controller.abort();
+              return { done: false, value: new Uint8Array(1) };
+            }),
+            cancel,
+            releaseLock: vi.fn(),
+          }),
+        },
+      })),
+    );
+
+    const error = await computeAutoSyncOffset('blob:ref', 'blob:tar', {
+      signal: controller.signal,
+    }).catch((caughtError: unknown) => caughtError);
+
+    expect(error).toMatchObject({
+      name: 'AbortError',
+      cleanupError: cancelError,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('cancels non-OK and oversized declared responses without replacing primary errors', async () => {
+    const nonOkCancel = vi.fn(async () => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        body: { cancel: nonOkCancel },
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'Failed to fetch reference audio: HTTP 503',
+    );
+    expect(nonOkCancel).toHaveBeenCalledOnce();
+
+    const cancelError = new Error('cleanup failed');
+    const oversizedCancel = vi.fn(async () => {
+      throw cancelError;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'content-length': String(AUTO_SYNC_MAX_FILE_BYTES + 1),
+        }),
+        body: { cancel: oversizedCancel },
+      })),
+    );
+
+    const error = await computeAutoSyncOffset('blob:ref', 'blob:tar').catch(
+      (caughtError: unknown) => caughtError,
+    );
+    expect(error).toMatchObject({
+      name: 'AutoSyncResourceLimitError',
+      code: 'individual-input',
+      cleanupError: cancelError,
+    });
+    expect(oversizedCancel).toHaveBeenCalledOnce();
   });
 
   it('does not fetch or decode the target after reference decoding fails', async () => {

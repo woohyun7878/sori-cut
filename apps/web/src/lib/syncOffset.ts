@@ -37,10 +37,11 @@ export function mapSignedSyncOffset(
     0,
     track.sourceStartOffset - Math.max(0, -previousOffset),
   );
+  const baseTimelineStart = Math.max(0, track.startOffset - Math.max(0, previousOffset));
   const syncOffset = clampSyncOffset(offsetSeconds);
 
   return {
-    startOffset: Math.max(0, syncOffset),
+    startOffset: baseTimelineStart + Math.max(0, syncOffset),
     sourceStartOffset: baseSourceStart + Math.max(0, -syncOffset),
     syncOffset,
   };

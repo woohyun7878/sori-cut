@@ -233,6 +233,7 @@ export function SyncControls() {
               }
 
               const referenceUrl = video.url;
+              const targetUrl = selectedTrack.sourceUrl;
               if (!referenceUrl) {
                 setMessage('No reference audio found.');
                 return;
@@ -242,7 +243,20 @@ export function SyncControls() {
               setMessage('Analyzing for auto sync...');
 
               try {
-                const result = await computeAutoSyncOffset(referenceUrl, selectedTrack.sourceUrl);
+                const result = await computeAutoSyncOffset(referenceUrl, targetUrl);
+                const latestState = useProjectStore.getState();
+                const latestTrack = latestState.tracks.find(
+                  (track) => track.id === selectedTrack.id,
+                );
+                if (
+                  latestState.video?.url !== referenceUrl ||
+                  latestTrack?.sourceUrl !== targetUrl
+                ) {
+                  setMessage(
+                    'Auto sync result discarded because the video or target track changed. Run auto sync again.',
+                  );
+                  return;
+                }
                 const computedOffset = clampSyncOffset(result.offsetSeconds);
                 const confidencePercent = Math.round(result.confidence * 100);
 

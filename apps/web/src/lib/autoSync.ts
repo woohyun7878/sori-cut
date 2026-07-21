@@ -108,6 +108,29 @@ function assertInputBudget(label: string, bytes: number, consumedBytes: number):
   }
 }
 
+function attachCleanupError(primaryError: unknown, cleanupError: unknown): void {
+  if (
+    (typeof primaryError === 'object' && primaryError !== null) ||
+    typeof primaryError === 'function'
+  ) {
+    Object.defineProperty(primaryError, 'cleanupError', {
+      configurable: true,
+      value: cleanupError,
+    });
+  }
+}
+
+async function cancelResponseBodyPreservingError(
+  response: Response,
+  primaryError: unknown,
+): Promise<void> {
+  try {
+    await response.body?.cancel(primaryError);
+  } catch (cleanupError) {
+    attachCleanupError(primaryError, cleanupError);
+  }
+}
+
 async function decodeToMono(
   url: string,
   label: string,
@@ -117,13 +140,22 @@ async function decodeToMono(
   throwIfAborted(signal);
   const response = await fetch(url, { signal });
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${label} audio: HTTP ${response.status}`);
+    const error = new Error(`Failed to fetch ${label} audio: HTTP ${response.status}`);
+    await cancelResponseBodyPreservingError(response, error);
+    throw error;
   }
   const contentLength = response.headers?.get('content-length');
+  let declaredBytes: number | undefined;
   if (contentLength !== null && contentLength !== undefined) {
-    const declaredBytes = Number(contentLength);
-    if (Number.isFinite(declaredBytes)) {
-      assertInputBudget(label, declaredBytes, consumedBytes);
+    const parsedBytes = Number(contentLength);
+    if (Number.isFinite(parsedBytes)) {
+      try {
+        assertInputBudget(label, parsedBytes, consumedBytes);
+        declaredBytes = parsedBytes;
+      } catch (error) {
+        await cancelResponseBodyPreservingError(response, error);
+        throw error;
+      }
     }
   }
 
@@ -132,6 +164,7 @@ async function decodeToMono(
     label,
     consumedBytes,
     signal,
+    declaredBytes,
   );
 
   const decodedBytes = decoded.length * decoded.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
@@ -200,8 +233,15 @@ async function decodeResponseAudio(
   label: string,
   consumedBytes: number,
   signal: AbortSignal | undefined,
+  declaredBytes: number | undefined,
 ): Promise<{ decoded: AudioBuffer; encodedBytes: number }> {
-  const encoded = await readResponseWithinBudget(response, label, consumedBytes, signal);
+  const encoded = await readResponseWithinBudget(
+    response,
+    label,
+    consumedBytes,
+    signal,
+    declaredBytes,
+  );
   const encodedBytes = encoded.byteLength;
   throwIfAborted(signal);
 
@@ -238,8 +278,9 @@ async function readResponseWithinBudget(
   label: string,
   consumedBytes: number,
   signal: AbortSignal | undefined,
+  declaredBytes: number | undefined,
 ): Promise<ArrayBuffer> {
-  if (!response.body) {
+  if (!response.body || declaredBytes !== undefined) {
     const encoded = await response.arrayBuffer();
     assertInputBudget(label, encoded.byteLength, consumedBytes);
     return encoded;
@@ -258,17 +299,19 @@ async function readResponseWithinBudget(
       }
       totalBytes += value.byteLength;
       assertInputBudget(label, totalBytes, consumedBytes);
+      if (consumedBytes + totalBytes * 2 > AUTO_SYNC_MAX_TOTAL_FILE_BYTES) {
+        throw new AutoSyncResourceLimitError(
+          'aggregate-input',
+          'Unknown-length auto-sync input exceeds the 96 MB peak memory budget. Use a smaller file or a server that provides Content-Length.',
+        );
+      }
       chunks.push(value);
     }
   } catch (error) {
     try {
       await reader.cancel(error);
     } catch (cancelError) {
-      throw new Error(
-        `Auto-sync failed while cancelling the ${label} download: ${
-          cancelError instanceof Error ? cancelError.message : 'unknown cancellation error'
-        }`,
-      );
+      attachCleanupError(error, cancelError);
     }
     throw error;
   } finally {

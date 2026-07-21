@@ -36,7 +36,7 @@ describe('mapSignedSyncOffset', () => {
     });
   });
 
-  it('replaces rather than accumulates a repeated application', () => {
+  it('replaces rather than accumulates a repeated source-advance application', () => {
     const first = mapSignedSyncOffset(track({ sourceStartOffset: 1.25 }), -3);
     const second = mapSignedSyncOffset(first, -3);
 
@@ -45,6 +45,38 @@ describe('mapSignedSyncOffset', () => {
       startOffset: 4,
       sourceStartOffset: 1.25,
       syncOffset: 4,
+    });
+  });
+
+  it('preserves a timeline trim made after positive sync for repeated and new values', () => {
+    const first = mapSignedSyncOffset(track({ startOffset: 2 }), 3);
+    const trimmed = { ...first, startOffset: 7 };
+
+    expect(first.startOffset).toBe(5);
+    expect(mapSignedSyncOffset(trimmed, 3)).toEqual(trimmed);
+    expect(mapSignedSyncOffset(trimmed, 1)).toEqual({
+      startOffset: 5,
+      sourceStartOffset: 0,
+      syncOffset: 1,
+    });
+  });
+
+  it('preserves split-like timeline and source deltas across same and new sync values', () => {
+    const first = mapSignedSyncOffset(
+      track({ sourceStartOffset: 1, startOffset: 4 }),
+      -2,
+    );
+    const splitTrack = {
+      ...first,
+      startOffset: first.startOffset + 5,
+      sourceStartOffset: first.sourceStartOffset + 5,
+    };
+
+    expect(mapSignedSyncOffset(splitTrack, -2)).toEqual(splitTrack);
+    expect(mapSignedSyncOffset(splitTrack, 3)).toEqual({
+      startOffset: 12,
+      sourceStartOffset: 6,
+      syncOffset: 3,
     });
   });
 
