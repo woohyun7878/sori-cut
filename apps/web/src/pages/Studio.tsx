@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
 import { ProjectManager } from '../components/ProjectManager';
@@ -31,6 +31,15 @@ const studioTools: {
   { id: 'record', label: 'Record', icon: 'record' },
   { id: 'sync', label: 'Sync', icon: 'sync' },
 ];
+
+const videoSeekKeys: ReadonlySet<string> = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+]);
 
 function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: string }) {
   const paths: Record<string, React.ReactNode> = {
@@ -207,37 +216,136 @@ function SyncSummary() {
 
 function PreviewWorkspace() {
   const video = useProjectStore((state) => state.video);
+  const videoIdentity = video ? `${video.id}:${video.url}` : null;
   const videoRef = useRef<HTMLVideoElement>(null);
-  const staleVideoSeekTargetRef = useRef<number | null>(null);
+  const previousVideoIdentityRef = useRef(videoIdentity);
+  const sourceGenerationRef = useRef(0);
+  const nextProgrammaticSeekOperationRef = useRef(0);
+  const nextUserSeekInteractionRef = useRef(0);
+  const observedProgrammaticSeekRef = useRef<{
+    sourceGeneration: number;
+    operationGeneration: number;
+  } | null>(null);
+  const retiredVideoSeeksRef = useRef<
+    { sourceGeneration: number; operationGeneration: number; target: number }[]
+  >([]);
+  const userVideoSeekRef = useRef<{
+    sourceGeneration: number;
+    interactionGeneration: number;
+    target: number | null;
+  } | null>(null);
   const pendingVideoSeekRef = useRef<{
+    sourceGeneration: number;
+    operationGeneration: number;
     target: number;
     queuedTarget: number | null;
+    queuedForceAssignment: boolean;
+    queuedResumeAfterAssignment: boolean;
   } | null>(null);
+  const [sourceGeneration, setSourceGeneration] = useState(0);
   const playheadPosition = useProjectStore((state) => state.playheadPosition);
   const isPlaying = useProjectStore((state) => state.isPlaying);
   const setIsPlaying = useProjectStore((state) => state.setIsPlaying);
   const setPlayheadPosition = useProjectStore((state) => state.setPlayheadPosition);
+  const playbackTargetRef = useRef({ playheadPosition, duration: video?.duration });
+  playbackTargetRef.current = { playheadPosition, duration: video?.duration };
   const [safeAreaVisible, setSafeAreaVisible] = useState(true);
   const [previewZoom, setPreviewZoom] = useState(1);
 
   const seekVideoProgrammatically = useCallback(
-    (player: HTMLVideoElement, target: number) => {
+    (
+      player: HTMLVideoElement,
+      target: number,
+      sourceGeneration: number,
+      forceAssignment = false,
+      resumeAfterAssignment = false,
+    ) => {
       const pending = pendingVideoSeekRef.current;
-      if (pending) {
-        if (Math.abs(pending.target - target) > 0.01) {
-          pending.queuedTarget = target;
-        }
-        return;
+      if (pending?.sourceGeneration === sourceGeneration) {
+        const targetChanged = forceAssignment
+          ? pending.target !== target
+          : Math.abs(pending.target - target) > 0.01;
+        pending.queuedTarget = targetChanged ? target : null;
+        pending.queuedForceAssignment = targetChanged && forceAssignment;
+        pending.queuedResumeAfterAssignment = targetChanged && resumeAfterAssignment;
+        return false;
       }
-      if (Math.abs(player.currentTime - target) <= 0.01) return;
+      if (!forceAssignment && Math.abs(player.currentTime - target) <= 0.01) return false;
 
-      pendingVideoSeekRef.current = { target, queuedTarget: null };
+      const operationGeneration = nextProgrammaticSeekOperationRef.current + 1;
+      nextProgrammaticSeekOperationRef.current = operationGeneration;
+      pendingVideoSeekRef.current = {
+        sourceGeneration,
+        operationGeneration,
+        target,
+        queuedTarget: null,
+        queuedForceAssignment: false,
+        queuedResumeAfterAssignment: false,
+      };
       player.currentTime = target;
+      return true;
     },
     [],
   );
 
+  const retireVideoSeek = useCallback(
+    (seek: {
+      sourceGeneration: number;
+      operationGeneration: number;
+      target: number;
+    }) => {
+      retiredVideoSeeksRef.current.push(seek);
+      if (retiredVideoSeeksRef.current.length > 8) {
+        retiredVideoSeeksRef.current.shift();
+      }
+    },
+    [],
+  );
+
+  const beginNativeVideoSeek = useCallback((sourceGeneration: number) => {
+    if (sourceGenerationRef.current !== sourceGeneration) return;
+
+    const interactionGeneration = nextUserSeekInteractionRef.current + 1;
+    nextUserSeekInteractionRef.current = interactionGeneration;
+    userVideoSeekRef.current = {
+      sourceGeneration,
+      interactionGeneration,
+      target: null,
+    };
+  }, []);
+
+  const playVideo = useCallback(
+    (player: HTMLVideoElement, sourceGeneration: number) => {
+      void player.play().catch(() => {
+        if (
+          sourceGenerationRef.current === sourceGeneration &&
+          videoRef.current === player
+        ) {
+          setIsPlaying(false);
+        }
+      });
+    },
+    [setIsPlaying],
+  );
+
+  useLayoutEffect(() => {
+    if (previousVideoIdentityRef.current === videoIdentity) return;
+
+    previousVideoIdentityRef.current = videoIdentity;
+    const nextGeneration = sourceGenerationRef.current + 1;
+    sourceGenerationRef.current = nextGeneration;
+    nextProgrammaticSeekOperationRef.current = 0;
+    nextUserSeekInteractionRef.current = 0;
+    observedProgrammaticSeekRef.current = null;
+    pendingVideoSeekRef.current = null;
+    retiredVideoSeeksRef.current = [];
+    userVideoSeekRef.current = null;
+    setSourceGeneration(nextGeneration);
+  }, [videoIdentity]);
+
   useEffect(() => {
+    if (sourceGenerationRef.current !== sourceGeneration) return;
+
     const player = videoRef.current;
     if (!player) return;
 
@@ -245,36 +353,53 @@ function PreviewWorkspace() {
       ? player.duration
       : (video?.duration ?? playheadPosition);
     const target = Math.min(playheadPosition, mediaDuration);
-    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration - 0.01;
+    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration;
     if (shouldResumeFromEnd) {
-      seekVideoProgrammatically(player, target);
-      void player.play().catch(() => setIsPlaying(false));
+      const assignmentStarted = seekVideoProgrammatically(
+        player,
+        target,
+        sourceGeneration,
+        true,
+        true,
+      );
+      if (assignmentStarted) playVideo(player, sourceGeneration);
       return;
     }
 
-    if (Math.abs(player.currentTime - target) > 0.35) {
-      seekVideoProgrammatically(player, target);
+    if (pendingVideoSeekRef.current || Math.abs(player.currentTime - target) > 0.35) {
+      seekVideoProgrammatically(player, target, sourceGeneration);
     }
   }, [
     isPlaying,
     playheadPosition,
+    playVideo,
     seekVideoProgrammatically,
     setIsPlaying,
+    sourceGeneration,
     video?.duration,
   ]);
 
   useEffect(() => {
+    if (sourceGenerationRef.current !== sourceGeneration) return;
+
     const player = videoRef.current;
     if (!player) {
       return;
     }
 
     if (isPlaying) {
-      void player.play().catch(() => setIsPlaying(false));
+      const { playheadPosition: projectTarget, duration: fallbackDuration } =
+        playbackTargetRef.current;
+      const mediaDuration = Number.isFinite(player.duration)
+        ? player.duration
+        : (fallbackDuration ?? projectTarget);
+      if (Number.isFinite(mediaDuration) && projectTarget >= mediaDuration) return;
+      if (player.ended) return;
+      playVideo(player, sourceGeneration);
     } else {
       player.pause();
     }
-  }, [isPlaying, setIsPlaying]);
+  }, [isPlaying, playVideo, sourceGeneration]);
 
   return (
     <section className="studio-preview" aria-label="Preview workspace">
@@ -319,44 +444,154 @@ function PreviewWorkspace() {
         <div className="studio-device-frame" style={{ transform: `scale(${previewZoom})` }}>
           {video ? (
             <video
+              key={videoIdentity}
               ref={videoRef}
               className="h-full w-full bg-black object-contain"
               src={video.url}
               muted
               playsInline
+              tabIndex={0}
+              aria-label="Video preview"
+              onPointerDown={() => beginNativeVideoSeek(sourceGeneration)}
+              onTouchStart={() => beginNativeVideoSeek(sourceGeneration)}
+              onKeyDown={(event) => {
+                if (
+                  !event.altKey &&
+                  !event.ctrlKey &&
+                  !event.metaKey &&
+                  !event.shiftKey &&
+                  videoSeekKeys.has(event.key)
+                ) {
+                  beginNativeVideoSeek(sourceGeneration);
+                }
+              }}
               onPlay={() => setIsPlaying(true)}
               onPause={(event) => {
                 if (!event.currentTarget.ended) setIsPlaying(false);
               }}
-              onSeeked={(event) => {
+              onSeeking={(event) => {
+                if (sourceGenerationRef.current !== sourceGeneration) return;
+
                 const player = event.currentTarget;
                 const pending = pendingVideoSeekRef.current;
-                if (pending && Math.abs(player.currentTime - pending.target) <= 0.05) {
-                  const queuedTarget = pending.queuedTarget;
-                  pendingVideoSeekRef.current = null;
-                  staleVideoSeekTargetRef.current = null;
-                  if (
-                    queuedTarget !== null &&
-                    Math.abs(player.currentTime - queuedTarget) > 0.01
-                  ) {
-                    seekVideoProgrammatically(player, queuedTarget);
+                const userSeek = userVideoSeekRef.current;
+                if (userSeek?.sourceGeneration === sourceGeneration) {
+                  if (pending?.sourceGeneration === sourceGeneration) {
+                    retireVideoSeek(pending);
+                    pendingVideoSeekRef.current = null;
                   }
+                  observedProgrammaticSeekRef.current = null;
+                  userSeek.target = player.currentTime;
                   return;
                 }
 
-                if (pending) {
-                  staleVideoSeekTargetRef.current = pending.target;
-                  pendingVideoSeekRef.current = null;
+                if (
+                  pending?.sourceGeneration === sourceGeneration &&
+                  Math.abs(player.currentTime - pending.target) <= 0.05
+                ) {
+                  observedProgrammaticSeekRef.current = {
+                    sourceGeneration,
+                    operationGeneration: pending.operationGeneration,
+                  };
+                  userVideoSeekRef.current = null;
+                  return;
+                }
+
+                const isRetiredProgrammaticTarget = retiredVideoSeeksRef.current.some(
+                  (seek) =>
+                    seek.sourceGeneration === sourceGeneration &&
+                    Math.abs(player.currentTime - seek.target) <= 0.05,
+                );
+                if (isRetiredProgrammaticTarget) return;
+
+                if (pending?.sourceGeneration === sourceGeneration) {
+                  retireVideoSeek(pending);
+                }
+                pendingVideoSeekRef.current = null;
+                observedProgrammaticSeekRef.current = null;
+                const interactionGeneration = nextUserSeekInteractionRef.current + 1;
+                nextUserSeekInteractionRef.current = interactionGeneration;
+                userVideoSeekRef.current = {
+                  sourceGeneration,
+                  interactionGeneration,
+                  target: player.currentTime,
+                };
+              }}
+              onSeeked={(event) => {
+                if (sourceGenerationRef.current !== sourceGeneration) return;
+
+                const player = event.currentTarget;
+                const pending = pendingVideoSeekRef.current;
+                const userSeek = userVideoSeekRef.current;
+                const observedProgrammaticSeek = observedProgrammaticSeekRef.current;
+                if (
+                  userSeek?.sourceGeneration === sourceGeneration &&
+                  userSeek.target !== null &&
+                  Math.abs(player.currentTime - userSeek.target) <= 0.05
+                ) {
+                  userVideoSeekRef.current = null;
+                  if (pending?.sourceGeneration === sourceGeneration) {
+                    retireVideoSeek(pending);
+                    pendingVideoSeekRef.current = null;
+                  }
+                  observedProgrammaticSeekRef.current = null;
                   setPlayheadPosition(player.currentTime);
                   return;
                 }
 
-                const staleTarget = staleVideoSeekTargetRef.current;
-                staleVideoSeekTargetRef.current = null;
                 if (
-                  staleTarget !== null &&
-                  Math.abs(player.currentTime - staleTarget) <= 0.05
+                  pending?.sourceGeneration === sourceGeneration &&
+                  observedProgrammaticSeek?.sourceGeneration === sourceGeneration &&
+                  observedProgrammaticSeek.operationGeneration ===
+                    pending.operationGeneration &&
+                  Math.abs(player.currentTime - pending.target) <= 0.05
                 ) {
+                  const queuedTarget = pending.queuedTarget;
+                  const queuedForceAssignment = pending.queuedForceAssignment;
+                  const queuedResumeAfterAssignment = pending.queuedResumeAfterAssignment;
+                  pendingVideoSeekRef.current = null;
+                  observedProgrammaticSeekRef.current = null;
+                  retireVideoSeek({
+                    sourceGeneration,
+                    operationGeneration: pending.operationGeneration,
+                    target: pending.target,
+                  });
+                  if (
+                    queuedTarget !== null &&
+                    (queuedForceAssignment ||
+                      Math.abs(player.currentTime - queuedTarget) > 0.01)
+                  ) {
+                    const assignmentStarted = seekVideoProgrammatically(
+                      player,
+                      queuedTarget,
+                      sourceGeneration,
+                      queuedForceAssignment,
+                    );
+                    if (assignmentStarted && queuedResumeAfterAssignment) {
+                      playVideo(player, sourceGeneration);
+                    }
+                  }
+                  return;
+                }
+
+                const retiredSeekIndex = retiredVideoSeeksRef.current.findIndex(
+                  (seek) =>
+                    seek.sourceGeneration === sourceGeneration &&
+                    Math.abs(player.currentTime - seek.target) <= 0.05,
+                );
+                if (retiredSeekIndex >= 0) {
+                  return;
+                }
+
+                if (pending?.sourceGeneration === sourceGeneration) {
+                  retireVideoSeek({
+                    sourceGeneration,
+                    operationGeneration: pending.operationGeneration,
+                    target: pending.target,
+                  });
+                  pendingVideoSeekRef.current = null;
+                  observedProgrammaticSeekRef.current = null;
+                  setPlayheadPosition(player.currentTime);
                   return;
                 }
 
