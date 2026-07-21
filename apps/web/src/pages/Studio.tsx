@@ -21,6 +21,35 @@ import { formatTimelineTime } from '../components/timelineHelpers';
 
 type StudioTool = 'media' | 'audio' | 'record' | 'sync';
 
+type ProgrammaticVideoSeek = {
+  sourceGeneration: number;
+  operationGeneration: number;
+  target: number;
+  queuedTarget: {
+    target: number;
+    force: boolean;
+  } | null;
+};
+
+type VideoSeekOwnership =
+  | {
+      kind: 'programmatic';
+      sourceGeneration: number;
+      operationGeneration: number;
+      target: number;
+    }
+  | {
+      kind: 'user';
+      sourceGeneration: number;
+      operationGeneration: number;
+      target: number;
+    };
+
+const videoSeekKeys = new Set(['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+const videoSeekAssignmentTolerance = 0.01;
+const videoSeekEventTolerance = 0.05;
+const maxRetiredVideoSeeks = 32;
+
 const studioTools: {
   id: StudioTool;
   label: string;
@@ -211,11 +240,18 @@ function PreviewWorkspace() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const activeVideoIdentityRef = useRef(videoIdentity);
   const previousVideoIdentityRef = useRef(videoIdentity);
-  const staleVideoSeekTargetRef = useRef<number | null>(null);
-  const pendingVideoSeekRef = useRef<{
-    target: number;
-    queuedTarget: number | null;
+  const sourceGenerationRef = useRef(0);
+  const sourceNeedsSyncRef = useRef(true);
+  const operationGenerationRef = useRef(0);
+  const activeProgrammaticSeekRef = useRef<ProgrammaticVideoSeek | null>(null);
+  const retiredProgrammaticSeeksRef = useRef<ProgrammaticVideoSeek[]>([]);
+  const userSeekIntentRef = useRef<{
+    sourceGeneration: number;
+    operationGeneration: number;
   } | null>(null);
+  const userSeekIntentReleaseTimerRef = useRef<number | null>(null);
+  const nativeSeekOwnershipRef = useRef<VideoSeekOwnership | null>(null);
+  const completedUserSeekRef = useRef<VideoSeekOwnership | null>(null);
   const playheadPosition = useProjectStore((state) => state.playheadPosition);
   const isPlaying = useProjectStore((state) => state.isPlaying);
   const setIsPlaying = useProjectStore((state) => state.setIsPlaying);
@@ -223,46 +259,151 @@ function PreviewWorkspace() {
   const [safeAreaVisible, setSafeAreaVisible] = useState(true);
   const [previewZoom, setPreviewZoom] = useState(1);
 
+  const retireProgrammaticSeek = useCallback((seek: ProgrammaticVideoSeek) => {
+    const retiredSeeks = retiredProgrammaticSeeksRef.current;
+    if (
+      retiredSeeks.some(
+        (retiredSeek) =>
+          retiredSeek.sourceGeneration === seek.sourceGeneration &&
+          retiredSeek.operationGeneration === seek.operationGeneration,
+      )
+    ) {
+      return;
+    }
+
+    retiredSeeks.push({ ...seek, queuedTarget: null });
+    if (retiredSeeks.length > maxRetiredVideoSeeks) {
+      retiredSeeks.splice(0, retiredSeeks.length - maxRetiredVideoSeeks);
+    }
+  }, []);
+
+  const findRetiredProgrammaticSeek = useCallback(
+    (sourceGeneration: number, target: number) => {
+      const retiredSeeks = retiredProgrammaticSeeksRef.current;
+      for (let index = retiredSeeks.length - 1; index >= 0; index -= 1) {
+        const seek = retiredSeeks[index];
+        if (
+          seek.sourceGeneration === sourceGeneration &&
+          Math.abs(seek.target - target) <= videoSeekEventTolerance
+        ) {
+          return seek;
+        }
+      }
+      return null;
+    },
+    [],
+  );
+
   const seekVideoProgrammatically = useCallback(
-    (player: HTMLVideoElement, target: number) => {
-      const pending = pendingVideoSeekRef.current;
-      if (pending) {
-        pending.queuedTarget = Math.abs(pending.target - target) > 0.01 ? target : null;
+    (player: HTMLVideoElement, target: number, force = false) => {
+      const activeSeek = activeProgrammaticSeekRef.current;
+      if (activeSeek) {
+        activeSeek.queuedTarget =
+          activeSeek.target === target ? null : { target, force };
         return;
       }
-      if (Math.abs(player.currentTime - target) <= 0.01) return;
+      if (!force && Math.abs(player.currentTime - target) <= videoSeekAssignmentTolerance) return;
 
-      pendingVideoSeekRef.current = { target, queuedTarget: null };
+      activeProgrammaticSeekRef.current = {
+        sourceGeneration: sourceGenerationRef.current,
+        operationGeneration: ++operationGenerationRef.current,
+        target,
+        queuedTarget: null,
+      };
+      nativeSeekOwnershipRef.current = null;
       player.currentTime = target;
     },
     [],
   );
+
+  const cancelUserSeekIntentRelease = useCallback(() => {
+    if (userSeekIntentReleaseTimerRef.current !== null) {
+      window.clearTimeout(userSeekIntentReleaseTimerRef.current);
+      userSeekIntentReleaseTimerRef.current = null;
+    }
+  }, []);
+
+  const markUserSeekIntent = useCallback(() => {
+    cancelUserSeekIntentRelease();
+    userSeekIntentRef.current = {
+      sourceGeneration: sourceGenerationRef.current,
+      operationGeneration: ++operationGenerationRef.current,
+    };
+  }, [cancelUserSeekIntentRelease]);
+
+  const releaseUnclaimedUserSeekIntent = useCallback((player: HTMLVideoElement) => {
+    cancelUserSeekIntentRelease();
+    const intent = userSeekIntentRef.current;
+    if (!intent) return;
+    if (!player.seeking) {
+      userSeekIntentRef.current = null;
+      return;
+    }
+
+    userSeekIntentReleaseTimerRef.current = window.setTimeout(() => {
+      if (
+        userSeekIntentRef.current?.sourceGeneration === intent.sourceGeneration &&
+        userSeekIntentRef.current.operationGeneration === intent.operationGeneration &&
+        nativeSeekOwnershipRef.current?.kind !== 'user'
+      ) {
+        userSeekIntentRef.current = null;
+      }
+      userSeekIntentReleaseTimerRef.current = null;
+    }, 250);
+  }, [cancelUserSeekIntentRelease]);
 
   useLayoutEffect(() => {
     activeVideoIdentityRef.current = videoIdentity;
     if (previousVideoIdentityRef.current === videoIdentity) return;
 
     previousVideoIdentityRef.current = videoIdentity;
-    pendingVideoSeekRef.current = null;
-    staleVideoSeekTargetRef.current = null;
-  }, [videoIdentity]);
+    sourceGenerationRef.current += 1;
+    sourceNeedsSyncRef.current = true;
+    activeProgrammaticSeekRef.current = null;
+    retiredProgrammaticSeeksRef.current = [];
+    cancelUserSeekIntentRelease();
+    userSeekIntentRef.current = null;
+    nativeSeekOwnershipRef.current = null;
+    completedUserSeekRef.current = null;
+  }, [cancelUserSeekIntentRelease, videoIdentity]);
+
+  useEffect(() => cancelUserSeekIntentRelease, [cancelUserSeekIntentRelease]);
 
   useEffect(() => {
     const player = videoRef.current;
     if (!player) return;
 
+    const sourceGeneration = sourceGenerationRef.current;
+    const nativeOwnership = nativeSeekOwnershipRef.current;
+    if (
+      nativeOwnership?.kind === 'user' &&
+      nativeOwnership.sourceGeneration === sourceGeneration
+    ) {
+      return;
+    }
+
     const mediaDuration = Number.isFinite(player.duration)
       ? player.duration
       : (video?.duration ?? playheadPosition);
     const target = Math.min(playheadPosition, mediaDuration);
-    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration - 0.01;
+    const shouldResumeFromEnd =
+      player.ended && isPlaying && Number.isFinite(target) && target < mediaDuration;
     if (shouldResumeFromEnd) {
-      seekVideoProgrammatically(player, target);
+      sourceNeedsSyncRef.current = false;
+      seekVideoProgrammatically(player, target, true);
       void player.play().catch(() => setIsPlaying(false));
       return;
     }
 
-    if (pendingVideoSeekRef.current || Math.abs(player.currentTime - target) > 0.35) {
+    if (sourceNeedsSyncRef.current) {
+      sourceNeedsSyncRef.current = false;
+      if (player.currentTime !== target) {
+        seekVideoProgrammatically(player, target, true);
+      }
+      return;
+    }
+
+    if (activeProgrammaticSeekRef.current || Math.abs(player.currentTime - target) > 0.35) {
       seekVideoProgrammatically(player, target);
     }
   }, [
@@ -337,45 +478,164 @@ function PreviewWorkspace() {
               src={video.url}
               muted
               playsInline
+              onPointerDown={markUserSeekIntent}
+              onPointerUp={(event) => releaseUnclaimedUserSeekIntent(event.currentTarget)}
+              onPointerCancel={(event) => releaseUnclaimedUserSeekIntent(event.currentTarget)}
+              onTouchStart={markUserSeekIntent}
+              onTouchEnd={(event) => releaseUnclaimedUserSeekIntent(event.currentTarget)}
+              onTouchCancel={(event) => releaseUnclaimedUserSeekIntent(event.currentTarget)}
+              onKeyDown={(event) => {
+                if (videoSeekKeys.has(event.key)) markUserSeekIntent();
+              }}
+              onKeyUp={(event) => {
+                if (videoSeekKeys.has(event.key)) {
+                  releaseUnclaimedUserSeekIntent(event.currentTarget);
+                }
+              }}
               onPlay={() => setIsPlaying(true)}
               onPause={(event) => {
                 if (!event.currentTarget.ended) setIsPlaying(false);
+              }}
+              onSeeking={(event) => {
+                if (activeVideoIdentityRef.current !== videoIdentity) return;
+
+                const player = event.currentTarget;
+                const sourceGeneration = sourceGenerationRef.current;
+                const userIntent = userSeekIntentRef.current;
+                if (userIntent?.sourceGeneration === sourceGeneration) {
+                  cancelUserSeekIntentRelease();
+                  const activeSeek = activeProgrammaticSeekRef.current;
+                  if (activeSeek?.sourceGeneration === sourceGeneration) {
+                    retireProgrammaticSeek(activeSeek);
+                    activeProgrammaticSeekRef.current = null;
+                  }
+                  nativeSeekOwnershipRef.current = {
+                    kind: 'user',
+                    sourceGeneration,
+                    operationGeneration: userIntent.operationGeneration,
+                    target: player.currentTime,
+                  };
+                  return;
+                }
+
+                const currentOwnership = nativeSeekOwnershipRef.current;
+                if (
+                  currentOwnership?.kind === 'user' &&
+                  currentOwnership.sourceGeneration === sourceGeneration
+                ) {
+                  currentOwnership.target = player.currentTime;
+                  return;
+                }
+
+                const activeSeek = activeProgrammaticSeekRef.current;
+                if (
+                  activeSeek?.sourceGeneration === sourceGeneration &&
+                  Math.abs(player.currentTime - activeSeek.target) <= videoSeekEventTolerance
+                ) {
+                  nativeSeekOwnershipRef.current = {
+                    kind: 'programmatic',
+                    sourceGeneration,
+                    operationGeneration: activeSeek.operationGeneration,
+                    target: activeSeek.target,
+                  };
+                  return;
+                }
+
+                const retiredSeek = findRetiredProgrammaticSeek(
+                  sourceGeneration,
+                  player.currentTime,
+                );
+                nativeSeekOwnershipRef.current = retiredSeek
+                  ? {
+                      kind: 'programmatic',
+                      sourceGeneration,
+                      operationGeneration: retiredSeek.operationGeneration,
+                      target: retiredSeek.target,
+                    }
+                  : null;
               }}
               onSeeked={(event) => {
                 if (activeVideoIdentityRef.current !== videoIdentity) return;
 
                 const player = event.currentTarget;
-                const pending = pendingVideoSeekRef.current;
-                if (pending && Math.abs(player.currentTime - pending.target) <= 0.05) {
-                  const queuedTarget = pending.queuedTarget;
-                  pendingVideoSeekRef.current = null;
-                  staleVideoSeekTargetRef.current = null;
-                  if (
-                    queuedTarget !== null &&
-                    Math.abs(player.currentTime - queuedTarget) > 0.01
-                  ) {
-                    seekVideoProgrammatically(player, queuedTarget);
-                  }
-                  return;
-                }
-
-                if (pending) {
-                  staleVideoSeekTargetRef.current = pending.target;
-                  pendingVideoSeekRef.current = null;
+                const sourceGeneration = sourceGenerationRef.current;
+                const ownership = nativeSeekOwnershipRef.current;
+                if (
+                  ownership?.kind === 'user' &&
+                  ownership.sourceGeneration === sourceGeneration
+                ) {
+                  nativeSeekOwnershipRef.current = null;
+                  cancelUserSeekIntentRelease();
+                  userSeekIntentRef.current = null;
+                  completedUserSeekRef.current = { ...ownership, target: player.currentTime };
                   setPlayheadPosition(player.currentTime);
                   return;
                 }
 
-                const staleTarget = staleVideoSeekTargetRef.current;
-                staleVideoSeekTargetRef.current = null;
+                const userIntent = userSeekIntentRef.current;
+                if (userIntent?.sourceGeneration === sourceGeneration) {
+                  const activeSeek = activeProgrammaticSeekRef.current;
+                  if (activeSeek?.sourceGeneration === sourceGeneration) {
+                    retireProgrammaticSeek(activeSeek);
+                    activeProgrammaticSeekRef.current = null;
+                  }
+                  nativeSeekOwnershipRef.current = null;
+                  cancelUserSeekIntentRelease();
+                  userSeekIntentRef.current = null;
+                  completedUserSeekRef.current = {
+                    kind: 'user',
+                    sourceGeneration,
+                    operationGeneration: userIntent.operationGeneration,
+                    target: player.currentTime,
+                  };
+                  setPlayheadPosition(player.currentTime);
+                  return;
+                }
+
                 if (
-                  staleTarget !== null &&
-                  Math.abs(player.currentTime - staleTarget) <= 0.05
+                  ownership?.kind === 'programmatic' &&
+                  ownership.sourceGeneration === sourceGeneration
+                ) {
+                  nativeSeekOwnershipRef.current = null;
+                  const activeSeek = activeProgrammaticSeekRef.current;
+                  if (
+                    activeSeek?.sourceGeneration === sourceGeneration &&
+                    activeSeek.operationGeneration === ownership.operationGeneration &&
+                    Math.abs(player.currentTime - activeSeek.target) <=
+                      videoSeekEventTolerance
+                  ) {
+                    const queuedTarget = activeSeek.queuedTarget;
+                    retireProgrammaticSeek(activeSeek);
+                    activeProgrammaticSeekRef.current = null;
+                    if (
+                      queuedTarget &&
+                      (queuedTarget.force ||
+                        Math.abs(player.currentTime - queuedTarget.target) >
+                          videoSeekAssignmentTolerance)
+                    ) {
+                      seekVideoProgrammatically(
+                        player,
+                        queuedTarget.target,
+                        queuedTarget.force,
+                      );
+                    }
+                  }
+                  return;
+                }
+
+                if (findRetiredProgrammaticSeek(sourceGeneration, player.currentTime)) return;
+
+                const completedUserSeek = completedUserSeekRef.current;
+                if (
+                  completedUserSeek?.sourceGeneration === sourceGeneration &&
+                  Math.abs(player.currentTime - completedUserSeek.target) <=
+                    videoSeekEventTolerance
                 ) {
                   return;
                 }
 
-                pendingVideoSeekRef.current = null;
+                if (activeProgrammaticSeekRef.current?.sourceGeneration === sourceGeneration) return;
+
                 setPlayheadPosition(player.currentTime);
               }}
             />
