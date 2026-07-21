@@ -45,9 +45,9 @@ importers:
       '@ffmpeg/util':
         specifier: ^0.12.1
         version: 0.12.2
-      music-metadata:
-        specifier: ^11.14.0
-        version: 11.14.0
+      mediainfo.js:
+        specifier: ^0.2.1
+        version: 0.2.1
       onnxruntime-web:
         specifier: ^1.18.0
         version: 1.27.0
@@ -209,49 +209,64 @@ packages:
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
 
-  '@borewit/text-codec@0.2.2':
-    resolution: {integrity: sha1-dQJfc1wJg7OocWaIBKVzh+Nkk3U=}
+  ansi-styles@4.3.0:
+    resolution: {integrity: sha1-7dgDYornHATIWuegkG7a00tkiTc=}
+    engines: {node: '>=8'}
 
-  '@tokenizer/inflate@0.4.1':
-    resolution: {integrity: sha1-+mzbg2YVGzzIQmv5dVweoDovugg=}
-    engines: {node: '>=18'}
+  cliui@8.0.1:
+    resolution: {integrity: sha1-DASwddsCy/5g3I5s8vVIaxo2CKo=}
+    engines: {node: '>=12'}
 
-  '@tokenizer/token@0.3.0':
-    resolution: {integrity: sha1-/pipP+eJJH6ZjHXnTpx8YyF6onY=}
+  color-convert@2.0.1:
+    resolution: {integrity: sha1-ctOmjVmMm9s68q0ehPIdiWq9TeM=}
+    engines: {node: '>=7.0.0'}
 
-  content-type@2.0.0:
-    resolution: {integrity: sha1-L7Pt5p3/oK94ynxM51iWgGOLVt8=}
-    engines: {node: '>=18'}
+  color-name@1.1.4:
+    resolution: {integrity: sha1-wqCah6y95pVD3m9j+jmVyCbFNqI=}
 
-  file-type@21.3.4:
-    resolution: {integrity: sha1-4/kC+u6OxKoVKQn8kCp6d/nAZyU=}
-    engines: {node: '>=20'}
+  emoji-regex@8.0.0:
+    resolution: {integrity: sha1-6Bj9ac5cz8tARZT4QpY79TFkzDc=}
 
-  ieee754@1.2.1:
-    resolution: {integrity: sha1-jrehCmP/8l0VpXsAFYbRd9Gw01I=}
+  get-caller-file@2.0.5:
+    resolution: {integrity: sha1-T5RBKoLbMvNuOwuXQfipf+sDH34=}
+    engines: {node: 6.* || 8.* || >= 10.*}
 
-  media-typer@2.0.0:
-    resolution: {integrity: sha1-X0N0KkTUdLg61NG9Dwxc9WwM0oA=}
-    engines: {node: '>=18'}
+  is-fullwidth-code-point@3.0.0:
+    resolution: {integrity: sha1-8Rb4Bk/pCz94RKOJl8C3UFEmnx0=}
+    engines: {node: '>=8'}
 
-  music-metadata@11.14.0:
-    resolution: {integrity: sha1-MDiJZ4T8B/23wyO2ItqviYw1P2s=}
-    engines: {node: '>=18'}
-
-  strtok3@10.3.5:
-    resolution: {integrity: sha1-chMoXaDcPewPyM5d9Li3pzPxQ2A=}
-    engines: {node: '>=18'}
-
-  token-types@6.1.2:
-    resolution: {integrity: sha1-GND9WbmW1CH5+DkU1hAcIBvQgSk=}
+  mediainfo.js@0.2.1:
+    resolution: {integrity: sha1-kgxG66WsGT3QYg3RbR7BpcSAZCw=}
     engines: {node: '>=14.16'}
+    hasBin: true
 
-  uint8array-extras@1.5.0:
-    resolution: {integrity: sha1-ENKoUhPeOtowT+ocRU9jXHODnoY=}
-    engines: {node: '>=18'}
+  require-directory@2.1.1:
+    resolution: {integrity: sha1-jGStX9MNqxyXbiNE/+f3kqam30I=}
+    engines: {node: '>=0.10.0'}
 
-  win-guid@0.2.1:
-    resolution: {integrity: sha1-V2kVul4Qv5LsajK3GrBrX3VAP8A=}
+  string-width@4.2.3:
+    resolution: {integrity: sha1-JpxxF9J7Ba0uU2gwqOyJXvnG0BA=}
+    engines: {node: '>=8'}
+
+  strip-ansi@6.0.1:
+    resolution: {integrity: sha1-nibGPTD1NEPpSJSVshBdN7Z6hdk=}
+    engines: {node: '>=8'}
+
+  wrap-ansi@7.0.0:
+    resolution: {integrity: sha1-Z+FFz/UQpqaYS98RUpEdadLrnkM=}
+    engines: {node: '>=10'}
+
+  y18n@5.0.8:
+    resolution: {integrity: sha1-f0k00PfKjFb5UxSTndzS3ZHOHVU=}
+    engines: {node: '>=10'}
+
+  yargs-parser@21.1.1:
+    resolution: {integrity: sha1-kJa87r+ZDSG7MfqVFuDt4pSnfTU=}
+    engines: {node: '>=12'}
+
+  yargs@17.7.3:
+    resolution: {integrity: sha1-d53/5ryv7FlqcXLpgyiaWIZH+qo=}
+    engines: {node: '>=12'}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -1945,60 +1960,63 @@ packages:
 
 snapshots:
 
-  '@borewit/text-codec@0.2.2': {}
-
-  '@tokenizer/inflate@0.4.1':
+  ansi-styles@4.3.0:
     dependencies:
-      debug: 4.4.3
-      token-types: 6.1.2
-    transitivePeerDependencies:
-      - supports-color
+      color-convert: 2.0.1
 
-  '@tokenizer/token@0.3.0': {}
-
-  content-type@2.0.0: {}
-
-  file-type@21.3.4:
+  cliui@8.0.1:
     dependencies:
-      '@tokenizer/inflate': 0.4.1
-      strtok3: 10.3.5
-      token-types: 6.1.2
-      uint8array-extras: 1.5.0
-    transitivePeerDependencies:
-      - supports-color
+      string-width: 4.2.3
+      strip-ansi: 6.0.1
+      wrap-ansi: 7.0.0
 
-  ieee754@1.2.1: {}
-
-  media-typer@2.0.0: {}
-
-  music-metadata@11.14.0:
+  color-convert@2.0.1:
     dependencies:
-      '@borewit/text-codec': 0.2.2
-      '@tokenizer/token': 0.3.0
-      content-type: 2.0.0
-      debug: 4.4.3
-      file-type: 21.3.4
-      media-typer: 2.0.0
-      strtok3: 10.3.5
-      token-types: 6.1.2
-      uint8array-extras: 1.5.0
-      win-guid: 0.2.1
-    transitivePeerDependencies:
-      - supports-color
+      color-name: 1.1.4
 
-  strtok3@10.3.5:
+  color-name@1.1.4: {}
+
+  emoji-regex@8.0.0: {}
+
+  get-caller-file@2.0.5: {}
+
+  is-fullwidth-code-point@3.0.0: {}
+
+  mediainfo.js@0.2.1:
     dependencies:
-      '@tokenizer/token': 0.3.0
+      yargs: 17.7.3
 
-  token-types@6.1.2:
+  require-directory@2.1.1: {}
+
+  string-width@4.2.3:
     dependencies:
-      '@borewit/text-codec': 0.2.2
-      '@tokenizer/token': 0.3.0
-      ieee754: 1.2.1
+      emoji-regex: 8.0.0
+      is-fullwidth-code-point: 3.0.0
+      strip-ansi: 6.0.1
 
-  uint8array-extras@1.5.0: {}
+  strip-ansi@6.0.1:
+    dependencies:
+      ansi-regex: 5.0.1
 
-  win-guid@0.2.1: {}
+  wrap-ansi@7.0.0:
+    dependencies:
+      ansi-styles: 4.3.0
+      string-width: 4.2.3
+      strip-ansi: 6.0.1
+
+  y18n@5.0.8: {}
+
+  yargs-parser@21.1.1: {}
+
+  yargs@17.7.3:
+    dependencies:
+      cliui: 8.0.1
+      escalade: 3.2.0
+      get-caller-file: 2.0.5
+      require-directory: 2.1.1
+      string-width: 4.2.3
+      y18n: 5.0.8
+      yargs-parser: 21.1.1
 
   '@adobe/css-tools@4.5.0': {}
 

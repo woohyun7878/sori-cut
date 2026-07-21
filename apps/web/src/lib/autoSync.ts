@@ -3,12 +3,8 @@
  * normalized correlation in a Web Worker.
  */
 
-import {
-  CouldNotDetermineFileTypeError,
-  parseBuffer,
-  UnsupportedFileTypeError,
-  type IFormat,
-} from 'music-metadata';
+import mediaInfoFactory, { type MediaInfo, type MediaInfoType, type TrackType } from 'mediainfo.js';
+import mediaInfoWasmUrl from 'mediainfo.js/MediaInfoModule.wasm?url';
 
 import {
   AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
@@ -28,7 +24,7 @@ export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
   AUTO_SYNC_MAX_ANALYSIS_SAMPLES * Float32Array.BYTES_PER_ELEMENT * 2;
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
 const METADATA_TIMEOUT_MS = 5_000;
-const SUPPORTED_AUDIO_DESCRIPTION = 'MP3, AAC, FLAC, Ogg, M4A, WebM, or WAV';
+const SUPPORTED_AUDIO_DESCRIPTION = 'MP3, AAC, FLAC, M4A, WebM, or WAV';
 
 export interface AutoSyncResult {
   /** Signed target placement: positive delays it; negative advances its source in-point. */
@@ -284,27 +280,44 @@ export async function readResponseBuffer(
   return combined.buffer;
 }
 
-function isSupportedAudioFormat(format: IFormat): boolean {
-  const container = format.container?.trim().toLowerCase() ?? '';
-  const codec = format.codec?.trim().toLowerCase() ?? '';
-  if (container === 'wave' || container === 'flac' || container === 'ogg') {
-    return true;
-  }
-  if (container === 'mpeg') {
-    return /^mpeg (?:1|2|2\.5) layer (?:3|iii)$/.test(codec);
-  }
-  if (container === 'adts/mpeg-2' || container === 'adts/mpeg-4') {
-    return codec === 'aac';
-  }
-  if (container === 'ebml/webm') {
-    return codec.includes('opus') || codec.includes('vorbis');
+function normalizeMediaInfoValue(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function isSupportedAudioFormat(
+  general: TrackType | undefined,
+  audioTracks: TrackType[],
+  hasVideo: boolean,
+): boolean {
+  if (!general || audioTracks.length === 0 || hasVideo) {
+    return false;
   }
 
-  const mp4Brands = container.split('/');
-  const hasMp4Brand = mp4Brands.some((brand) =>
-    ['m4a', 'mp4', 'mp41', 'mp42', 'isom', 'iso2', 'dash'].includes(brand),
-  );
-  return hasMp4Brand && codec.includes('aac') && format.hasVideo !== true;
+  const container = normalizeMediaInfoValue(general.Format);
+  const codecs = audioTracks.map((track) => normalizeMediaInfoValue(track.Format));
+  if (container === 'wave') {
+    return codecs.every((codec) => codec === 'pcm' || codec === 'ieee float');
+  }
+  if (container === 'mpeg audio') {
+    return audioTracks.every(
+      (track) =>
+        normalizeMediaInfoValue(track.Format) === 'mpeg audio' &&
+        normalizeMediaInfoValue(track.Format_Profile).includes('layer 3'),
+    );
+  }
+  if (container === 'adts') {
+    return codecs.every((codec) => codec === 'aac');
+  }
+  if (container === 'flac') {
+    return codecs.every((codec) => codec === 'flac');
+  }
+  if (container === 'mpeg-4') {
+    return codecs.every((codec) => codec === 'aac');
+  }
+  if (container === 'webm') {
+    return codecs.every((codec) => codec === 'vorbis' || codec === 'opus');
+  }
+  return false;
 }
 
 function calculateDecodedBytes(
@@ -342,56 +355,95 @@ function calculateDecodedBytes(
 
 async function inspectAudioMemory(
   buffer: ArrayBuffer,
-  contentType: string | null,
   label: string,
+  signal: AbortSignal | undefined,
 ): Promise<{
   duration: number;
   decodedBytes: number;
 }> {
-  let format: IFormat;
+  const instancePromise = mediaInfoFactory({
+    chunkSize: 256 * 1024,
+    format: 'object',
+    full: true,
+    locateFile: () => mediaInfoWasmUrl,
+  });
+  let mediaInfo: MediaInfo<'object'> | undefined;
+  let mediaInfoClosed = false;
+  const closeMediaInfoBestEffort = (instance: MediaInfo<'object'> | undefined) => {
+    if (!instance || mediaInfoClosed) {
+      return;
+    }
+    mediaInfoClosed = true;
+    try {
+      instance.close();
+    } catch {
+      // Metadata cleanup must not replace an abort or validation error.
+    }
+  };
+
+  let metadata: MediaInfoType;
   try {
-    const metadata = await parseBuffer(
-      new Uint8Array(buffer),
-      contentType?.split(';', 1)[0] || undefined,
-      {
-        duration: true,
-        skipCovers: true,
-      },
+    mediaInfo = await raceWithAbort(instancePromise, signal, () => {
+      void instancePromise.then(closeMediaInfoBestEffort, () => undefined);
+    });
+    metadata = await raceWithAbort(
+      mediaInfo.analyzeData(
+        () => buffer.byteLength,
+        (size, offset) => {
+          const availableBytes = Math.max(0, buffer.byteLength - offset);
+          return new Uint8Array(buffer, offset, Math.min(size, availableBytes));
+        },
+      ),
+      signal,
+      () => closeMediaInfoBestEffort(mediaInfo),
     );
-    format = metadata.format;
   } catch (error) {
-    if (
-      error instanceof CouldNotDetermineFileTypeError ||
-      error instanceof UnsupportedFileTypeError
-    ) {
-      throw new AutoSyncInputError(
-        'unsupported-format',
-        `${label} audio is not a supported ${SUPPORTED_AUDIO_DESCRIPTION} file`,
-      );
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error;
     }
     throw new AutoSyncInputError(
       'malformed-metadata',
       `Could not read ${label} audio metadata; export it again as ${SUPPORTED_AUDIO_DESCRIPTION}`,
     );
+  } finally {
+    closeMediaInfoBestEffort(mediaInfo);
   }
 
-  if (!isSupportedAudioFormat(format)) {
+  const tracks = metadata.media?.track ?? [];
+  const general = tracks.find((track) => track['@type'] === 'General');
+  const audioTracks = tracks.filter((track) => track['@type'] === 'Audio');
+  const hasVideo = tracks.some((track) => track['@type'] === 'Video');
+  if (!isSupportedAudioFormat(general, audioTracks, hasVideo)) {
     throw new AutoSyncInputError(
       'unsupported-format',
       `${label} audio is not a supported ${SUPPORTED_AUDIO_DESCRIPTION} file`,
     );
   }
-  const { duration, sampleRate, numberOfChannels } = format;
-  const decodedBytes =
-    duration === undefined || sampleRate === undefined || numberOfChannels === undefined
-      ? null
-      : calculateDecodedBytes(duration, sampleRate, numberOfChannels);
-  if (decodedBytes === null) {
-    throw new AutoSyncInputError(
-      'malformed-metadata',
-      `${label} audio metadata is missing a valid duration, sample rate, or channel count; ` +
-        `export it again as ${SUPPORTED_AUDIO_DESCRIPTION}`,
-    );
+
+  let duration = 0;
+  let decodedBytes = 0;
+  for (const track of audioTracks) {
+    const trackDuration = Math.max(track.Duration ?? 0, general?.Duration ?? 0);
+    const trackDecodedBytes =
+      track.SamplingRate === undefined || track.Channels === undefined
+        ? null
+        : calculateDecodedBytes(trackDuration, track.SamplingRate, track.Channels);
+    if (trackDecodedBytes === null) {
+      throw new AutoSyncInputError(
+        'malformed-metadata',
+        `${label} audio metadata is missing a validated duration, sample rate, or channel count; ` +
+          `export it again as ${SUPPORTED_AUDIO_DESCRIPTION}`,
+      );
+    }
+    duration = Math.max(duration, trackDuration);
+    if (
+      trackDecodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - decodedBytes ||
+      !Number.isSafeInteger(decodedBytes + trackDecodedBytes)
+    ) {
+      decodedBytes = Number.POSITIVE_INFINITY;
+      break;
+    }
+    decodedBytes += trackDecodedBytes;
   }
   if (decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT) {
     throw new AutoSyncInputError(
@@ -402,7 +454,7 @@ async function inspectAudioMemory(
   }
 
   return {
-    duration: duration!,
+    duration,
     decodedBytes,
   };
 }
@@ -504,11 +556,7 @@ async function decodeToMono(
   );
   throwIfAborted(signal);
 
-  const audioMemory = await inspectAudioMemory(
-    arrayBuffer,
-    response.headers?.get('content-type') ?? null,
-    label,
-  );
+  const audioMemory = await inspectAudioMemory(arrayBuffer, label, signal);
   throwIfAborted(signal);
   if (audioMemory.duration < AUTO_SYNC_MIN_DURATION_SECONDS) {
     throw new Error(

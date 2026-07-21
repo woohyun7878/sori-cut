@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const parseAudioMetadata = vi.hoisted(() => vi.fn());
+const closeAudioMetadata = vi.hoisted(() => vi.fn());
 
-vi.mock('music-metadata', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('music-metadata')>();
+vi.mock('mediainfo.js', () => {
   return {
-    ...actual,
-    parseBuffer: parseAudioMetadata,
+    default: vi.fn(async () => ({
+      analyzeData: parseAudioMetadata,
+      close: closeAudioMetadata,
+    })),
   };
 });
+vi.mock('mediainfo.js/MediaInfoModule.wasm?url', () => ({ default: 'mock-mediainfo.wasm' }));
 
 import {
   AUTO_SYNC_MAX_AGGREGATE_ENCODED_BYTES,
@@ -33,6 +36,62 @@ const SAMPLE_RATE = AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
 const REFERENCE_BYTES = 100;
 const TARGET_BYTES = 200;
 const MEBIBYTE = 1024 * 1024;
+
+function createMediaInfoResult(format: {
+  container?: string;
+  codec?: string;
+  duration?: number;
+  sampleRate?: number;
+  numberOfChannels?: number;
+  hasVideo?: boolean;
+}): object {
+  const container = format.container?.toLowerCase() ?? '';
+  const generalFormat =
+    container === 'wave'
+      ? 'Wave'
+      : container === 'mpeg'
+        ? 'MPEG Audio'
+        : container.startsWith('adts/')
+          ? 'ADTS'
+          : container === 'flac'
+            ? 'FLAC'
+            : container === 'ogg'
+              ? 'Ogg'
+              : container.startsWith('m4a/')
+                ? 'MPEG-4'
+                : container === 'ebml/webm'
+                  ? 'WebM'
+                  : format.container;
+  const codec = format.codec?.toLowerCase() ?? '';
+  const audioFormat = codec.startsWith('mpeg ')
+    ? 'MPEG Audio'
+    : codec.includes('aac')
+      ? 'AAC'
+      : codec === 'vorbis i'
+        ? 'Vorbis'
+        : codec === 'a_opus'
+          ? 'Opus'
+          : format.codec;
+  const track: object[] = [
+    {
+      '@type': 'General',
+      Format: generalFormat,
+      Duration: format.duration,
+    },
+    {
+      '@type': 'Audio',
+      Format: audioFormat,
+      Format_Profile: container === 'mpeg' ? 'Layer 3' : undefined,
+      Duration: format.duration,
+      SamplingRate: format.sampleRate,
+      Channels: format.numberOfChannels,
+    },
+  ];
+  if (format.hasVideo) {
+    track.push({ '@type': 'Video', Format: 'AVC' });
+  }
+  return { media: { '@ref': 'test-audio', track } };
+}
 
 function frameAmplitude(frame: number): number {
   let hash = frame + 1;
@@ -258,15 +317,16 @@ class SilentWorker extends MockAutoSyncWorker {
 beforeEach(() => {
   vi.useRealTimers();
   parseAudioMetadata.mockReset();
-  parseAudioMetadata.mockResolvedValue({
-    format: {
+  closeAudioMetadata.mockReset();
+  parseAudioMetadata.mockResolvedValue(
+    createMediaInfoResult({
       container: 'MPEG',
       codec: 'MPEG 1 Layer III',
       duration: 5,
       sampleRate: SAMPLE_RATE,
       numberOfChannels: 1,
-    },
-  });
+    }),
+  );
   fetchedUrls = [];
   workerTerminations = 0;
   decodedReference = createAsymmetricPulseSignal(250);
@@ -460,19 +520,18 @@ describe('computeAutoSyncOffset', () => {
     ['MP3', 'MPEG', 'MPEG 1 Layer III'],
     ['AAC', 'ADTS/MPEG-4', 'AAC'],
     ['FLAC', 'FLAC', 'FLAC'],
-    ['Ogg', 'Ogg', 'Vorbis I'],
     ['M4A', 'M4A/isom/mp42', 'MPEG-4/AAC'],
     ['WebM', 'EBML/webm', 'A_OPUS'],
   ])('accepts representative %s metadata before decoding', async (_name, container, codec) => {
-    parseAudioMetadata.mockResolvedValue({
-      format: {
+    parseAudioMetadata.mockResolvedValue(
+      createMediaInfoResult({
         container,
         codec,
         duration: 5,
         sampleRate: SAMPLE_RATE,
         numberOfChannels: 2,
-      },
-    });
+      }),
+    );
 
     await expect(computeAutoSyncOffset('blob:reference', 'blob:target')).resolves.toEqual(
       expect.objectContaining({ confidence: expect.any(Number) }),
@@ -545,15 +604,15 @@ describe('computeAutoSyncOffset', () => {
         }),
       ),
     );
-    parseAudioMetadata.mockResolvedValue({
-      format: {
+    parseAudioMetadata.mockResolvedValue(
+      createMediaInfoResult({
         container: 'MPEG',
         codec: 'MPEG 1 Layer III',
         duration: 301,
         sampleRate: SAMPLE_RATE,
         numberOfChannels: 1,
-      },
-    });
+      }),
+    );
     vi.stubGlobal(
       'AudioContext',
       class {
@@ -756,8 +815,66 @@ describe('computeAutoSyncOffset', () => {
     expect(fetchedUrls).toEqual(['blob:ref']);
   });
 
-  it('rejects oversized non-WAV metadata before decoding', async () => {
+  it.each([
+    ['MP3', 'MPEG', 'MPEG 1 Layer III', 2],
+    ['ADTS channel_configuration 7', 'ADTS/MPEG-4', 'AAC', 8],
+    ['FLAC', 'FLAC', 'FLAC', 8],
+    ['M4A/AAC', 'M4A/isom/mp42', 'MPEG-4/AAC', 8],
+    ['WebM Opus', 'EBML/webm', 'A_OPUS', 8],
+  ])(
+    'rejects oversized %s metadata before decoding',
+    async (_name, container, codec, numberOfChannels) => {
+      const decodeAudioData = vi.fn();
+      vi.stubGlobal(
+        'AudioContext',
+        class {
+          decodeAudioData = decodeAudioData;
+          async close() {}
+        },
+      );
+      parseAudioMetadata.mockResolvedValue(
+        createMediaInfoResult({
+          container,
+          codec,
+          duration: 300,
+          sampleRate: 192_000,
+          numberOfChannels,
+        }),
+      );
+
+      const error = await computeAutoSyncOffset('blob:oversized', 'blob:target').catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(AutoSyncInputError);
+      expect(error).toMatchObject({ code: 'decoded-memory-limit' });
+      expect(decodeAudioData).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects Ogg before decoding because chained serials cannot be bounded reliably', async () => {
     const decodeAudioData = vi.fn();
+    parseAudioMetadata.mockResolvedValue({
+      media: {
+        '@ref': 'chained.ogg',
+        track: [
+          { '@type': 'General', Format: 'Ogg', Duration: 300 },
+          {
+            '@type': 'Audio',
+            Format: 'Vorbis',
+            Duration: 300,
+            SamplingRate: 48_000,
+            Channels: 2,
+          },
+          {
+            '@type': 'Audio',
+            Format: 'Opus',
+            Duration: 300,
+            SamplingRate: 48_000,
+            Channels: 2,
+          },
+        ],
+      },
+    });
     vi.stubGlobal(
       'AudioContext',
       class {
@@ -765,21 +882,12 @@ describe('computeAutoSyncOffset', () => {
         async close() {}
       },
     );
-    parseAudioMetadata.mockResolvedValue({
-      format: {
-        container: 'MPEG',
-        codec: 'MPEG 1 Layer III',
-        duration: 300,
-        sampleRate: 192_000,
-        numberOfChannels: 2,
-      },
-    });
 
-    const error = await computeAutoSyncOffset('blob:mp3', 'blob:target').catch(
+    const error = await computeAutoSyncOffset('blob:chained-ogg', 'blob:target').catch(
       (caught: unknown) => caught,
     );
     expect(error).toBeInstanceOf(AutoSyncInputError);
-    expect(error).toMatchObject({ code: 'decoded-memory-limit' });
+    expect(error).toMatchObject({ code: 'unsupported-format' });
     expect(decodeAudioData).not.toHaveBeenCalled();
   });
 
@@ -802,8 +910,69 @@ describe('computeAutoSyncOffset', () => {
     expect(decodeAudioData).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'MP4 without authoritative AAC channel configuration',
+      {
+        container: 'M4A/isom/mp42',
+        codec: 'MPEG-4/AAC',
+        duration: 5,
+        sampleRate: SAMPLE_RATE,
+      },
+    ],
+    [
+      'ADTS channel_configuration 0 without a resolved PCE',
+      {
+        container: 'ADTS/MPEG-4',
+        codec: 'AAC',
+        duration: 5,
+        sampleRate: SAMPLE_RATE,
+      },
+    ],
+    [
+      'timesliced WebM without block-derived duration',
+      {
+        container: 'EBML/webm',
+        codec: 'A_OPUS',
+        sampleRate: SAMPLE_RATE,
+        numberOfChannels: 2,
+      },
+    ],
+    [
+      'FLAC with zero or unvalidated total samples',
+      {
+        container: 'FLAC',
+        codec: 'FLAC',
+        duration: 0,
+        sampleRate: SAMPLE_RATE,
+        numberOfChannels: 2,
+        numberOfSamples: 0,
+      },
+    ],
+  ])('fails closed for %s before decoding', async (_name, format) => {
+    const decodeAudioData = vi.fn();
+    parseAudioMetadata.mockResolvedValue(createMediaInfoResult(format));
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+
+    const error = await computeAutoSyncOffset('blob:uncertain', 'blob:target').catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(AutoSyncInputError);
+    expect(error).toMatchObject({ code: 'malformed-metadata' });
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
   it('does not start decoding when aborted during metadata inspection', async () => {
     const decodeAudioData = vi.fn();
+    closeAudioMetadata.mockImplementation(() => {
+      throw new Error('metadata close failed');
+    });
     let resolveMetadata: ((metadata: unknown) => void) | undefined;
     parseAudioMetadata.mockReturnValue(
       new Promise((resolve) => {
@@ -824,17 +993,18 @@ describe('computeAutoSyncOffset', () => {
     await vi.waitFor(() => expect(parseAudioMetadata).toHaveBeenCalledOnce());
 
     controller.abort();
-    resolveMetadata?.({
-      format: {
+    resolveMetadata?.(
+      createMediaInfoResult({
         container: 'MPEG',
         codec: 'MPEG 1 Layer III',
         duration: 5,
         sampleRate: SAMPLE_RATE,
         numberOfChannels: 2,
-      },
-    });
+      }),
+    );
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(closeAudioMetadata).toHaveBeenCalledOnce();
     expect(decodeAudioData).not.toHaveBeenCalled();
   });
 
@@ -846,15 +1016,15 @@ describe('computeAutoSyncOffset', () => {
     'rejects unsupported parsed %s with a typed error before decoding',
     async (container, codec) => {
       const decodeAudioData = vi.fn();
-      parseAudioMetadata.mockResolvedValue({
-        format: {
+      parseAudioMetadata.mockResolvedValue(
+        createMediaInfoResult({
           container,
           codec,
           duration: 5,
           sampleRate: SAMPLE_RATE,
           numberOfChannels: 2,
-        },
-      });
+        }),
+      );
       vi.stubGlobal(
         'AudioContext',
         class {
