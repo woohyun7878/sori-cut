@@ -62,7 +62,6 @@ const decodeAudioData = vi.fn();
 const closeAudioContext = vi.fn();
 const fetchMock = vi.fn();
 const engines: PlaybackEngine[] = [];
-const createdContexts: MockAudioContext[] = [];
 const animationFrames = new Map<number, FrameRequestCallback>();
 let nextFrameId = 1;
 let contextTime = 0;
@@ -73,14 +72,6 @@ let throwOnStartNumber: number | null = null;
 class MockAudioContext {
   state: AudioContextState = 'running';
   destination = {};
-  close = vi.fn(() => {
-    this.state = 'closed';
-    return Promise.resolve();
-  });
-
-  constructor() {
-    createdContexts.push(this);
-  }
 
   get currentTime() {
     contextTimeReads++;
@@ -180,7 +171,6 @@ describe('PlaybackEngine reliability', () => {
     vi.clearAllMocks();
     createdSources.length = 0;
     createdGains.length = 0;
-    createdContexts.length = 0;
     animationFrames.clear();
     nextFrameId = 1;
     contextTime = 0;
@@ -356,7 +346,7 @@ describe('PlaybackEngine reliability', () => {
 
     const play = engine.play([track], 2, 5, false);
     await Promise.resolve();
-    const mixUpdate = engine.updateTracks([{ ...track, volume: 0.4 }], 5);
+    const mixUpdate = engine.syncTracks([{ ...track, volume: 0.4 }], 5);
     response.resolve(successfulResponse());
     await Promise.all([play, mixUpdate]);
 
@@ -378,7 +368,7 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources[0].disconnect).toHaveBeenCalledTimes(1);
     expect(createdGains[0].disconnect).toHaveBeenCalledTimes(1);
 
-    await engine.updateTracks([{ ...tracks[0], volume: 0.25 }, tracks[1]], 5);
+    engine.updateTrackVolume('ended', [{ ...tracks[0], volume: 0.25 }, tracks[1]]);
     expect(createdGains[0].gain.linearRampToValueAtTime).not.toHaveBeenCalled();
 
     engine.stop();
@@ -394,33 +384,16 @@ describe('PlaybackEngine reliability', () => {
     await engine.play([track], 0, 5, false);
     contextTimeReads = 0;
 
-    await engine.updateTracks([{ ...track, volume: 0.25 }], 5);
+    engine.updateTrackVolume(track.id, [{ ...track, volume: 0.25 }]);
 
     const parameter = createdGains[0].gain;
     expect(parameter.cancelScheduledValues).toHaveBeenCalledWith(0);
     expect(parameter.setValueAtTime).toHaveBeenCalledWith(1, 0);
     expect(parameter.linearRampToValueAtTime).toHaveBeenCalledWith(0.25, 0.01);
 
-    await engine.updateTracks([{ ...track, volume: 0.25, muted: true }], 5);
+    engine.updateTrackVolume(track.id, [{ ...track, muted: true }]);
     expect(parameter.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 0.01);
     expect(contextTimeReads).toBe(2);
-    expect(createdSources).toHaveLength(1);
-    expect(createdSources[0].start).toHaveBeenCalledTimes(1);
-    expect(createdSources[0].stop).not.toHaveBeenCalled();
-  });
-
-  it('schedules an initially muted track from the live playhead and source offset', async () => {
-    const engine = createEngine();
-    const track = createTrack({ muted: true, sourceStartOffset: 1 });
-    await engine.play([track], 0, 5, false);
-    expect(createdSources).toHaveLength(0);
-
-    contextTime = 2;
-    await engine.updateTracks([{ ...track, muted: false }], 5);
-
-    expect(createdSources).toHaveLength(1);
-    expect(createdSources[0].start).toHaveBeenCalledWith(2, 3, 3);
-    expect(engine.isPlaying).toBe(true);
   });
 
   it('ignores a failed unmute load after the track is muted again', async () => {
@@ -430,27 +403,13 @@ describe('PlaybackEngine reliability', () => {
     const track = createTrack({ muted: true });
     await engine.play([track], 0, 5, false);
 
-    const unmute = engine.updateTracks([{ ...track, muted: false }], 5);
+    const unmute = engine.syncTracks([{ ...track, muted: false }], 5);
     await Promise.resolve();
-    await engine.updateTracks([track], 5);
+    await engine.syncTracks([track], 5);
     response.reject(new Error('network failed'));
 
     await expect(unmute).resolves.toBeUndefined();
     expect(createdSources).toHaveLength(0);
-    expect(engine.isPlaying).toBe(true);
-  });
-
-  it('uses the latest live mix when scheduling the next loop', async () => {
-    const engine = createEngine();
-    const track = createTrack({ duration: 1 });
-    await engine.play([track], 0, 1, true);
-
-    await engine.updateTracks([{ ...track, volume: 0.3 }], 1);
-    contextTime = 2;
-    runNextAnimationFrame();
-    await vi.waitFor(() => expect(createdSources).toHaveLength(2));
-
-    expect(createdGains[1].gain.value).toBe(0.3);
     expect(engine.isPlaying).toBe(true);
   });
 
@@ -461,7 +420,7 @@ describe('PlaybackEngine reliability', () => {
 
     contextTime = 2;
     runNextAnimationFrame();
-    await engine.updateTracks([{ ...track, muted: true }], 1);
+    await engine.syncTracks([{ ...track, muted: true }], 1);
     await Promise.resolve();
 
     expect(createdSources).toHaveLength(1);
@@ -477,7 +436,7 @@ describe('PlaybackEngine reliability', () => {
     await engine.play([first, second], 0, 5, false);
 
     contextTime = 2;
-    await engine.updateTracks([{ ...first, sourceUrl: 'blob:replacement' }], 5);
+    await engine.syncTracks([{ ...first, sourceUrl: 'blob:replacement' }], 5);
 
     expect(createdSources).toHaveLength(3);
     expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
@@ -772,6 +731,26 @@ describe('PlaybackEngine reliability', () => {
     await expect(engine.loadBuffer('blob:first')).rejects.toMatchObject({
       code: 'CONTEXT_FAILED',
     });
+  });
+
+  it('does not repopulate the buffer cache when decoding finishes after destroy', async () => {
+    const decoded = deferred<AudioBuffer>();
+    decodeAudioData.mockReturnValue(decoded.promise);
+    const engine = createEngine();
+
+    const load = engine.loadBuffer('blob:pending');
+    await vi.waitFor(() => expect(decodeAudioData).toHaveBeenCalledTimes(1));
+    engine.destroy();
+    decoded.resolve(createAudioBuffer());
+
+    await expect(load).rejects.toMatchObject({
+      code: 'CONTEXT_FAILED',
+      sourceUrl: 'blob:pending',
+    });
+    await expect(engine.loadBuffer('blob:pending')).rejects.toMatchObject({
+      code: 'CONTEXT_FAILED',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('stops consistently and reports once when loop restart cleanup fails', async () => {

@@ -181,14 +181,51 @@ describe('usePlaybackEngine', () => {
     render(<Harness />);
     const engine = playbackMocks.instances[0];
     await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+    expect(engine.syncTracks).not.toHaveBeenCalled();
+
+    act(() => {
+      useProjectStore.getState().updateTrack('track-1', { name: 'Renamed' });
+    });
+    expect(engine.syncTracks).not.toHaveBeenCalled();
 
     act(() => {
       useProjectStore.setState({ tracks: [{ ...track, volume: 0.25 }] });
     });
     await waitFor(() =>
-      expect(engine.syncTracks).toHaveBeenLastCalledWith([{ ...track, volume: 0.25 }]),
+      expect(engine.syncTracks).toHaveBeenLastCalledWith([{ ...track, volume: 0.25 }], 5),
     );
 
     expect(engine.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses existing playback when a live mix update fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const track = {
+      id: 'track-1',
+      name: 'Track 1',
+      type: 'audio' as const,
+      sourceUrl: 'blob:track-1',
+      startOffset: 0,
+      duration: 5,
+      sourceStartOffset: 0,
+      muted: false,
+      volume: 1,
+    };
+    useProjectStore.setState({ tracks: [track] });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+
+    act(() => {
+      useProjectStore.getState().setIsPlaying(true);
+    });
+    await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+    engine.syncTracks.mockRejectedValueOnce(new Error('unmute failed'));
+
+    act(() => {
+      useProjectStore.getState().setTrackVolume('track-1', 0.5);
+    });
+
+    await waitFor(() => expect(useProjectStore.getState().isPlaying).toBe(false));
+    expect(engine.pause).toHaveBeenCalledTimes(1);
   });
 });

@@ -20,12 +20,6 @@ interface LoadedTrack {
   buffer: AudioBuffer;
 }
 
-interface NodeCleanupFailure {
-  trackId: string;
-  stage: 'stop' | 'source-disconnect' | 'gain-disconnect';
-  cause: unknown;
-}
-
 export type PlaybackErrorCode =
   'CONTEXT_FAILED' | 'DECODE_FAILED' | 'FETCH_FAILED' | 'NODE_CLEANUP_FAILED' | 'SCHEDULE_FAILED';
 
@@ -235,11 +229,7 @@ export class PlaybackEngine {
       this.state.isPlaying = false;
       this.state.isStarting = false;
       if (cleanupError) this.reportInternalError(cleanupError);
-      throw this.toPlaybackError(
-        error,
-        'SCHEDULE_FAILED',
-        'Unable to schedule audio playback.',
-      );
+      throw this.toPlaybackError(error, 'SCHEDULE_FAILED', 'Unable to schedule audio playback.');
     }
   }
 
@@ -265,8 +255,7 @@ export class PlaybackEngine {
       if (!loadedTrack) continue;
       const currentTrack = this.currentTracks.find(
         (track) =>
-          track.id === loadedTrack.track.id &&
-          track.sourceUrl === loadedTrack.track.sourceUrl,
+          track.id === loadedTrack.track.id && track.sourceUrl === loadedTrack.track.sourceUrl,
       );
       if (!currentTrack || currentTrack.muted) continue;
       this.scheduleTrack(
@@ -301,10 +290,15 @@ export class PlaybackEngine {
     source.buffer = buffer;
     gain.gain.value = track.volume;
     source.onended = () => {
-      const failures = this.cleanupNode(node, false);
-      if (failures.length > 0) {
+      try {
+        this.cleanupNode(node, false);
+      } catch (error) {
         this.reportInternalError(
-          this.createCleanupError('Failed to release an ended audio node.', failures),
+          this.toPlaybackError(
+            error,
+            'NODE_CLEANUP_FAILED',
+            'Failed to release an ended audio node.',
+          ),
         );
       }
     };
@@ -315,12 +309,14 @@ export class PlaybackEngine {
       this.addActiveNode(node);
       source.start(schedule.when, schedule.offset, schedule.duration);
     } catch (error) {
-      const failures = this.cleanupNode(node, true);
-      if (failures.length > 0) {
+      try {
+        this.cleanupNode(node, true);
+      } catch (cleanupError) {
         this.reportInternalError(
-          this.createCleanupError(
+          this.toPlaybackError(
+            cleanupError,
+            'NODE_CLEANUP_FAILED',
             'Failed to roll back an audio node after scheduling failed.',
-            failures,
           ),
         );
       }
@@ -415,15 +411,31 @@ export class PlaybackEngine {
     }
   }
 
-  async syncTracks(tracks: TimelineTrack[]): Promise<void> {
+  async syncTracks(
+    tracks: TimelineTrack[],
+    projectDuration = this.state.projectDuration,
+  ): Promise<void> {
     const previousTracks = new Map(this.currentTracks.map((track) => [track.id, track]));
+    const topologyChanged =
+      previousTracks.size !== tracks.length ||
+      tracks.some((track) => previousTracks.get(track.id)?.sourceUrl !== track.sourceUrl);
     const mixChanges = tracks.filter((track) => {
       const previous = previousTracks.get(track.id);
       return previous && (previous.volume !== track.volume || previous.muted !== track.muted);
     });
     this.currentTracks = [...tracks];
+    this.state.projectDuration = projectDuration;
 
     if (!this.state.isPlaying && !this.state.isStarting) return;
+
+    const isRestartingLoop = this.loopRestartGeneration === this.operationGeneration;
+    if (topologyChanged || ((this.state.isStarting || isRestartingLoop) && mixChanges.length > 0)) {
+      const currentPosition = isRestartingLoop
+        ? this.state.playheadPosition
+        : this.getCurrentPlaybackPosition();
+      await this.play(this.currentTracks, currentPosition, projectDuration, this.state.loopEnabled);
+      return;
+    }
 
     for (const track of mixChanges) {
       if (track.muted) this.pendingTrackStarts.delete(track.id);
@@ -474,25 +486,32 @@ export class PlaybackEngine {
 
     try {
       const loadedTracks = await Promise.all(
-        pendingTracks.map(async ({ track, token }) => ({
-          track,
-          token,
-          buffer: await this.loadBuffer(track.sourceUrl),
-        })),
+        pendingTracks.map(async ({ track, token }) => {
+          try {
+            return { track, token, buffer: await this.loadBuffer(track.sourceUrl) };
+          } catch (error) {
+            const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
+            if (
+              !this.isCurrentOperation(operationGeneration) ||
+              this.pendingTrackStarts.get(track.id) !== token ||
+              !currentTrack ||
+              currentTrack.muted ||
+              currentTrack.sourceUrl !== track.sourceUrl
+            ) {
+              return { track, token, buffer: null };
+            }
+            throw error;
+          }
+        }),
       );
-      if (
-        !this.isCurrentOperation(operationGeneration) ||
-        !this.state.isPlaying
-      ) {
+      if (!this.isCurrentOperation(operationGeneration) || !this.state.isPlaying) {
         return;
       }
 
       const currentPosition = this.getCurrentPlaybackPosition();
       const anchorTime = ctx.currentTime;
       for (const { track, token, buffer } of loadedTracks) {
-        const currentTrack = this.currentTracks.find(
-          (candidate) => candidate.id === track.id,
-        );
+        const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
         if (
           this.pendingTrackStarts.get(track.id) !== token ||
           !buffer ||
@@ -502,12 +521,7 @@ export class PlaybackEngine {
         ) {
           continue;
         }
-        this.scheduleTrack(
-          ctx,
-          { track: currentTrack, buffer },
-          currentPosition,
-          anchorTime,
-        );
+        this.scheduleTrack(ctx, { track: currentTrack, buffer }, currentPosition, anchorTime);
       }
     } finally {
       for (const { track, token } of pendingTracks) {
@@ -522,41 +536,9 @@ export class PlaybackEngine {
     const track = tracks.find((candidate) => candidate.id === trackId);
     if (!track) return;
 
-    this.currentTracks = [...tracks];
-    this.state.projectDuration = projectDuration;
+    const nodes = this.activeNodes.get(trackId);
+    if (!nodes) return;
 
-    if (!this.state.isPlaying && !this.state.isStarting) return;
-
-    const isRestartingLoop = this.loopRestartGeneration === this.operationGeneration;
-    if (this.state.isStarting || isRestartingLoop || topologyChanged) {
-      const currentPosition = isRestartingLoop
-        ? this.state.playheadPosition
-        : this.getCurrentPlayheadPosition();
-      await this.play(tracks, currentPosition, projectDuration, this.state.loopEnabled);
-      return;
-    }
-
-    const generation = this.operationGeneration;
-    const newlyAudible: Promise<void>[] = [];
-
-    for (const track of tracks) {
-      const previous = previousById.get(track.id);
-      if (!previous || (previous.volume === track.volume && previous.muted === track.muted)) {
-        continue;
-      }
-
-      const nodes = this.activeNodes.get(track.id);
-      if (nodes && nodes.length > 0) {
-        this.rampTrackNodes(nodes, track);
-      } else if (previous.muted && !track.muted && track.sourceUrl) {
-        newlyAudible.push(this.scheduleNewlyAudibleTrack(track, generation));
-      }
-    }
-
-    await Promise.all(newlyAudible);
-  }
-
-  private rampTrackNodes(nodes: ActivePlaybackNode[], track: TimelineTrack) {
     const now = this.getContext().currentTime;
     const targetVolume = track.muted ? 0 : track.volume;
     for (const { gain } of nodes) {
@@ -577,10 +559,7 @@ export class PlaybackEngine {
     }
 
     const elapsed = this.audioContext.currentTime - this.startContextTime;
-    return Math.min(
-      this.startPlayheadPosition + Math.max(elapsed, 0),
-      this.state.projectDuration,
-    );
+    return Math.min(this.startPlayheadPosition + Math.max(elapsed, 0), this.state.projectDuration);
   }
 
   private startAnimationLoop(generation: number) {
@@ -707,8 +686,8 @@ export class PlaybackEngine {
     }
   }
 
-  private cleanupNode(node: ActivePlaybackNode, stopSource: boolean): NodeCleanupFailure[] {
-    if (node.cleanedUp) return [];
+  private cleanupNode(node: ActivePlaybackNode, stopSource: boolean) {
+    if (node.cleanedUp) return;
     node.cleanedUp = true;
     node.source.onended = null;
 
@@ -761,10 +740,6 @@ export class PlaybackEngine {
       : null;
   }
 
-  private createCleanupError(message: string, failures: NodeCleanupFailure[]) {
-    return new PlaybackError('NODE_CLEANUP_FAILED', message, { cause: failures });
-  }
-
   private isCurrentOperation(generation: number) {
     return !this.destroyed && generation === this.operationGeneration;
   }
@@ -807,7 +782,6 @@ export class PlaybackEngine {
   destroy() {
     if (this.destroyed) return;
 
-    const errorCallback = this.onPlaybackError;
     this.destroyed = true;
     this.operationGeneration++;
     this.loopRestartGeneration = null;
@@ -815,8 +789,17 @@ export class PlaybackEngine {
     this.cancelAnimationLoop();
     const errorCallback = this.onPlaybackError;
     const cleanupError = this.stopSources();
-    this.state.isPlaying = false;
-    this.state.isStarting = false;
+    this.state = {
+      isPlaying: false,
+      isStarting: false,
+      playheadPosition: 0,
+      loopEnabled: false,
+      projectDuration: 0,
+    };
+    this.startContextTime = 0;
+    this.startPlayheadPosition = 0;
+    this.currentTracks = [];
+    this.activeNodes.clear();
     this.bufferCache.clear();
     this.pendingBufferLoads.clear();
 
