@@ -208,9 +208,9 @@ function SyncSummary() {
 function PreviewWorkspace() {
   const video = useProjectStore((state) => state.video);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const staleVideoSeekTargetRef = useRef<number | null>(null);
+  const supersededVideoSeekTargetRef = useRef<number | null>(null);
   const pendingVideoSeekRef = useRef<{
-    target: number;
+    activeTarget: number;
     queuedTarget: number | null;
   } | null>(null);
   const playheadPosition = useProjectStore((state) => state.playheadPosition);
@@ -220,32 +220,34 @@ function PreviewWorkspace() {
   const [safeAreaVisible, setSafeAreaVisible] = useState(true);
   const [previewZoom, setPreviewZoom] = useState(1);
 
-  const seekVideoProgrammatically = useCallback(
-    (player: HTMLVideoElement, target: number) => {
-      const pending = pendingVideoSeekRef.current;
-      if (pending) {
-        if (Math.abs(pending.target - target) > 0.01) {
-          pending.queuedTarget = target;
-        }
-        return;
+  const seekVideoProgrammatically = useCallback((player: HTMLVideoElement, target: number) => {
+    const pending = pendingVideoSeekRef.current;
+    if (pending) {
+      const latestTarget = pending.queuedTarget ?? pending.activeTarget;
+      if (Math.abs(latestTarget - target) > 0.01) {
+        pending.queuedTarget = target;
       }
-      if (Math.abs(player.currentTime - target) <= 0.01) return;
+      if (player.currentTime !== target) {
+        player.currentTime = target;
+      }
+      return;
+    }
+    if (player.currentTime === target) return;
 
-      pendingVideoSeekRef.current = { target, queuedTarget: null };
-      player.currentTime = target;
-    },
-    [],
-  );
+    pendingVideoSeekRef.current = { activeTarget: target, queuedTarget: null };
+    player.currentTime = target;
+  }, []);
 
   useEffect(() => {
     const player = videoRef.current;
     if (!player) return;
 
-    const mediaDuration = Number.isFinite(player.duration)
-      ? player.duration
-      : (video?.duration ?? playheadPosition);
+    const mediaDuration =
+      Number.isFinite(player.duration) && player.duration > 0
+        ? player.duration
+        : (video?.duration ?? playheadPosition);
     const target = Math.min(playheadPosition, mediaDuration);
-    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration - 0.01;
+    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration;
     if (shouldResumeFromEnd) {
       seekVideoProgrammatically(player, target);
       void player.play().catch(() => setIsPlaying(false));
@@ -255,13 +257,7 @@ function PreviewWorkspace() {
     if (Math.abs(player.currentTime - target) > 0.35) {
       seekVideoProgrammatically(player, target);
     }
-  }, [
-    isPlaying,
-    playheadPosition,
-    seekVideoProgrammatically,
-    setIsPlaying,
-    video?.duration,
-  ]);
+  }, [isPlaying, playheadPosition, seekVideoProgrammatically, setIsPlaying, video?.duration]);
 
   useEffect(() => {
     const player = videoRef.current;
@@ -331,36 +327,50 @@ function PreviewWorkspace() {
               onSeeked={(event) => {
                 const player = event.currentTarget;
                 const pending = pendingVideoSeekRef.current;
-                if (pending && Math.abs(player.currentTime - pending.target) <= 0.05) {
-                  const queuedTarget = pending.queuedTarget;
-                  pendingVideoSeekRef.current = null;
-                  staleVideoSeekTargetRef.current = null;
-                  if (
-                    queuedTarget !== null &&
-                    Math.abs(player.currentTime - queuedTarget) > 0.01
-                  ) {
-                    seekVideoProgrammatically(player, queuedTarget);
-                  }
-                  return;
-                }
-
                 if (pending) {
-                  staleVideoSeekTargetRef.current = pending.target;
+                  if (
+                    pending.queuedTarget !== null &&
+                    Math.abs(player.currentTime - pending.queuedTarget) <= 0.05
+                  ) {
+                    pendingVideoSeekRef.current = null;
+                    supersededVideoSeekTargetRef.current = null;
+                    return;
+                  }
+
+                  if (Math.abs(player.currentTime - pending.activeTarget) <= 0.05) {
+                    const queuedTarget = pending.queuedTarget;
+                    supersededVideoSeekTargetRef.current = null;
+                    if (queuedTarget === null) {
+                      pendingVideoSeekRef.current = null;
+                    } else {
+                      pendingVideoSeekRef.current = {
+                        activeTarget: queuedTarget,
+                        queuedTarget: null,
+                      };
+                      if (player.currentTime !== queuedTarget) {
+                        player.currentTime = queuedTarget;
+                      }
+                    }
+                    return;
+                  }
+
+                  supersededVideoSeekTargetRef.current =
+                    pending.queuedTarget ?? pending.activeTarget;
                   pendingVideoSeekRef.current = null;
                   setPlayheadPosition(player.currentTime);
                   return;
                 }
 
-                const staleTarget = staleVideoSeekTargetRef.current;
-                staleVideoSeekTargetRef.current = null;
+                const supersededTarget = supersededVideoSeekTargetRef.current;
+                supersededVideoSeekTargetRef.current = null;
                 if (
-                  staleTarget !== null &&
-                  Math.abs(player.currentTime - staleTarget) <= 0.05
+                  supersededTarget !== null &&
+                  Math.abs(player.currentTime - supersededTarget) <= 0.05
                 ) {
                   return;
                 }
 
-                pendingVideoSeekRef.current = null;
+                if (Math.abs(player.currentTime - playheadPosition) <= 0.05) return;
                 setPlayheadPosition(player.currentTime);
               }}
             />

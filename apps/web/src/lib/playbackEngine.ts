@@ -26,11 +26,7 @@ interface PendingTrackStart {
 }
 
 export type PlaybackErrorCode =
-  | 'CONTEXT_FAILED'
-  | 'DECODE_FAILED'
-  | 'FETCH_FAILED'
-  | 'NODE_CLEANUP_FAILED'
-  | 'SCHEDULE_FAILED';
+  'CONTEXT_FAILED' | 'DECODE_FAILED' | 'FETCH_FAILED' | 'NODE_CLEANUP_FAILED' | 'SCHEDULE_FAILED';
 
 export class PlaybackError extends Error {
   readonly code: PlaybackErrorCode;
@@ -112,16 +108,26 @@ export class PlaybackEngine {
     if (!url) return null;
 
     const cached = this.bufferCache.get(url);
-    if (cached) return cached;
+    if (cached) {
+      this.throwIfDestroyed(url);
+      return cached;
+    }
 
     const pending = this.pendingBufferLoads.get(url);
-    if (pending) return pending;
+    if (pending) {
+      const audioBuffer = await pending;
+      this.throwIfDestroyed(url);
+      return audioBuffer;
+    }
 
     const load = this.fetchAndDecodeBuffer(url);
     this.pendingBufferLoads.set(url, load);
 
     try {
-      return await load;
+      const audioBuffer = await load;
+      this.throwIfDestroyed(url);
+      this.bufferCache.set(url, audioBuffer);
+      return audioBuffer;
     } finally {
       if (this.pendingBufferLoads.get(url) === load) {
         this.pendingBufferLoads.delete(url);
@@ -168,7 +174,6 @@ export class PlaybackEngine {
     try {
       const audioBuffer = await this.getContext().decodeAudioData(arrayBuffer);
       this.throwIfDestroyed(url);
-      this.bufferCache.set(url, audioBuffer);
       return audioBuffer;
     } catch (error) {
       if (error instanceof PlaybackError) throw error;
@@ -245,11 +250,7 @@ export class PlaybackEngine {
       this.state.isPlaying = false;
       this.state.isStarting = false;
       if (cleanupError) this.reportInternalError(cleanupError);
-      throw this.toPlaybackError(
-        error,
-        'SCHEDULE_FAILED',
-        'Unable to schedule audio playback.',
-      );
+      throw this.toPlaybackError(error, 'SCHEDULE_FAILED', 'Unable to schedule audio playback.');
     }
   }
 
@@ -280,8 +281,7 @@ export class PlaybackEngine {
       if (!loadedTrack) continue;
       const currentTrack = this.currentTracks.find(
         (track) =>
-          track.id === loadedTrack.track.id &&
-          track.sourceUrl === loadedTrack.track.sourceUrl,
+          track.id === loadedTrack.track.id && track.sourceUrl === loadedTrack.track.sourceUrl,
       );
       if (!currentTrack || currentTrack.muted) continue;
       this.scheduleTrack(
@@ -320,7 +320,11 @@ export class PlaybackEngine {
         this.cleanupNode(node, false);
       } catch (error) {
         this.reportInternalError(
-          this.toPlaybackError(error, 'NODE_CLEANUP_FAILED', 'Failed to release an ended audio node.'),
+          this.toPlaybackError(
+            error,
+            'NODE_CLEANUP_FAILED',
+            'Failed to release an ended audio node.',
+          ),
         );
       }
     };
@@ -501,12 +505,7 @@ export class PlaybackEngine {
       hasPendingRestart &&
       (structuralChanges.length > 0 || removedTracks.length > 0 || missingTracks.length > 0)
     ) {
-      await this.play(
-        this.currentTracks,
-        currentPosition,
-        projectDuration,
-        this.state.loopEnabled,
-      );
+      await this.play(this.currentTracks, currentPosition, projectDuration, this.state.loopEnabled);
       return;
     }
 
@@ -538,10 +537,7 @@ export class PlaybackEngine {
           buffer: await this.loadBuffer(track.sourceUrl),
         })),
       );
-      if (
-        !this.isCurrentOperation(operationGeneration) ||
-        !this.state.isPlaying
-      ) {
+      if (!this.isCurrentOperation(operationGeneration) || !this.state.isPlaying) {
         return;
       }
 
@@ -559,9 +555,7 @@ export class PlaybackEngine {
         }
 
         const { track, token, buffer } = result.value;
-        const currentTrack = this.currentTracks.find(
-          (candidate) => candidate.id === track.id,
-        );
+        const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
         const pending = this.pendingTrackStarts.get(track.id);
         if (
           pending?.token !== token ||
@@ -574,23 +568,16 @@ export class PlaybackEngine {
         ) {
           continue;
         }
-        this.scheduleTrack(
-          ctx,
-          { track: currentTrack, buffer },
-          currentPosition,
-          anchorTime,
-        );
+        this.scheduleTrack(ctx, { track: currentTrack, buffer }, currentPosition, anchorTime);
       }
 
       if (activeFailures.length === 1) {
         throw activeFailures[0];
       }
       if (activeFailures.length > 1) {
-        throw new PlaybackError(
-          'FETCH_FAILED',
-          'Failed to load multiple active playback tracks.',
-          { cause: activeFailures },
-        );
+        throw new PlaybackError('FETCH_FAILED', 'Failed to load multiple active playback tracks.', {
+          cause: activeFailures,
+        });
       }
     } finally {
       for (const { track, token } of pendingTracks) {
@@ -664,10 +651,7 @@ export class PlaybackEngine {
     }
 
     const elapsed = this.audioContext.currentTime - this.startContextTime;
-    return Math.min(
-      this.startPlayheadPosition + Math.max(elapsed, 0),
-      this.state.projectDuration,
-    );
+    return Math.min(this.startPlayheadPosition + Math.max(elapsed, 0), this.state.projectDuration);
   }
 
   private startAnimationLoop(generation: number) {
@@ -675,11 +659,7 @@ export class PlaybackEngine {
 
     const tick = () => {
       this.rafId = null;
-      if (
-        !this.isCurrentOperation(generation) ||
-        !this.state.isPlaying ||
-        !this.audioContext
-      ) {
+      if (!this.isCurrentOperation(generation) || !this.state.isPlaying || !this.audioContext) {
         return;
       }
 
@@ -866,11 +846,9 @@ export class PlaybackEngine {
     this.activeNodes.delete(trackId);
 
     return errors.length > 0
-      ? new PlaybackError(
-          'NODE_CLEANUP_FAILED',
-          `Failed to release changed track "${trackId}".`,
-          { cause: errors },
-        )
+      ? new PlaybackError('NODE_CLEANUP_FAILED', `Failed to release changed track "${trackId}".`, {
+          cause: errors,
+        })
       : null;
   }
 
@@ -891,11 +869,7 @@ export class PlaybackEngine {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private toPlaybackError(
-    error: unknown,
-    code: PlaybackErrorCode,
-    message: string,
-  ): PlaybackError {
+  private toPlaybackError(error: unknown, code: PlaybackErrorCode, message: string): PlaybackError {
     return error instanceof PlaybackError
       ? error
       : new PlaybackError(code, `${message} ${this.describeError(error)}`, { cause: error });

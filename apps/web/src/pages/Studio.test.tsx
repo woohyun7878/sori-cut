@@ -7,17 +7,15 @@ const storeState = {
   originalAudio: null,
   stems: [],
   recordings: [],
-  video: null as
-    | {
-        id: string;
-        name: string;
-        blob: Blob;
-        url: string;
-        duration: number;
-        width: number;
-        height: number;
-      }
-    | null,
+  video: null as {
+    id: string;
+    name: string;
+    blob: Blob;
+    url: string;
+    duration: number;
+    width: number;
+    height: number;
+  } | null,
   tracks: [],
   selectedTrackId: null,
   playheadPosition: 0,
@@ -303,7 +301,7 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).toHaveBeenCalledWith(1.25);
   });
 
-  it('queues newer programmatic video targets until the prior seek completes', () => {
+  it('coalesces programmatic targets and releases stale values for later user seeks', () => {
     storeState.video = {
       id: 'video-1',
       name: 'preview.mp4',
@@ -319,8 +317,16 @@ describe('Studio shell', () => {
       </MemoryRouter>,
     );
     const player = document.querySelector('video') as HTMLVideoElement;
+    let mediaTime = 0;
+    const setCurrentTime = vi.fn((value: number) => {
+      mediaTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => mediaTime,
+      set: setCurrentTime,
+    });
     Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
-    player.currentTime = 0;
     vi.clearAllMocks();
 
     storeState.playheadPosition = 1;
@@ -336,10 +342,64 @@ describe('Studio shell', () => {
       </MemoryRouter>,
     );
 
-    expect(player.currentTime).toBe(1);
-    fireEvent.seeked(player);
+    expect(setCurrentTime.mock.calls.map(([target]) => target)).toEqual([1, 1.5]);
     expect(player.currentTime).toBe(1.5);
     fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+
+    player.currentTime = 1;
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(1);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledWith(1);
+  });
+
+  it('keeps the latest programmatic target through out-of-order seek events', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 3,
+      width: 1080,
+      height: 1920,
+    };
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    let mediaTime = 0;
+    const setCurrentTime = vi.fn((value: number) => {
+      mediaTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => mediaTime,
+      set: setCurrentTime,
+    });
+    Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    storeState.playheadPosition = 2;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    mediaTime = 1;
+    fireEvent.seeked(player);
+    expect(player.currentTime).toBe(2);
+    fireEvent.seeked(player);
+
+    expect(setCurrentTime.mock.calls.map(([target]) => target)).toEqual([1, 2, 2]);
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
@@ -382,45 +442,76 @@ describe('Studio shell', () => {
   });
 
   it.each([
-    { duration: 2, target: 1.8 },
+    { duration: 2, target: 1.999 },
     { duration: 0.2, target: 0.1 },
-  ])(
-    'repositions and resumes ended video at project target $target',
-    ({ duration, target }) => {
-      storeState.video = {
-        id: 'video-1',
-        name: 'preview.mp4',
-        blob: new Blob(),
-        url: 'blob:preview',
-        duration,
-        width: 1080,
-        height: 1920,
-      };
-      storeState.isPlaying = true;
-      storeState.playheadPosition = duration;
-      const view = render(
-        <MemoryRouter>
-          <Studio />
-        </MemoryRouter>,
-      );
-      const player = document.querySelector('video') as HTMLVideoElement;
-      Object.defineProperty(player, 'duration', { configurable: true, value: duration });
-      Object.defineProperty(player, 'ended', { configurable: true, value: true });
-      player.currentTime = duration;
-      fireEvent.seeked(player);
-      vi.clearAllMocks();
+  ])('repositions and resumes ended video at project target $target', ({ duration, target }) => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    storeState.playheadPosition = duration;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: duration });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    player.currentTime = duration;
+    fireEvent.seeked(player);
+    vi.clearAllMocks();
 
-      storeState.playheadPosition = target;
-      view.rerender(
-        <MemoryRouter>
-          <Studio />
-        </MemoryRouter>,
-      );
+    storeState.playheadPosition = target;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
 
-      expect(player.currentTime).toBe(target);
-      expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
-      fireEvent.seeked(player);
-      expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
-    },
-  );
+    expect(player.currentTime).toBe(target);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not resume an ended video while project playback is paused', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.playheadPosition = 2;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    player.currentTime = 2;
+    fireEvent.seeked(player);
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1.8;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(player.currentTime).toBe(2);
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
 });
