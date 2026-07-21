@@ -248,8 +248,13 @@ export class PlaybackEngine {
     const candidates = tracks.filter((track) => !track.muted && Boolean(track.sourceUrl));
     const loadedTracks = await Promise.all(
       candidates.map(async (track): Promise<LoadedTrack | null> => {
-        const buffer = await this.loadBuffer(track.sourceUrl);
-        return buffer ? { track, buffer } : null;
+        try {
+          const buffer = await this.loadBuffer(track.sourceUrl);
+          return buffer ? { track, buffer } : null;
+        } catch (error) {
+          if (!this.isTrackSourceCurrent(track, generation)) return null;
+          throw error;
+        }
       }),
     );
 
@@ -447,7 +452,6 @@ export class PlaybackEngine {
       if (this.activeNodes.has(track.id)) {
         this.updateTrackVolume(track.id, this.currentTracks);
       }
-    }
 
     const currentPosition = this.getCurrentPlaybackPosition();
     const missingTracks = [...addedTracks, ...structuralChanges, ...mixChanges].filter(
@@ -475,19 +479,39 @@ export class PlaybackEngine {
       );
     }
 
-    if (missingTracks.length === 0) return;
+      const hasPendingRestart =
+        this.state.isStarting || this.loopRestartGeneration === operationGeneration;
+      if (
+        hasPendingRestart &&
+        (structuralChanges.length > 0 || removedTrackIds.length > 0 || missingTracks.length > 0)
+      ) {
+        restartingPlayback = true;
+        await this.play(
+          this.currentTracks,
+          currentPosition,
+          projectDuration,
+          this.state.loopEnabled,
+        );
+        return;
+      }
 
-    if (this.state.isStarting) {
-      await this.play(
-        this.currentTracks,
-        currentPosition,
-        this.state.projectDuration,
-        this.state.loopEnabled,
+      if (missingTracks.length > 0) {
+        await this.scheduleMissingTracks(missingTracks);
+      }
+    } catch (error) {
+      if (restartingPlayback) throw error;
+      if (
+        !this.isCurrentOperation(operationGeneration) ||
+        (!this.state.isPlaying && !this.state.isStarting)
+      ) {
+        return;
+      }
+
+      this.failInternalPlayback(
+        operationGeneration,
+        this.toPlaybackError(error, 'SCHEDULE_FAILED', 'Unable to synchronize audio playback.'),
       );
-      return;
     }
-
-    await this.scheduleMissingTracks(missingTracks);
   }
 
   private async scheduleMissingTracks(tracks: TimelineTrack[]) {
@@ -514,10 +538,7 @@ export class PlaybackEngine {
           buffer: await this.loadBuffer(track.sourceUrl),
         })),
       );
-      if (
-        !this.isCurrentOperation(operationGeneration) ||
-        !this.state.isPlaying
-      ) {
+      if (!this.isCurrentOperation(operationGeneration) || !this.state.isPlaying) {
         return;
       }
 
@@ -546,16 +567,12 @@ export class PlaybackEngine {
           !currentTrack ||
           currentTrack.sourceUrl !== track.sourceUrl ||
           currentTrack.muted ||
+          currentTrack.sourceUrl !== track.sourceUrl ||
           this.activeNodes.has(track.id)
         ) {
           continue;
         }
-        this.scheduleTrack(
-          ctx,
-          { track: currentTrack, buffer },
-          currentPosition,
-          anchorTime,
-        );
+        this.scheduleTrack(ctx, { track: currentTrack, buffer }, currentPosition, anchorTime);
       }
 
       if (activeFailures.length === 1) {
@@ -621,7 +638,7 @@ export class PlaybackEngine {
     }
   }
 
-  private getCurrentPlaybackPosition() {
+  private getCurrentPlaybackPosition(projectDuration = this.state.projectDuration) {
     if (
       !this.state.isPlaying ||
       !this.audioContext ||
@@ -633,7 +650,7 @@ export class PlaybackEngine {
     const elapsed = this.audioContext.currentTime - this.startContextTime;
     return Math.min(
       this.startPlayheadPosition + Math.max(elapsed, 0),
-      this.state.projectDuration,
+      projectDuration,
     );
   }
 
