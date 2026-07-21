@@ -221,6 +221,28 @@ describe('PlaybackEngine reliability', () => {
     expect(firstBuffer).toBe(secondBuffer);
   });
 
+  it('rejects late decode completion after destroy without repopulating cache', async () => {
+    const decoded = deferred<AudioBuffer>();
+    decodeAudioData.mockReturnValue(decoded.promise);
+    const engine = createEngine();
+
+    const load = engine.loadBuffer('blob:late-decode');
+    await vi.waitFor(() => expect(decodeAudioData).toHaveBeenCalledTimes(1));
+    engine.destroy();
+    decoded.resolve(createAudioBuffer());
+
+    await expect(load).rejects.toMatchObject({
+      code: 'CONTEXT_FAILED',
+      sourceUrl: 'blob:late-decode',
+    });
+    const bufferCache = Reflect.get(engine, 'bufferCache') as Map<string, AudioBuffer>;
+    expect(bufferCache.size).toBe(0);
+    await expect(engine.loadBuffer('blob:late-decode')).rejects.toMatchObject({
+      code: 'CONTEXT_FAILED',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('loads uncached tracks in parallel and starts them from one scheduling anchor', async () => {
     const firstResponse = deferred<Response>();
     const secondResponse = deferred<Response>();

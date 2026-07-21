@@ -108,6 +108,7 @@ export class PlaybackEngine {
   }
 
   async loadBuffer(url: string): Promise<AudioBuffer | null> {
+    this.throwIfDestroyed(url);
     if (!url) return null;
 
     const cached = this.bufferCache.get(url);
@@ -132,7 +133,9 @@ export class PlaybackEngine {
     let response: Response;
     try {
       response = await fetch(url);
+      this.throwIfDestroyed(url);
     } catch (error) {
+      if (error instanceof PlaybackError) throw error;
       throw new PlaybackError(
         'FETCH_FAILED',
         `Failed to fetch audio source "${url}": ${this.describeError(error)}`,
@@ -152,7 +155,9 @@ export class PlaybackEngine {
     let arrayBuffer: ArrayBuffer;
     try {
       arrayBuffer = await response.arrayBuffer();
+      this.throwIfDestroyed(url);
     } catch (error) {
+      if (error instanceof PlaybackError) throw error;
       throw new PlaybackError(
         'FETCH_FAILED',
         `Failed to read audio source "${url}": ${this.describeError(error)}`,
@@ -162,6 +167,7 @@ export class PlaybackEngine {
 
     try {
       const audioBuffer = await this.getContext().decodeAudioData(arrayBuffer);
+      this.throwIfDestroyed(url);
       this.bufferCache.set(url, audioBuffer);
       return audioBuffer;
     } catch (error) {
@@ -171,6 +177,14 @@ export class PlaybackEngine {
         `Failed to decode audio source "${url}": ${this.describeError(error)}`,
         { sourceUrl: url, cause: error },
       );
+    }
+  }
+
+  private throwIfDestroyed(sourceUrl?: string): void {
+    if (this.destroyed) {
+      throw new PlaybackError('CONTEXT_FAILED', 'Playback engine has been destroyed.', {
+        sourceUrl,
+      });
     }
   }
 

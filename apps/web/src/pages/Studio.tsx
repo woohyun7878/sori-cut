@@ -208,6 +208,11 @@ function SyncSummary() {
 function PreviewWorkspace() {
   const video = useProjectStore((state) => state.video);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const staleVideoSeekTargetRef = useRef<number | null>(null);
+  const pendingVideoSeekRef = useRef<{
+    target: number;
+    queuedTarget: number | null;
+  } | null>(null);
   const playheadPosition = useProjectStore((state) => state.playheadPosition);
   const isPlaying = useProjectStore((state) => state.isPlaying);
   const setIsPlaying = useProjectStore((state) => state.setIsPlaying);
@@ -215,18 +220,48 @@ function PreviewWorkspace() {
   const [safeAreaVisible, setSafeAreaVisible] = useState(true);
   const [previewZoom, setPreviewZoom] = useState(1);
 
+  const seekVideoProgrammatically = useCallback(
+    (player: HTMLVideoElement, target: number) => {
+      const pending = pendingVideoSeekRef.current;
+      if (pending) {
+        if (Math.abs(pending.target - target) > 0.01) {
+          pending.queuedTarget = target;
+        }
+        return;
+      }
+      if (Math.abs(player.currentTime - target) <= 0.01) return;
+
+      pendingVideoSeekRef.current = { target, queuedTarget: null };
+      player.currentTime = target;
+    },
+    [],
+  );
+
   useEffect(() => {
     const player = videoRef.current;
     if (!player) return;
 
-    const wasEnded = player.ended;
-    if (Math.abs(player.currentTime - playheadPosition) > 0.35) {
-      player.currentTime = Math.min(playheadPosition, player.duration || playheadPosition);
-    }
-    if (wasEnded && isPlaying && playheadPosition < 0.35) {
+    const mediaDuration = Number.isFinite(player.duration)
+      ? player.duration
+      : (video?.duration ?? playheadPosition);
+    const target = Math.min(playheadPosition, mediaDuration);
+    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration - 0.01;
+    if (shouldResumeFromEnd) {
+      seekVideoProgrammatically(player, target);
       void player.play().catch(() => setIsPlaying(false));
+      return;
     }
-  }, [isPlaying, playheadPosition, setIsPlaying]);
+
+    if (Math.abs(player.currentTime - target) > 0.35) {
+      seekVideoProgrammatically(player, target);
+    }
+  }, [
+    isPlaying,
+    playheadPosition,
+    seekVideoProgrammatically,
+    setIsPlaying,
+    video?.duration,
+  ]);
 
   useEffect(() => {
     const player = videoRef.current;
@@ -293,7 +328,41 @@ function PreviewWorkspace() {
               onPause={(event) => {
                 if (!event.currentTarget.ended) setIsPlaying(false);
               }}
-              onSeeked={(event) => setPlayheadPosition(event.currentTarget.currentTime)}
+              onSeeked={(event) => {
+                const player = event.currentTarget;
+                const pending = pendingVideoSeekRef.current;
+                if (pending && Math.abs(player.currentTime - pending.target) <= 0.05) {
+                  const queuedTarget = pending.queuedTarget;
+                  pendingVideoSeekRef.current = null;
+                  staleVideoSeekTargetRef.current = null;
+                  if (
+                    queuedTarget !== null &&
+                    Math.abs(player.currentTime - queuedTarget) > 0.01
+                  ) {
+                    seekVideoProgrammatically(player, queuedTarget);
+                  }
+                  return;
+                }
+
+                if (pending) {
+                  staleVideoSeekTargetRef.current = pending.target;
+                  pendingVideoSeekRef.current = null;
+                  setPlayheadPosition(player.currentTime);
+                  return;
+                }
+
+                const staleTarget = staleVideoSeekTargetRef.current;
+                staleVideoSeekTargetRef.current = null;
+                if (
+                  staleTarget !== null &&
+                  Math.abs(player.currentTime - staleTarget) <= 0.05
+                ) {
+                  return;
+                }
+
+                pendingVideoSeekRef.current = null;
+                setPlayheadPosition(player.currentTime);
+              }}
             />
           ) : (
             <div className="studio-preview-empty">
