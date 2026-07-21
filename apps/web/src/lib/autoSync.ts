@@ -24,7 +24,7 @@ export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
   AUTO_SYNC_MAX_ANALYSIS_SAMPLES * Float32Array.BYTES_PER_ELEMENT * 2;
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
 const METADATA_TIMEOUT_MS = 5_000;
-const SUPPORTED_AUDIO_DESCRIPTION = 'MP3, AAC, FLAC, M4A, WebM, or WAV';
+const SUPPORTED_AUDIO_DESCRIPTION = 'MP3, AAC, FLAC, single-stream Ogg, M4A, WebM, or WAV';
 
 export interface AutoSyncResult {
   /** Signed target placement: positive delays it; negative advances its source in-point. */
@@ -284,12 +284,8 @@ function normalizeMediaInfoValue(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? '';
 }
 
-function isSupportedAudioFormat(
-  general: TrackType | undefined,
-  audioTracks: TrackType[],
-  hasVideo: boolean,
-): boolean {
-  if (!general || audioTracks.length === 0 || hasVideo) {
+function isSupportedAudioFormat(general: TrackType | undefined, audioTracks: TrackType[]): boolean {
+  if (!general || audioTracks.length === 0) {
     return false;
   }
 
@@ -311,13 +307,122 @@ function isSupportedAudioFormat(
   if (container === 'flac') {
     return codecs.every((codec) => codec === 'flac');
   }
-  if (container === 'mpeg-4') {
-    return codecs.every((codec) => codec === 'aac');
+  if (container === 'ogg') {
+    return codecs.every((codec) => codec === 'vorbis' || codec === 'opus');
+  }
+  if (container === 'mpeg-4' || container === 'quicktime') {
+    return codecs.every((codec) => codec === 'aac' || codec === 'pcm');
   }
   if (container === 'webm') {
     return codecs.every((codec) => codec === 'vorbis' || codec === 'opus');
   }
   return false;
+}
+
+type OggValidationResult = 'single-stream' | 'multiple-streams' | 'malformed';
+
+const OGG_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let value = 0; value < table.length; value++) {
+    let crc = value << 24;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = crc & 0x8000_0000 ? (crc << 1) ^ 0x04c1_1db7 : crc << 1;
+    }
+    table[value] = crc >>> 0;
+  }
+  return table;
+})();
+
+function calculateOggPageCrc(bytes: Uint8Array, start: number, end: number): number {
+  let crc = 0;
+  for (let offset = start; offset < end; offset++) {
+    const value = offset >= start + 22 && offset < start + 26 ? 0 : bytes[offset];
+    crc = ((crc << 8) ^ OGG_CRC_TABLE[((crc >>> 24) ^ value) & 0xff]) >>> 0;
+  }
+  return crc;
+}
+
+function validateSingleLogicalOggStream(buffer: ArrayBuffer): OggValidationResult {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  let offset = 0;
+  let streamSerial: number | undefined;
+  let expectedSequence = 0;
+  let expectsContinuation = false;
+  let sawEndOfStream = false;
+
+  while (offset < bytes.byteLength) {
+    if (sawEndOfStream) {
+      return 'multiple-streams';
+    }
+    if (offset + 27 > bytes.byteLength) {
+      return 'malformed';
+    }
+    if (
+      bytes[offset] !== 0x4f ||
+      bytes[offset + 1] !== 0x67 ||
+      bytes[offset + 2] !== 0x67 ||
+      bytes[offset + 3] !== 0x53 ||
+      bytes[offset + 4] !== 0
+    ) {
+      return 'malformed';
+    }
+
+    const headerType = bytes[offset + 5];
+    if ((headerType & ~0x07) !== 0) {
+      return 'malformed';
+    }
+    const segmentCount = bytes[offset + 26];
+    const isContinuation = (headerType & 0x01) !== 0;
+    if (isContinuation !== expectsContinuation || (isContinuation && segmentCount === 0)) {
+      return 'malformed';
+    }
+    const segmentTableEnd = offset + 27 + segmentCount;
+    if (segmentTableEnd > bytes.byteLength) {
+      return 'malformed';
+    }
+    let bodyBytes = 0;
+    for (let index = offset + 27; index < segmentTableEnd; index++) {
+      bodyBytes += bytes[index];
+    }
+    const pageEnd = segmentTableEnd + bodyBytes;
+    if (!Number.isSafeInteger(pageEnd) || pageEnd > bytes.byteLength) {
+      return 'malformed';
+    }
+    const pageContinues = segmentCount > 0 && bytes[segmentTableEnd - 1] === 255;
+    if ((headerType & 0x04) !== 0 && pageContinues) {
+      return 'malformed';
+    }
+
+    const storedCrc = view.getUint32(offset + 22, true);
+    if (calculateOggPageCrc(bytes, offset, pageEnd) !== storedCrc) {
+      return 'malformed';
+    }
+    const serial = view.getUint32(offset + 14, true);
+    const sequence = view.getUint32(offset + 18, true);
+    if (streamSerial === undefined) {
+      if ((headerType & 0x02) === 0 || sequence !== 0) {
+        return 'malformed';
+      }
+      streamSerial = serial;
+    } else {
+      if (serial !== streamSerial || (headerType & 0x02) !== 0) {
+        return 'multiple-streams';
+      }
+      if (sequence !== expectedSequence) {
+        return 'malformed';
+      }
+    }
+
+    expectedSequence = sequence + 1;
+    expectsContinuation = pageContinues;
+    sawEndOfStream = (headerType & 0x04) !== 0;
+    offset = pageEnd;
+  }
+
+  return streamSerial !== undefined && sawEndOfStream && !expectsContinuation
+    ? 'single-stream'
+    : 'malformed';
 }
 
 function calculateDecodedBytes(
@@ -412,12 +517,27 @@ async function inspectAudioMemory(
   const tracks = metadata.media?.track ?? [];
   const general = tracks.find((track) => track['@type'] === 'General');
   const audioTracks = tracks.filter((track) => track['@type'] === 'Audio');
-  const hasVideo = tracks.some((track) => track['@type'] === 'Video');
-  if (!isSupportedAudioFormat(general, audioTracks, hasVideo)) {
+  if (!isSupportedAudioFormat(general, audioTracks)) {
     throw new AutoSyncInputError(
       'unsupported-format',
       `${label} audio is not a supported ${SUPPORTED_AUDIO_DESCRIPTION} file`,
     );
+  }
+  if (normalizeMediaInfoValue(general?.Format) === 'ogg') {
+    const oggValidation = validateSingleLogicalOggStream(buffer);
+    if (oggValidation === 'multiple-streams') {
+      throw new AutoSyncInputError(
+        'unsupported-format',
+        `${label} Ogg audio contains chained or multiplexed streams; ` +
+          'export it as a single-stream Ogg, FLAC, or WAV file',
+      );
+    }
+    if (oggValidation === 'malformed') {
+      throw new AutoSyncInputError(
+        'malformed-metadata',
+        `${label} Ogg audio has invalid page framing or checksums; export it again`,
+      );
+    }
   }
 
   let duration = 0;

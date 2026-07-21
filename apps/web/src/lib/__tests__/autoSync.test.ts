@@ -93,6 +93,57 @@ function createMediaInfoResult(format: {
   return { media: { '@ref': 'test-audio', track } };
 }
 
+function calculateOggCrc(bytes: Uint8Array): number {
+  let crc = 0;
+  for (let offset = 0; offset < bytes.byteLength; offset++) {
+    const value = offset >= 22 && offset < 26 ? 0 : bytes[offset];
+    crc ^= value << 24;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = crc & 0x8000_0000 ? (crc << 1) ^ 0x04c1_1db7 : crc << 1;
+    }
+  }
+  return crc >>> 0;
+}
+
+function createOggPage(
+  streamSerial: number,
+  sequence: number,
+  headerType: number,
+  body: Uint8Array,
+): Uint8Array {
+  if (body.byteLength > 255) {
+    throw new Error('Test Ogg pages support one lacing segment');
+  }
+  const page = new Uint8Array(28 + body.byteLength);
+  page.set([0x4f, 0x67, 0x67, 0x53], 0);
+  page[5] = headerType;
+  const view = new DataView(page.buffer);
+  view.setUint32(14, streamSerial, true);
+  view.setUint32(18, sequence, true);
+  page[26] = 1;
+  page[27] = body.byteLength;
+  page.set(body, 28);
+  view.setUint32(22, calculateOggCrc(page), true);
+  return page;
+}
+
+function combineBytes(...arrays: Uint8Array[]): ArrayBuffer {
+  const combined = new Uint8Array(arrays.reduce((total, array) => total + array.byteLength, 0));
+  let offset = 0;
+  for (const array of arrays) {
+    combined.set(array, offset);
+    offset += array.byteLength;
+  }
+  return combined.buffer;
+}
+
+function createSingleStreamOgg(streamSerial = 0x1234_5678): ArrayBuffer {
+  return combineBytes(
+    createOggPage(streamSerial, 0, 0x02, new TextEncoder().encode('OpusHead')),
+    createOggPage(streamSerial, 1, 0x04, Uint8Array.of(1, 2, 3)),
+  );
+}
+
 function frameAmplitude(frame: number): number {
   let hash = frame + 1;
   hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
@@ -538,6 +589,77 @@ describe('computeAutoSyncOffset', () => {
     );
   });
 
+  it.each([
+    ['MP4', 'MPEG-4', 'AAC'],
+    ['MOV', 'QuickTime', 'AAC'],
+    ['WebM', 'WebM', 'Opus'],
+  ])(
+    'accepts the audio track from a normal %s video reference',
+    async (_name, container, codec) => {
+      parseAudioMetadata.mockResolvedValue(
+        createMediaInfoResult({
+          container,
+          codec,
+          duration: 5,
+          sampleRate: SAMPLE_RATE,
+          numberOfChannels: 2,
+          hasVideo: true,
+        }),
+      );
+
+      await expect(computeAutoSyncOffset('blob:video-reference', 'blob:target')).resolves.toEqual(
+        expect.objectContaining({ confidence: expect.any(Number) }),
+      );
+    },
+  );
+
+  it('accepts a structurally valid single-stream Ogg track', async () => {
+    const ogg = createSingleStreamOgg();
+    let request = 0;
+    parseAudioMetadata
+      .mockResolvedValueOnce(
+        createMediaInfoResult({
+          container: 'Ogg',
+          codec: 'Vorbis I',
+          duration: 5,
+          sampleRate: SAMPLE_RATE,
+          numberOfChannels: 2,
+        }),
+      )
+      .mockResolvedValueOnce(
+        createMediaInfoResult({
+          container: 'MPEG',
+          codec: 'MPEG 1 Layer III',
+          duration: 5,
+          sampleRate: SAMPLE_RATE,
+          numberOfChannels: 1,
+        }),
+      );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        request++;
+        const byteLength = request === 1 ? ogg.byteLength : TARGET_BYTES;
+        const response =
+          request === 1
+            ? createStreamResponse({
+                chunks: [new Uint8Array(ogg)],
+                supportsByob: true,
+              })
+            : createGeneratedByobResponse(TARGET_BYTES);
+        return Object.assign(response, {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-length': String(byteLength) }),
+        });
+      }),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ogg-reference', 'blob:target')).resolves.toEqual(
+      expect.objectContaining({ confidence: expect.any(Number) }),
+    );
+  });
+
   it('advances a delayed target within the documented 20 ms tolerance', async () => {
     const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
 
@@ -851,8 +973,12 @@ describe('computeAutoSyncOffset', () => {
     },
   );
 
-  it('rejects Ogg before decoding because chained serials cannot be bounded reliably', async () => {
+  it('rejects chained Ogg even when metadata reports only its first logical stream', async () => {
     const decodeAudioData = vi.fn();
+    const chainedOgg = combineBytes(
+      createOggPage(0x1111_1111, 0, 0x06, new TextEncoder().encode('OpusHead')),
+      createOggPage(0x2222_2222, 0, 0x06, new TextEncoder().encode('OpusHead')),
+    );
     parseAudioMetadata.mockResolvedValue({
       media: {
         '@ref': 'chained.ogg',
@@ -865,16 +991,25 @@ describe('computeAutoSyncOffset', () => {
             SamplingRate: 48_000,
             Channels: 2,
           },
-          {
-            '@type': 'Audio',
-            Format: 'Opus',
-            Duration: 300,
-            SamplingRate: 48_000,
-            Channels: 2,
-          },
         ],
       },
     });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Object.assign(
+          createStreamResponse({
+            chunks: [new Uint8Array(chainedOgg)],
+            supportsByob: true,
+          }),
+          {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-length': String(chainedOgg.byteLength) }),
+          },
+        ),
+      ),
+    );
     vi.stubGlobal(
       'AudioContext',
       class {
@@ -888,6 +1023,109 @@ describe('computeAutoSyncOffset', () => {
     );
     expect(error).toBeInstanceOf(AutoSyncInputError);
     expect(error).toMatchObject({ code: 'unsupported-format' });
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('rejects Ogg with a corrupt page checksum before decoding', async () => {
+    const decodeAudioData = vi.fn();
+    const corruptOgg = new Uint8Array(createSingleStreamOgg());
+    corruptOgg[corruptOgg.byteLength - 1] ^= 0xff;
+    parseAudioMetadata.mockResolvedValue(
+      createMediaInfoResult({
+        container: 'Ogg',
+        codec: 'Vorbis I',
+        duration: 5,
+        sampleRate: SAMPLE_RATE,
+        numberOfChannels: 2,
+      }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Object.assign(
+          createStreamResponse({
+            chunks: [corruptOgg],
+            supportsByob: true,
+          }),
+          {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-length': String(corruptOgg.byteLength) }),
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+
+    const error = await computeAutoSyncOffset('blob:corrupt-ogg', 'blob:target').catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(AutoSyncInputError);
+    expect(error).toMatchObject({ code: 'malformed-metadata' });
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'continued flag on its beginning-of-stream page',
+      combineBytes(
+        createOggPage(0x1234_5678, 0, 0x03, new TextEncoder().encode('OpusHead')),
+        createOggPage(0x1234_5678, 1, 0x04, Uint8Array.of(1)),
+      ),
+    ],
+    [
+      'missing continuation after an unfinished packet',
+      combineBytes(
+        createOggPage(0x1234_5678, 0, 0x02, new Uint8Array(255)),
+        createOggPage(0x1234_5678, 1, 0x04, Uint8Array.of(1)),
+      ),
+    ],
+  ])('rejects Ogg with %s before decoding', async (_name, malformedOgg) => {
+    const decodeAudioData = vi.fn();
+    parseAudioMetadata.mockResolvedValue(
+      createMediaInfoResult({
+        container: 'Ogg',
+        codec: 'Vorbis I',
+        duration: 5,
+        sampleRate: SAMPLE_RATE,
+        numberOfChannels: 2,
+      }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Object.assign(
+          createStreamResponse({
+            chunks: [new Uint8Array(malformedOgg)],
+            supportsByob: true,
+          }),
+          {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-length': String(malformedOgg.byteLength) }),
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+
+    const error = await computeAutoSyncOffset('blob:malformed-ogg', 'blob:target').catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(AutoSyncInputError);
+    expect(error).toMatchObject({ code: 'malformed-metadata' });
     expect(decodeAudioData).not.toHaveBeenCalled();
   });
 
