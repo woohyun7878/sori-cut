@@ -106,6 +106,30 @@ describe('usePlaybackEngine', () => {
     expect(engine.setLoopEnabled).toHaveBeenCalledTimes(3);
   });
 
+  it('propagates loop changes to the existing engine while startup is pending', async () => {
+    let resolveStartup!: () => void;
+    const startup = new Promise<void>((resolve) => {
+      resolveStartup = resolve;
+    });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    engine.play.mockReturnValueOnce(startup);
+
+    act(() => {
+      useProjectStore.getState().setIsPlaying(true);
+    });
+    await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useProjectStore.getState().setLoopEnabled(true);
+    });
+    await waitFor(() => expect(engine.setLoopEnabled).toHaveBeenLastCalledWith(true));
+
+    expect(playbackMocks.instances).toHaveLength(1);
+    resolveStartup();
+    await startup;
+  });
+
   it('commits the final playhead position when playback ends', async () => {
     useProjectStore.setState({
       tracks: [
