@@ -208,6 +208,7 @@ function SyncSummary() {
 function PreviewWorkspace() {
   const video = useProjectStore((state) => state.video);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const syncingVideoRef = useRef(false);
   const playheadPosition = useProjectStore((state) => state.playheadPosition);
   const isPlaying = useProjectStore((state) => state.isPlaying);
   const setIsPlaying = useProjectStore((state) => state.setIsPlaying);

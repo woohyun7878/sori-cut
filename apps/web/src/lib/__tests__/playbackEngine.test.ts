@@ -62,6 +62,7 @@ const decodeAudioData = vi.fn();
 const closeAudioContext = vi.fn();
 const fetchMock = vi.fn();
 const engines: PlaybackEngine[] = [];
+const createdContexts: MockAudioContext[] = [];
 const animationFrames = new Map<number, FrameRequestCallback>();
 let nextFrameId = 1;
 let contextTime = 0;
@@ -72,6 +73,14 @@ let throwOnStartNumber: number | null = null;
 class MockAudioContext {
   state: AudioContextState = 'running';
   destination = {};
+  close = vi.fn(() => {
+    this.state = 'closed';
+    return Promise.resolve();
+  });
+
+  constructor() {
+    createdContexts.push(this);
+  }
 
   get currentTime() {
     contextTimeReads++;
@@ -143,8 +152,7 @@ function successfulResponse(): Response {
 
 function runNextAnimationFrame() {
   const entry = animationFrames.entries().next().value as
-    | [number, FrameRequestCallback]
-    | undefined;
+    [number, FrameRequestCallback] | undefined;
   if (!entry) throw new Error('No animation frame was scheduled.');
   animationFrames.delete(entry[0]);
   entry[1](0);
@@ -172,6 +180,7 @@ describe('PlaybackEngine reliability', () => {
     vi.clearAllMocks();
     createdSources.length = 0;
     createdGains.length = 0;
+    createdContexts.length = 0;
     animationFrames.clear();
     nextFrameId = 1;
     contextTime = 0;
@@ -246,9 +255,7 @@ describe('PlaybackEngine reliability', () => {
     await play;
 
     expect(createdSources).toHaveLength(2);
-    expect(createdSources[0].start.mock.calls[0][0]).toBe(
-      createdSources[1].start.mock.calls[0][0],
-    );
+    expect(createdSources[0].start.mock.calls[0][0]).toBe(createdSources[1].start.mock.calls[0][0]);
     expect(contextTimeReads).toBe(1);
   });
 
@@ -341,6 +348,24 @@ describe('PlaybackEngine reliability', () => {
     expect(engine.isPlaying).toBe(true);
   });
 
+  it('preserves the requested startup position when the mix changes during loading', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const engine = createEngine();
+    const track = createTrack();
+
+    const play = engine.play([track], 2, 5, false);
+    await Promise.resolve();
+    const mixUpdate = engine.updateTracks([{ ...track, volume: 0.4 }], 5);
+    response.resolve(successfulResponse());
+    await Promise.all([play, mixUpdate]);
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].start).toHaveBeenCalledWith(0, 2, 3);
+    expect(createdGains[0].gain.value).toBe(0.4);
+    expect(engine.isPlaying).toBe(true);
+  });
+
   it('disconnects ended and stopped nodes without retaining ended nodes', async () => {
     const engine = createEngine();
     const tracks = [
@@ -353,10 +378,7 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources[0].disconnect).toHaveBeenCalledTimes(1);
     expect(createdGains[0].disconnect).toHaveBeenCalledTimes(1);
 
-    engine.updateTrackVolume('ended', [
-      { ...tracks[0], volume: 0.25 },
-      tracks[1],
-    ]);
+    await engine.updateTracks([{ ...tracks[0], volume: 0.25 }, tracks[1]], 5);
     expect(createdGains[0].gain.linearRampToValueAtTime).not.toHaveBeenCalled();
 
     engine.stop();
@@ -372,16 +394,96 @@ describe('PlaybackEngine reliability', () => {
     await engine.play([track], 0, 5, false);
     contextTimeReads = 0;
 
-    engine.updateTrackVolume(track.id, [{ ...track, volume: 0.25 }]);
+    await engine.updateTracks([{ ...track, volume: 0.25 }], 5);
 
     const parameter = createdGains[0].gain;
     expect(parameter.cancelScheduledValues).toHaveBeenCalledWith(0);
     expect(parameter.setValueAtTime).toHaveBeenCalledWith(1, 0);
     expect(parameter.linearRampToValueAtTime).toHaveBeenCalledWith(0.25, 0.01);
 
-    engine.updateTrackVolume(track.id, [{ ...track, muted: true }]);
+    await engine.updateTracks([{ ...track, volume: 0.25, muted: true }], 5);
     expect(parameter.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 0.01);
     expect(contextTimeReads).toBe(2);
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].start).toHaveBeenCalledTimes(1);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+  });
+
+  it('schedules an initially muted track from the live playhead and source offset', async () => {
+    const engine = createEngine();
+    const track = createTrack({ muted: true, sourceStartOffset: 1 });
+    await engine.play([track], 0, 5, false);
+    expect(createdSources).toHaveLength(0);
+
+    contextTime = 2;
+    await engine.updateTracks([{ ...track, muted: false }], 5);
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].start).toHaveBeenCalledWith(2, 3, 3);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('ignores a failed unmute load after the track is muted again', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const engine = createEngine();
+    const track = createTrack({ muted: true });
+    await engine.play([track], 0, 5, false);
+
+    const unmute = engine.updateTracks([{ ...track, muted: false }], 5);
+    await Promise.resolve();
+    await engine.updateTracks([track], 5);
+    response.reject(new Error('network failed'));
+
+    await expect(unmute).resolves.toBeUndefined();
+    expect(createdSources).toHaveLength(0);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('uses the latest live mix when scheduling the next loop', async () => {
+    const engine = createEngine();
+    const track = createTrack({ duration: 1 });
+    await engine.play([track], 0, 1, true);
+
+    await engine.updateTracks([{ ...track, volume: 0.3 }], 1);
+    contextTime = 2;
+    runNextAnimationFrame();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(2));
+
+    expect(createdGains[1].gain.value).toBe(0.3);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('cancels a pending loop schedule when the latest mix mutes the track', async () => {
+    const engine = createEngine();
+    const track = createTrack({ duration: 1 });
+    await engine.play([track], 0, 1, true);
+
+    contextTime = 2;
+    runNextAnimationFrame();
+    await engine.updateTracks([{ ...track, muted: true }], 1);
+    await Promise.resolve();
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
+    expect(engine.isPlaying).toBe(true);
+    expect(animationFrames.size).toBe(1);
+  });
+
+  it('atomically reschedules source changes and removals at the current position', async () => {
+    const engine = createEngine();
+    const first = createTrack({ id: 'first', sourceUrl: 'blob:first' });
+    const second = createTrack({ id: 'second', sourceUrl: 'blob:second' });
+    await engine.play([first, second], 0, 5, false);
+
+    contextTime = 2;
+    await engine.updateTracks([{ ...first, sourceUrl: 'blob:replacement' }], 5);
+
+    expect(createdSources).toHaveLength(3);
+    expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[2].start).toHaveBeenCalledWith(2, 2, 3);
+    expect(engine.isPlaying).toBe(true);
   });
 
   it('synchronizes live volume without restarting playback', async () => {
@@ -523,6 +625,26 @@ describe('PlaybackEngine reliability', () => {
     runNextAnimationFrame();
     await vi.waitFor(() => expect(createdSources).toHaveLength(2));
 
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('continues to the project boundary and loops after a shorter video would end', async () => {
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+    await engine.play([createTrack()], 0, 5, true);
+
+    contextTime = 2;
+    runNextAnimationFrame();
+    expect(createdSources).toHaveLength(1);
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+    expect(animationFrames.size).toBe(1);
+
+    contextTime = 6;
+    runNextAnimationFrame();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(2));
     expect(onEnd).not.toHaveBeenCalled();
     expect(engine.isPlaying).toBe(true);
   });
