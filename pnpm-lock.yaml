@@ -45,6 +45,9 @@ importers:
       '@ffmpeg/util':
         specifier: ^0.12.1
         version: 0.12.2
+      music-metadata:
+        specifier: ^11.14.0
+        version: 11.14.0
       onnxruntime-web:
         specifier: ^1.18.0
         version: 1.27.0
@@ -205,6 +208,50 @@ packages:
   '@babel/types@7.29.7':
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
+
+  '@borewit/text-codec@0.2.2':
+    resolution: {integrity: sha1-dQJfc1wJg7OocWaIBKVzh+Nkk3U=}
+
+  '@tokenizer/inflate@0.4.1':
+    resolution: {integrity: sha1-+mzbg2YVGzzIQmv5dVweoDovugg=}
+    engines: {node: '>=18'}
+
+  '@tokenizer/token@0.3.0':
+    resolution: {integrity: sha1-/pipP+eJJH6ZjHXnTpx8YyF6onY=}
+
+  content-type@2.0.0:
+    resolution: {integrity: sha1-L7Pt5p3/oK94ynxM51iWgGOLVt8=}
+    engines: {node: '>=18'}
+
+  file-type@21.3.4:
+    resolution: {integrity: sha1-4/kC+u6OxKoVKQn8kCp6d/nAZyU=}
+    engines: {node: '>=20'}
+
+  ieee754@1.2.1:
+    resolution: {integrity: sha1-jrehCmP/8l0VpXsAFYbRd9Gw01I=}
+
+  media-typer@2.0.0:
+    resolution: {integrity: sha1-X0N0KkTUdLg61NG9Dwxc9WwM0oA=}
+    engines: {node: '>=18'}
+
+  music-metadata@11.14.0:
+    resolution: {integrity: sha1-MDiJZ4T8B/23wyO2ItqviYw1P2s=}
+    engines: {node: '>=18'}
+
+  strtok3@10.3.5:
+    resolution: {integrity: sha1-chMoXaDcPewPyM5d9Li3pzPxQ2A=}
+    engines: {node: '>=18'}
+
+  token-types@6.1.2:
+    resolution: {integrity: sha1-GND9WbmW1CH5+DkU1hAcIBvQgSk=}
+    engines: {node: '>=14.16'}
+
+  uint8array-extras@1.5.0:
+    resolution: {integrity: sha1-ENKoUhPeOtowT+ocRU9jXHODnoY=}
+    engines: {node: '>=18'}
+
+  win-guid@0.2.1:
+    resolution: {integrity: sha1-V2kVul4Qv5LsajK3GrBrX3VAP8A=}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -1897,6 +1944,61 @@ packages:
         optional: true
 
 snapshots:
+
+  '@borewit/text-codec@0.2.2': {}
+
+  '@tokenizer/inflate@0.4.1':
+    dependencies:
+      debug: 4.4.3
+      token-types: 6.1.2
+    transitivePeerDependencies:
+      - supports-color
+
+  '@tokenizer/token@0.3.0': {}
+
+  content-type@2.0.0: {}
+
+  file-type@21.3.4:
+    dependencies:
+      '@tokenizer/inflate': 0.4.1
+      strtok3: 10.3.5
+      token-types: 6.1.2
+      uint8array-extras: 1.5.0
+    transitivePeerDependencies:
+      - supports-color
+
+  ieee754@1.2.1: {}
+
+  media-typer@2.0.0: {}
+
+  music-metadata@11.14.0:
+    dependencies:
+      '@borewit/text-codec': 0.2.2
+      '@tokenizer/token': 0.3.0
+      content-type: 2.0.0
+      debug: 4.4.3
+      file-type: 21.3.4
+      media-typer: 2.0.0
+      strtok3: 10.3.5
+      token-types: 6.1.2
+      uint8array-extras: 1.5.0
+      win-guid: 0.2.1
+    transitivePeerDependencies:
+      - supports-color
+
+  strtok3@10.3.5:
+    dependencies:
+      '@tokenizer/token': 0.3.0
+
+  token-types@6.1.2:
+    dependencies:
+      '@borewit/text-codec': 0.2.2
+      '@tokenizer/token': 0.3.0
+      ieee754: 1.2.1
+
+  uint8array-extras@1.5.0: {}
+
+  win-guid@0.2.1: {}
 
   '@adobe/css-tools@4.5.0': {}
 
