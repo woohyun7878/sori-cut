@@ -430,6 +430,7 @@ export class PlaybackEngine {
       const previous = previousTracks.get(track.id);
       return previous && this.hasStructuralChange(previous, track);
     });
+    const structurallyChangedTrackIds = new Set(structuralChanges.map((track) => track.id));
     const addedTracks = tracks.filter((track) => !previousTracks.has(track.id));
     const removedTracks = this.currentTracks.filter((track) => !nextTracks.has(track.id));
     this.currentTracks = [...tracks];
@@ -444,20 +445,8 @@ export class PlaybackEngine {
       if (cleanupError) reconciliationErrors.push(cleanupError);
     }
 
-    const cleanupErrors: PlaybackError[] = [];
-    for (const trackId of scheduleChanges) {
-      this.pendingTrackStarts.delete(trackId);
-      const cleanupError = this.stopTrackSources(trackId);
-      if (cleanupError) cleanupErrors.push(cleanupError);
-    }
-    if (cleanupErrors.length > 0) {
-      throw new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to release changed audio tracks.', {
-        cause: cleanupErrors,
-      });
-    }
-
     for (const track of mixChanges) {
-      if (scheduleChanges.has(track.id)) continue;
+      if (structurallyChangedTrackIds.has(track.id)) continue;
       if (track.muted) this.pendingTrackStarts.delete(track.id);
       if (this.activeNodes.has(track.id)) {
         this.updateTrackVolume(track.id, this.currentTracks);
@@ -491,6 +480,16 @@ export class PlaybackEngine {
     }
 
     if (missingTracks.length === 0) return;
+
+    if (this.state.isStarting || this.loopRestartGeneration === this.operationGeneration) {
+      await this.play(
+        this.currentTracks,
+        this.state.playheadPosition,
+        this.state.projectDuration,
+        this.state.loopEnabled,
+      );
+      return;
+    }
 
     await this.scheduleMissingTracks(missingTracks);
   }
@@ -537,9 +536,7 @@ export class PlaybackEngine {
         }
 
         const { track, token, buffer } = result.value;
-        const currentTrack = this.currentTracks.find(
-          (candidate) => candidate.id === track.id,
-        );
+        const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
         const pending = this.pendingTrackStarts.get(track.id);
         if (
           pending?.token !== token ||
@@ -559,11 +556,9 @@ export class PlaybackEngine {
         throw activeFailures[0];
       }
       if (activeFailures.length > 1) {
-        throw new PlaybackError(
-          'FETCH_FAILED',
-          'Failed to load multiple active playback tracks.',
-          { cause: activeFailures },
-        );
+        throw new PlaybackError('FETCH_FAILED', 'Failed to load multiple active playback tracks.', {
+          cause: activeFailures,
+        });
       }
     } finally {
       for (const { track, token } of pendingTracks) {
@@ -826,28 +821,6 @@ export class PlaybackEngine {
       ? new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to release active audio nodes.', {
           cause: errors,
         })
-      : null;
-  }
-
-  private stopTrackSources(trackId: string): PlaybackError | null {
-    const nodes = [...(this.activeNodes.get(trackId) ?? [])];
-    const errors: unknown[] = [];
-
-    for (const node of nodes) {
-      try {
-        this.cleanupNode(node, true);
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    this.activeNodes.delete(trackId);
-
-    return errors.length > 0
-      ? new PlaybackError(
-          'NODE_CLEANUP_FAILED',
-          `Failed to release changed track "${trackId}".`,
-          { cause: errors },
-        )
       : null;
   }
 

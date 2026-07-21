@@ -1,7 +1,7 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlaybackError } from '../../lib/playbackEngine';
-import { useProjectStore } from '../../store/useProjectStore';
+import { type TimelineTrack, useProjectStore } from '../../store/useProjectStore';
 import { usePlaybackEngine } from '../usePlaybackEngine';
 
 interface MockEngine {
@@ -189,12 +189,12 @@ describe('usePlaybackEngine', () => {
     render(<Harness />);
     const engine = playbackMocks.instances[0];
     await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
-    expect(engine.syncTracks).not.toHaveBeenCalled();
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenCalledTimes(1));
 
     act(() => {
       useProjectStore.getState().updateTrack('track-1', { name: 'Renamed' });
     });
-    expect(engine.syncTracks).not.toHaveBeenCalled();
+    expect(engine.syncTracks).toHaveBeenCalledTimes(1);
 
     act(() => {
       useProjectStore.setState({ tracks: [{ ...track, volume: 0.25 }] });
@@ -203,6 +203,96 @@ describe('usePlaybackEngine', () => {
       expect(engine.syncTracks).toHaveBeenLastCalledWith([{ ...track, volume: 0.25 }], 5),
     );
 
+    expect(engine.syncTracks).toHaveBeenCalledTimes(2);
+    expect(engine.play).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: 'start offset', updates: { startOffset: 1 }, projectDuration: 6 },
+    { name: 'source start offset', updates: { sourceStartOffset: 1 }, projectDuration: 5 },
+    { name: 'duration', updates: { duration: 7 }, projectDuration: 7 },
+  ] satisfies Array<{
+    name: string;
+    updates: Partial<TimelineTrack>;
+    projectDuration: number;
+  }>)('synchronizes a live $name change', async ({ updates, projectDuration }) => {
+    const track: TimelineTrack = {
+      id: 'track-1',
+      name: 'Track 1',
+      type: 'audio',
+      sourceUrl: 'blob:track-1',
+      startOffset: 0,
+      duration: 5,
+      sourceStartOffset: 0,
+      muted: false,
+      volume: 1,
+    };
+    useProjectStore.setState({ tracks: [track], isPlaying: true });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useProjectStore.getState().updateTrack(track.id, updates);
+    });
+
+    await waitFor(() =>
+      expect(engine.syncTracks).toHaveBeenLastCalledWith(
+        [expect.objectContaining(updates)],
+        projectDuration,
+      ),
+    );
+    expect(engine.syncTracks).toHaveBeenCalledTimes(2);
+    expect(engine.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('synchronizes video-only project duration extension and shortening', async () => {
+    const track: TimelineTrack = {
+      id: 'track-1',
+      name: 'Track 1',
+      type: 'audio',
+      sourceUrl: 'blob:track-1',
+      startOffset: 0,
+      duration: 5,
+      sourceStartOffset: 0,
+      muted: false,
+      volume: 1,
+    };
+    useProjectStore.setState({ tracks: [track], isPlaying: true });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useProjectStore.setState({
+        video: {
+          id: 'video-1',
+          name: 'Video',
+          blob: new Blob(),
+          url: 'blob:video-1',
+          duration: 8,
+          width: 1080,
+          height: 1920,
+        },
+      });
+    });
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenLastCalledWith([track], 8));
+
+    act(() => {
+      useProjectStore.setState({
+        video: {
+          id: 'video-1',
+          name: 'Video',
+          blob: new Blob(),
+          url: 'blob:video-1',
+          duration: 6,
+          width: 1080,
+          height: 1920,
+        },
+      });
+    });
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenLastCalledWith([track], 6));
+    expect(engine.syncTracks).toHaveBeenCalledTimes(3);
     expect(engine.play).toHaveBeenCalledTimes(1);
   });
 

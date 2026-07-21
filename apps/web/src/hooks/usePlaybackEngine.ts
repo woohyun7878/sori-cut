@@ -80,7 +80,7 @@ export function usePlaybackEngine() {
   const loopEnabledRef = useRef(loopEnabled);
   const playheadRef = useRef(playheadPosition);
   const videoRef = useRef(video);
-  const trackMixRef = useRef(snapshotTrackMix(tracks));
+  const trackMixRef = useRef(new Map<string, TrackMixSnapshot>());
   const projectDurationRef = useRef(calculateProjectDuration(tracks, video));
 
   useEffect(() => {
@@ -154,7 +154,14 @@ export function usePlaybackEngine() {
 
   useEffect(() => {
     tracksRef.current = tracks;
+    const nextMix = snapshotTrackMix(tracks);
+    const mixChanged = hasMeaningfulTrackMixChange(trackMixRef.current, nextMix);
     const duration = calculateProjectDuration(tracks, video);
+    const durationChanged = projectDurationRef.current !== duration;
+    trackMixRef.current = nextMix;
+    projectDurationRef.current = duration;
+    if (!mixChanged && !durationChanged) return;
+
     void getEngine().syncTracks(tracks, duration).catch(handlePlaybackError);
   }, [getEngine, handlePlaybackError, tracks, video]);
 

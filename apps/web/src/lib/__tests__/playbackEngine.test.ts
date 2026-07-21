@@ -426,7 +426,7 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources).toHaveLength(1);
     expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
     expect(engine.isPlaying).toBe(true);
-    expect(animationFrames.size).toBe(1);
+    await vi.waitFor(() => expect(animationFrames.size).toBe(1));
   });
 
   it('atomically reschedules source changes and removals at the current position', async () => {
@@ -636,9 +636,7 @@ describe('PlaybackEngine reliability', () => {
 
   it('suppresses a stale unmute rejection after newer playback starts', async () => {
     const oldResponse = deferred<Response>();
-    fetchMock
-      .mockReturnValueOnce(oldResponse.promise)
-      .mockResolvedValueOnce(successfulResponse());
+    fetchMock.mockReturnValueOnce(oldResponse.promise).mockResolvedValueOnce(successfulResponse());
     const engine = createEngine();
     const mutedTrack = createTrack({ muted: true });
     await engine.play([mutedTrack], 0, 5, false);
@@ -673,9 +671,7 @@ describe('PlaybackEngine reliability', () => {
   it('schedules valid co-batched tracks when another stale load fails', async () => {
     const staleResponse = deferred<Response>();
     const validResponse = deferred<Response>();
-    fetchMock
-      .mockReturnValueOnce(staleResponse.promise)
-      .mockReturnValueOnce(validResponse.promise);
+    fetchMock.mockReturnValueOnce(staleResponse.promise).mockReturnValueOnce(validResponse.promise);
     const staleTrack = createTrack({
       id: 'stale',
       sourceUrl: 'blob:stale',
@@ -694,10 +690,7 @@ describe('PlaybackEngine reliability', () => {
       { ...validTrack, muted: false },
     ]);
     await Promise.resolve();
-    await engine.syncTracks([
-      staleTrack,
-      { ...validTrack, muted: false },
-    ]);
+    await engine.syncTracks([staleTrack, { ...validTrack, muted: false }]);
     staleResponse.reject(new Error('stale load failed'));
     validResponse.resolve(successfulResponse());
     await sync;
@@ -763,10 +756,7 @@ describe('PlaybackEngine reliability', () => {
     await engine.play([track], 0, 6, false);
 
     contextTime = 2;
-    await engine.syncTracks(
-      [{ ...track, startOffset: 1, duration: 6, sourceStartOffset: 1 }],
-      7,
-    );
+    await engine.syncTracks([{ ...track, startOffset: 1, duration: 6, sourceStartOffset: 1 }], 7);
 
     expect(createdSources).toHaveLength(2);
     expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
@@ -792,9 +782,7 @@ describe('PlaybackEngine reliability', () => {
     const newData = new ArrayBuffer(6);
     const oldBuffer = createAudioBuffer(4);
     const newBuffer = createAudioBuffer(6);
-    fetchMock
-      .mockReturnValueOnce(oldResponse.promise)
-      .mockReturnValueOnce(newResponse.promise);
+    fetchMock.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
     decodeAudioData.mockImplementation((data: ArrayBuffer) =>
       Promise.resolve(data === oldData ? oldBuffer : newBuffer),
     );
