@@ -220,6 +220,7 @@ function PreviewWorkspace() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previousVideoIdentityRef = useRef(videoIdentity);
   const sourceGenerationRef = useRef(0);
+  const sourceNeedsSyncRef = useRef(true);
   const nextProgrammaticSeekOperationRef = useRef(0);
   const nextUserSeekInteractionRef = useRef(0);
   const observedProgrammaticSeekRef = useRef<{
@@ -234,6 +235,7 @@ function PreviewWorkspace() {
     interactionGeneration: number;
     target: number | null;
   } | null>(null);
+  const userSeekIntentReleaseTimerRef = useRef<number | null>(null);
   const pendingVideoSeekRef = useRef<{
     sourceGeneration: number;
     operationGeneration: number;
@@ -302,17 +304,52 @@ function PreviewWorkspace() {
     [],
   );
 
-  const beginNativeVideoSeek = useCallback((sourceGeneration: number) => {
-    if (sourceGenerationRef.current !== sourceGeneration) return;
-
-    const interactionGeneration = nextUserSeekInteractionRef.current + 1;
-    nextUserSeekInteractionRef.current = interactionGeneration;
-    userVideoSeekRef.current = {
-      sourceGeneration,
-      interactionGeneration,
-      target: null,
-    };
+  const cancelUserSeekIntentRelease = useCallback(() => {
+    if (userSeekIntentReleaseTimerRef.current !== null) {
+      window.clearTimeout(userSeekIntentReleaseTimerRef.current);
+      userSeekIntentReleaseTimerRef.current = null;
+    }
   }, []);
+
+  const beginNativeVideoSeek = useCallback(
+    (sourceGeneration: number) => {
+      if (sourceGenerationRef.current !== sourceGeneration) return;
+
+      cancelUserSeekIntentRelease();
+      const interactionGeneration = nextUserSeekInteractionRef.current + 1;
+      nextUserSeekInteractionRef.current = interactionGeneration;
+      userVideoSeekRef.current = {
+        sourceGeneration,
+        interactionGeneration,
+        target: null,
+      };
+    },
+    [cancelUserSeekIntentRelease],
+  );
+
+  const releaseUnclaimedNativeVideoSeek = useCallback(
+    (player: HTMLVideoElement, sourceGeneration: number) => {
+      cancelUserSeekIntentRelease();
+      const userSeek = userVideoSeekRef.current;
+      if (userSeek?.sourceGeneration !== sourceGeneration || userSeek.target !== null) return;
+      if (!player.seeking) {
+        userVideoSeekRef.current = null;
+        return;
+      }
+
+      userSeekIntentReleaseTimerRef.current = window.setTimeout(() => {
+        if (
+          userVideoSeekRef.current?.sourceGeneration === sourceGeneration &&
+          userVideoSeekRef.current.interactionGeneration === userSeek.interactionGeneration &&
+          userVideoSeekRef.current.target === null
+        ) {
+          userVideoSeekRef.current = null;
+        }
+        userSeekIntentReleaseTimerRef.current = null;
+      }, 250);
+    },
+    [cancelUserSeekIntentRelease],
+  );
 
   const playVideo = useCallback(
     (player: HTMLVideoElement, sourceGeneration: number) => {
@@ -328,20 +365,49 @@ function PreviewWorkspace() {
     [setIsPlaying],
   );
 
+  useEffect(() => {
+    const releaseIntent = () => {
+      const player = videoRef.current;
+      if (player) {
+        releaseUnclaimedNativeVideoSeek(player, sourceGenerationRef.current);
+      }
+    };
+    const releaseKeyboardIntent = (event: KeyboardEvent) => {
+      if (videoSeekKeys.has(event.key)) releaseIntent();
+    };
+
+    window.addEventListener('pointerup', releaseIntent);
+    window.addEventListener('pointercancel', releaseIntent);
+    window.addEventListener('touchend', releaseIntent);
+    window.addEventListener('touchcancel', releaseIntent);
+    window.addEventListener('keyup', releaseKeyboardIntent);
+    return () => {
+      window.removeEventListener('pointerup', releaseIntent);
+      window.removeEventListener('pointercancel', releaseIntent);
+      window.removeEventListener('touchend', releaseIntent);
+      window.removeEventListener('touchcancel', releaseIntent);
+      window.removeEventListener('keyup', releaseKeyboardIntent);
+    };
+  }, [releaseUnclaimedNativeVideoSeek]);
+
   useLayoutEffect(() => {
     if (previousVideoIdentityRef.current === videoIdentity) return;
 
     previousVideoIdentityRef.current = videoIdentity;
     const nextGeneration = sourceGenerationRef.current + 1;
     sourceGenerationRef.current = nextGeneration;
+    sourceNeedsSyncRef.current = true;
     nextProgrammaticSeekOperationRef.current = 0;
     nextUserSeekInteractionRef.current = 0;
     observedProgrammaticSeekRef.current = null;
     pendingVideoSeekRef.current = null;
     retiredVideoSeeksRef.current = [];
+    cancelUserSeekIntentRelease();
     userVideoSeekRef.current = null;
     setSourceGeneration(nextGeneration);
-  }, [videoIdentity]);
+  }, [cancelUserSeekIntentRelease, videoIdentity]);
+
+  useEffect(() => cancelUserSeekIntentRelease, [cancelUserSeekIntentRelease]);
 
   useEffect(() => {
     if (sourceGenerationRef.current !== sourceGeneration) return;
@@ -353,8 +419,10 @@ function PreviewWorkspace() {
       ? player.duration
       : (video?.duration ?? playheadPosition);
     const target = Math.min(playheadPosition, mediaDuration);
-    const shouldResumeFromEnd = player.ended && isPlaying && target < mediaDuration;
+    const shouldResumeFromEnd =
+      player.ended && isPlaying && Number.isFinite(target) && target < mediaDuration;
     if (shouldResumeFromEnd) {
+      sourceNeedsSyncRef.current = false;
       const assignmentStarted = seekVideoProgrammatically(
         player,
         target,
@@ -363,6 +431,14 @@ function PreviewWorkspace() {
         true,
       );
       if (assignmentStarted) playVideo(player, sourceGeneration);
+      return;
+    }
+
+    if (sourceNeedsSyncRef.current) {
+      sourceNeedsSyncRef.current = false;
+      if (player.currentTime !== target) {
+        seekVideoProgrammatically(player, target, sourceGeneration, true);
+      }
       return;
     }
 
@@ -454,6 +530,9 @@ function PreviewWorkspace() {
               aria-label="Video preview"
               onPointerDown={() => beginNativeVideoSeek(sourceGeneration)}
               onTouchStart={() => beginNativeVideoSeek(sourceGeneration)}
+              onBlur={(event) =>
+                releaseUnclaimedNativeVideoSeek(event.currentTarget, sourceGeneration)
+              }
               onKeyDown={(event) => {
                 if (
                   !event.altKey &&
@@ -476,6 +555,7 @@ function PreviewWorkspace() {
                 const pending = pendingVideoSeekRef.current;
                 const userSeek = userVideoSeekRef.current;
                 if (userSeek?.sourceGeneration === sourceGeneration) {
+                  cancelUserSeekIntentRelease();
                   if (pending?.sourceGeneration === sourceGeneration) {
                     retireVideoSeek(pending);
                     pendingVideoSeekRef.current = null;
@@ -529,6 +609,7 @@ function PreviewWorkspace() {
                   userSeek.target !== null &&
                   Math.abs(player.currentTime - userSeek.target) <= 0.05
                 ) {
+                  cancelUserSeekIntentRelease();
                   userVideoSeekRef.current = null;
                   if (pending?.sourceGeneration === sourceGeneration) {
                     retireVideoSeek(pending);
@@ -584,14 +665,6 @@ function PreviewWorkspace() {
                 }
 
                 if (pending?.sourceGeneration === sourceGeneration) {
-                  retireVideoSeek({
-                    sourceGeneration,
-                    operationGeneration: pending.operationGeneration,
-                    target: pending.target,
-                  });
-                  pendingVideoSeekRef.current = null;
-                  observedProgrammaticSeekRef.current = null;
-                  setPlayheadPosition(player.currentTime);
                   return;
                 }
 

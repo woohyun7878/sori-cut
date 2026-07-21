@@ -407,6 +407,40 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
+  it('does not treat a non-seeking pointer interaction as later seek ownership', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 3,
+      width: 1080,
+      height: 1920,
+    };
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
+    vi.clearAllMocks();
+
+    fireEvent.pointerDown(player);
+    fireEvent.pointerUp(window);
+    storeState.playheadPosition = 1;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(player.currentTime).toBe(1);
+    fireEvent.seeking(player);
+    fireEvent.seeked(player);
+
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
   it.each(['pointer', 'touch', 'keyboard'] as const)(
     'lets a new $interaction user seek bypass a retired programmatic target',
     (interaction) => {
@@ -567,6 +601,49 @@ describe('Studio shell', () => {
     },
   );
 
+  it('does not let a stale bare seeked event complete the next generation', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 3,
+      width: 1080,
+      height: 1920,
+    };
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    fireEvent.seeking(player);
+    fireEvent.seeked(player);
+
+    storeState.playheadPosition = 2;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(player.currentTime).toBe(2);
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+
+    fireEvent.seeking(player);
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
   it('leaves an ended shorter video stopped when project playback resumes at its duration', () => {
     storeState.video = {
       id: 'video-1',
@@ -646,9 +723,12 @@ describe('Studio shell', () => {
     },
   );
 
-  it.each([{ newDuration: 3 }, { newDuration: 2 }])(
-    'resynchronizes a replacement with duration $newDuration and ignores the old seeked event',
-    ({ newDuration }) => {
+  it.each([
+    { newDuration: 3, target: 1.5 },
+    { newDuration: 2, target: 0.2 },
+  ])(
+    'resynchronizes a replacement with duration $newDuration at $target and ignores the old seeked event',
+    ({ newDuration, target }) => {
       storeState.video = {
         id: 'video-1',
         name: 'old-preview.mp4',
@@ -659,6 +739,7 @@ describe('Studio shell', () => {
         height: 1920,
       };
       storeState.isPlaying = true;
+      storeState.playheadPosition = target;
       const view = render(
         <MemoryRouter>
           <Studio />
@@ -666,16 +747,8 @@ describe('Studio shell', () => {
       );
       const oldPlayer = document.querySelector('video') as HTMLVideoElement;
       Object.defineProperty(oldPlayer, 'duration', { configurable: true, value: 3 });
-      oldPlayer.currentTime = 0;
+      expect(oldPlayer.currentTime).toBe(target);
       vi.clearAllMocks();
-
-      storeState.playheadPosition = 1.5;
-      view.rerender(
-        <MemoryRouter>
-          <Studio />
-        </MemoryRouter>,
-      );
-      expect(oldPlayer.currentTime).toBe(1.5);
 
       storeState.video = {
         ...storeState.video,
@@ -692,10 +765,10 @@ describe('Studio shell', () => {
       const newPlayer = document.querySelector('video') as HTMLVideoElement;
 
       expect(newPlayer).not.toBe(oldPlayer);
-      expect(newPlayer.currentTime).toBe(1.5);
+      expect(newPlayer.currentTime).toBe(target);
       expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
       fireEvent.seeked(oldPlayer);
-      expect(newPlayer.currentTime).toBe(1.5);
+      expect(newPlayer.currentTime).toBe(target);
       expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
 
       fireEvent.seeking(newPlayer);
@@ -751,7 +824,7 @@ describe('Studio shell', () => {
 
   it.each([
     { duration: 2, target: 1.995, hasInitialPendingSeek: true },
-    { duration: 0.005, target: 0.004, hasInitialPendingSeek: false },
+    { duration: 0.005, target: 0.004, hasInitialPendingSeek: true },
   ])(
     'repositions and resumes ended video at project target $target',
     ({ duration, target, hasInitialPendingSeek }) => {
