@@ -403,4 +403,103 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources).toHaveLength(0);
     expect(engine.isPlaying).toBe(true);
   });
+
+  it('ends once when looping is disabled before the project boundary', async () => {
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+    await engine.play([createTrack({ muted: true })], 0, 1, true);
+
+    engine.setLoopEnabled(false);
+    contextTime = 2;
+    runNextAnimationFrame();
+
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(engine.isPlaying).toBe(false);
+    expect(animationFrames.size).toBe(0);
+  });
+
+  it('loops when looping is enabled before the project boundary', async () => {
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+    await engine.play([createTrack()], 0, 1, false);
+
+    engine.setLoopEnabled(true);
+    contextTime = 2;
+    runNextAnimationFrame();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(2));
+
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('preserves a loop toggle made during pending startup', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+
+    const play = engine.play([createTrack()], 0, 1, false);
+    await Promise.resolve();
+    engine.setLoopEnabled(true);
+    response.resolve(successfulResponse());
+    await play;
+
+    contextTime = 2;
+    runNextAnimationFrame();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(2));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('preserves disabling loop during pending startup', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+
+    const play = engine.play([createTrack()], 0, 1, true);
+    await Promise.resolve();
+    engine.setLoopEnabled(false);
+    response.resolve(successfulResponse());
+    await play;
+
+    contextTime = 2;
+    runNextAnimationFrame();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createdSources).toHaveLength(1);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(engine.isPlaying).toBe(false);
+  });
+
+  it('cancels a pending loop restart when looping is disabled', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const onEnd = vi.fn();
+    const loopTrack = createTrack({ muted: true, duration: 1 });
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+    await engine.play([loopTrack], 0, 1, true);
+
+    loopTrack.muted = false;
+    contextTime = 2;
+    runNextAnimationFrame();
+    await Promise.resolve();
+    engine.setLoopEnabled(false);
+    engine.setLoopEnabled(true);
+    response.resolve(successfulResponse());
+    await vi.waitFor(() => expect(decodeAudioData).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(createdSources).toHaveLength(0);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(engine.isPlaying).toBe(false);
+    expect(animationFrames.size).toBe(0);
+  });
 });

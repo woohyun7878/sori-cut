@@ -9,6 +9,8 @@ interface MockEngine {
   play: ReturnType<typeof vi.fn>;
   preloadTracks: ReturnType<typeof vi.fn>;
   seek: ReturnType<typeof vi.fn>;
+  setLoopEnabled: ReturnType<typeof vi.fn>;
+  onEnd: (() => void) | null;
   onPlayhead: ((position: number) => void) | null;
 }
 
@@ -23,14 +25,17 @@ vi.mock('../../lib/playbackEngine', () => ({
     play = vi.fn(() => Promise.resolve());
     preloadTracks = vi.fn(() => Promise.resolve());
     seek = vi.fn(() => Promise.resolve());
+    setLoopEnabled = vi.fn();
+    onEnd: (() => void) | null = null;
     onPlayhead: ((position: number) => void) | null = null;
 
     constructor() {
       playbackMocks.instances.push(this);
     }
 
-    setCallbacks(onPlayhead: (position: number) => void) {
+    setCallbacks(onPlayhead: (position: number) => void, onEnd: () => void) {
       this.onPlayhead = onPlayhead;
+      this.onEnd = onEnd;
     }
   },
 }));
@@ -59,7 +64,7 @@ describe('usePlaybackEngine', () => {
           id: 'track-1',
           name: 'Track 1',
           type: 'audio',
-          sourceUrl: 'blob:track-1',
+          sourceUrl: '',
           startOffset: 0,
           duration: 5,
           sourceStartOffset: 0,
@@ -82,5 +87,51 @@ describe('usePlaybackEngine', () => {
     await waitFor(() => expect(useProjectStore.getState().playheadPosition).toBe(1.25));
 
     expect(engine.seek).not.toHaveBeenCalled();
+  });
+
+  it('propagates every loop setting change to the engine', async () => {
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    await waitFor(() => expect(engine.setLoopEnabled).toHaveBeenLastCalledWith(false));
+
+    act(() => {
+      useProjectStore.getState().setLoopEnabled(true);
+    });
+    await waitFor(() => expect(engine.setLoopEnabled).toHaveBeenLastCalledWith(true));
+
+    act(() => {
+      useProjectStore.getState().setLoopEnabled(false);
+    });
+    await waitFor(() => expect(engine.setLoopEnabled).toHaveBeenLastCalledWith(false));
+    expect(engine.setLoopEnabled).toHaveBeenCalledTimes(3);
+  });
+
+  it('commits the final playhead position when playback ends', async () => {
+    useProjectStore.setState({
+      tracks: [
+        {
+          id: 'track-1',
+          name: 'Track 1',
+          type: 'audio',
+          sourceUrl: '',
+          startOffset: 0,
+          duration: 5,
+          sourceStartOffset: 0,
+          muted: false,
+          volume: 1,
+        },
+      ],
+      isPlaying: true,
+    });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+
+    act(() => {
+      engine.onPlayhead?.(0);
+      engine.onEnd?.();
+    });
+
+    await waitFor(() => expect(useProjectStore.getState().isPlaying).toBe(false));
+    expect(useProjectStore.getState().playheadPosition).toBe(5);
   });
 });

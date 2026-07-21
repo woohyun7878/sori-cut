@@ -28,7 +28,6 @@ export function usePlaybackEngine() {
   const videoRef = useRef(video);
 
   useEffect(() => { tracksRef.current = tracks; }, [tracks]);
-  useEffect(() => { loopEnabledRef.current = loopEnabled; }, [loopEnabled]);
   useEffect(() => { playheadRef.current = playheadPosition; }, [playheadPosition]);
   useEffect(() => { videoRef.current = video; }, [video]);
 
@@ -38,6 +37,11 @@ export function usePlaybackEngine() {
     }
     return engineRef.current;
   }, []);
+
+  useEffect(() => {
+    loopEnabledRef.current = loopEnabled;
+    getEngine().setLoopEnabled(loopEnabled);
+  }, [getEngine, loopEnabled]);
 
   const handlePlaybackError = useCallback(
     (error: PlaybackError) => {
@@ -63,15 +67,11 @@ export function usePlaybackEngine() {
       },
       // onPlaybackEnd
       () => {
-        if (loopEnabledRef.current) {
-          // Re-schedule from the beginning for loop
-          const duration = calculateProjectDuration(tracksRef.current, videoRef.current);
-          void engine
-            .play(tracksRef.current, 0, duration, true)
-            .catch(handlePlaybackError);
-        } else {
-          setIsPlaying(false);
-        }
+        const duration = calculateProjectDuration(tracksRef.current, videoRef.current);
+        lastEnginePositionRef.current = duration;
+        setPlayheadPosition(duration);
+        isPlayingRef.current = false;
+        setIsPlaying(false);
       },
       handlePlaybackError,
     );

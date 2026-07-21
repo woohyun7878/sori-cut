@@ -61,6 +61,7 @@ export class PlaybackEngine {
   private startContextTime = 0;
   private startPlayheadPosition = 0;
   private operationGeneration = 0;
+  private loopRestartGeneration: number | null = null;
   private destroyed = false;
   private onPlayheadUpdate: PlayheadCallback | null = null;
   private onPlaybackEnd: PlaybackEndCallback | null = null;
@@ -182,10 +183,12 @@ export class PlaybackEngine {
     loopEnabled: boolean,
   ): Promise<void> {
     const generation = ++this.operationGeneration;
+    this.loopRestartGeneration = null;
     this.cancelAnimationLoop();
     this.stopSources();
     this.state.isPlaying = false;
     this.state.isStarting = true;
+    this.state.loopEnabled = loopEnabled;
 
     try {
       const ctx = this.getContext();
@@ -203,7 +206,7 @@ export class PlaybackEngine {
         isPlaying: true,
         isStarting: false,
         playheadPosition: fromPosition,
-        loopEnabled,
+        loopEnabled: this.state.loopEnabled,
         projectDuration,
       };
       this.startPlayheadPosition = fromPosition;
@@ -345,6 +348,7 @@ export class PlaybackEngine {
 
   pause() {
     this.operationGeneration++;
+    this.loopRestartGeneration = null;
     this.stopSources();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
@@ -353,6 +357,7 @@ export class PlaybackEngine {
 
   stop() {
     this.operationGeneration++;
+    this.loopRestartGeneration = null;
     this.stopSources();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
@@ -370,7 +375,15 @@ export class PlaybackEngine {
       await this.play(tracks, position, projectDuration, loopEnabled);
     } else {
       this.operationGeneration++;
+      this.loopRestartGeneration = null;
       this.state.playheadPosition = position;
+    }
+  }
+
+  setLoopEnabled(enabled: boolean) {
+    this.state.loopEnabled = enabled;
+    if (!enabled && this.loopRestartGeneration === this.operationGeneration) {
+      this.finishPlaybackAtEnd();
     }
   }
 
@@ -413,12 +426,7 @@ export class PlaybackEngine {
           return;
         }
 
-        this.operationGeneration++;
-        this.state.isPlaying = false;
-        this.state.isStarting = false;
-        this.stopSources();
-        this.onPlayheadUpdate?.(this.state.projectDuration);
-        this.onPlaybackEnd?.();
+        this.finishPlaybackAtEnd();
         return;
       }
 
@@ -434,6 +442,7 @@ export class PlaybackEngine {
     if (!this.isCurrentOperation(previousGeneration) || !this.state.isPlaying) return;
 
     const generation = ++this.operationGeneration;
+    this.loopRestartGeneration = generation;
     this.stopSources();
     this.state.playheadPosition = 0;
     this.onPlayheadUpdate?.(0);
@@ -442,6 +451,7 @@ export class PlaybackEngine {
       const anchorTime = await this.scheduleAllTracks(this.currentTracks, 0, generation);
       if (anchorTime === null || !this.isCurrentOperation(generation)) return;
 
+      this.loopRestartGeneration = null;
       this.startPlayheadPosition = 0;
       this.startContextTime = anchorTime;
       this.startAnimationLoop(generation);
@@ -451,13 +461,40 @@ export class PlaybackEngine {
         generation,
         this.toPlaybackError(error, 'SCHEDULE_FAILED', 'Unable to reschedule loop playback.'),
       );
+    } finally {
+      if (this.loopRestartGeneration === generation) {
+        this.loopRestartGeneration = null;
+      }
     }
+  }
+
+  private finishPlaybackAtEnd() {
+    this.operationGeneration++;
+    this.loopRestartGeneration = null;
+    this.cancelAnimationLoop();
+    this.state.isPlaying = false;
+    this.state.isStarting = false;
+    this.state.playheadPosition = this.state.projectDuration;
+    try {
+      this.stopSources();
+    } catch (error) {
+      this.reportInternalError(
+        this.toPlaybackError(
+          error,
+          'NODE_CLEANUP_FAILED',
+          'Failed to release audio nodes at the end of playback.',
+        ),
+      );
+    }
+    this.onPlayheadUpdate?.(this.state.projectDuration);
+    this.onPlaybackEnd?.();
   }
 
   private failInternalPlayback(generation: number, error: PlaybackError) {
     if (!this.isCurrentOperation(generation)) return;
 
     this.operationGeneration++;
+    this.loopRestartGeneration = null;
     this.cancelAnimationLoop();
     try {
       this.stopSources();
@@ -596,6 +633,7 @@ export class PlaybackEngine {
   destroy() {
     this.destroyed = true;
     this.operationGeneration++;
+    this.loopRestartGeneration = null;
     this.cancelAnimationLoop();
     this.stopSources();
     this.state.isPlaying = false;
