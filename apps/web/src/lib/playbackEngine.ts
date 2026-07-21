@@ -444,7 +444,20 @@ export class PlaybackEngine {
       if (cleanupError) reconciliationErrors.push(cleanupError);
     }
 
+    const cleanupErrors: PlaybackError[] = [];
+    for (const trackId of scheduleChanges) {
+      this.pendingTrackStarts.delete(trackId);
+      const cleanupError = this.stopTrackSources(trackId);
+      if (cleanupError) cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to release changed audio tracks.', {
+        cause: cleanupErrors,
+      });
+    }
+
     for (const track of mixChanges) {
+      if (scheduleChanges.has(track.id)) continue;
       if (track.muted) this.pendingTrackStarts.delete(track.id);
       if (this.activeNodes.has(track.id)) {
         this.updateTrackVolume(track.id, this.currentTracks);
@@ -478,16 +491,6 @@ export class PlaybackEngine {
     }
 
     if (missingTracks.length === 0) return;
-
-    if (this.state.isStarting) {
-      await this.play(
-        this.currentTracks,
-        currentPosition,
-        this.state.projectDuration,
-        this.state.loopEnabled,
-      );
-      return;
-    }
 
     await this.scheduleMissingTracks(missingTracks);
   }
@@ -784,6 +787,26 @@ export class PlaybackEngine {
         cause: errors,
       });
     }
+  }
+
+  private stopTrackSources(trackId: string): PlaybackError | null {
+    const nodes = [...(this.activeNodes.get(trackId) ?? [])];
+    const errors: unknown[] = [];
+
+    for (const node of nodes) {
+      try {
+        this.cleanupNode(node, true);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.activeNodes.delete(trackId);
+
+    return errors.length > 0
+      ? new PlaybackError('NODE_CLEANUP_FAILED', `Failed to release track "${trackId}".`, {
+          cause: errors,
+        })
+      : null;
   }
 
   private stopSources(): PlaybackError | null {

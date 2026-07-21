@@ -445,6 +445,105 @@ describe('PlaybackEngine reliability', () => {
     expect(engine.isPlaying).toBe(true);
   });
 
+  it.each([
+    {
+      name: 'start offset',
+      updates: { startOffset: 1 },
+      expectedStart: [2, 1, 4],
+    },
+    {
+      name: 'source start offset',
+      updates: { sourceStartOffset: 1 },
+      expectedStart: [2, 3, 3],
+    },
+    {
+      name: 'duration',
+      updates: { duration: 4 },
+      expectedStart: [2, 2, 2],
+    },
+  ] satisfies Array<{
+    name: string;
+    updates: Partial<TimelineTrack>;
+    expectedStart: [number, number, number];
+  }>)(
+    'reschedules only the affected track after a live $name change',
+    async ({ updates, expectedStart }) => {
+      const unchanged = createTrack({ id: 'unchanged', sourceUrl: 'blob:unchanged' });
+      const changed = createTrack({ id: 'changed', sourceUrl: 'blob:changed' });
+      const engine = createEngine();
+      await engine.play([unchanged, changed], 0, 5, false);
+
+      contextTime = 2;
+      await engine.syncTracks([unchanged, { ...changed, ...updates }], 5);
+
+      expect(createdSources).toHaveLength(3);
+      expect(createdSources[0].stop).not.toHaveBeenCalled();
+      expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+      expect(createdSources[2].start).toHaveBeenCalledWith(...expectedStart);
+      expect(engine.isPlaying).toBe(true);
+    },
+  );
+
+  it('keeps unaffected audio running while changed tracks load at the advanced playhead', async () => {
+    const replacementResponse = deferred<Response>();
+    const addedResponse = deferred<Response>();
+    const unchanged = createTrack({ id: 'unchanged', sourceUrl: 'blob:unchanged' });
+    const removed = createTrack({ id: 'removed', sourceUrl: 'blob:removed' });
+    const replaced = createTrack({ id: 'replaced', sourceUrl: 'blob:replaced' });
+    const engine = createEngine();
+    await engine.play([unchanged, removed, replaced], 0, 5, false);
+    fetchMock
+      .mockReturnValueOnce(replacementResponse.promise)
+      .mockReturnValueOnce(addedResponse.promise);
+
+    contextTime = 1;
+    const sync = engine.syncTracks(
+      [
+        unchanged,
+        { ...replaced, sourceUrl: 'blob:replacement' },
+        createTrack({ id: 'added', sourceUrl: 'blob:added' }),
+      ],
+      5,
+    );
+    await Promise.resolve();
+
+    expect(createdSources).toHaveLength(3);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[2].stop).toHaveBeenCalledTimes(1);
+    expect(engine.isPlaying).toBe(true);
+
+    contextTime = 3;
+    replacementResponse.resolve(successfulResponse());
+    addedResponse.resolve(successfulResponse());
+    await sync;
+
+    expect(createdSources).toHaveLength(5);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[3].start).toHaveBeenCalledWith(3, 3, 2);
+    expect(createdSources[4].start).toHaveBeenCalledWith(3, 3, 2);
+  });
+
+  it('updates the active project boundary without restarting audio', async () => {
+    const onEnd = vi.fn();
+    const track = createTrack();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+    await engine.play([track], 0, 5, false);
+
+    contextTime = 6;
+    await engine.syncTracks([track], 8);
+    runNextAnimationFrame();
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+
+    await engine.syncTracks([track], 4);
+    runNextAnimationFrame();
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(engine.isPlaying).toBe(false);
+  });
+
   it('synchronizes live volume without restarting playback', async () => {
     const engine = createEngine();
     const track = createTrack();

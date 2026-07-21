@@ -284,4 +284,51 @@ describe('Studio shell', () => {
     fireEvent.seeked(player as HTMLVideoElement);
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: 'near its end', duration: 2, position: 1.8 },
+    { name: 'on a very short loop', duration: 0.2, position: 0 },
+  ])('resumes an ended video $name within drift tolerance', ({ duration, position }) => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    storeState.playheadPosition = duration;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video');
+    expect(player).not.toBeNull();
+    Object.defineProperty(player, 'duration', { configurable: true, value: duration });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    let currentTime = duration;
+    const setCurrentTime = vi.fn((value: number) => {
+      currentTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: setCurrentTime,
+    });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = position;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(setCurrentTime).toHaveBeenCalledWith(position);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    expect(storeState.setIsPlaying).not.toHaveBeenCalledWith(false);
+  });
 });

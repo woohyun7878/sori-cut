@@ -7,8 +7,11 @@ import {
 } from '../store/useProjectStore';
 
 interface TrackMixSnapshot {
+  duration: number;
   muted: boolean;
+  sourceStartOffset: number;
   sourceUrl: string;
+  startOffset: number;
   volume: number;
 }
 
@@ -16,7 +19,14 @@ function snapshotTrackMix(tracks: TimelineTrack[]) {
   return new Map<string, TrackMixSnapshot>(
     tracks.map((track) => [
       track.id,
-      { muted: track.muted, sourceUrl: track.sourceUrl, volume: track.volume },
+      {
+        duration: track.duration,
+        muted: track.muted,
+        sourceStartOffset: track.sourceStartOffset,
+        sourceUrl: track.sourceUrl,
+        startOffset: track.startOffset,
+        volume: track.volume,
+      },
     ]),
   );
 }
@@ -31,9 +41,12 @@ function hasMeaningfulTrackMixChange(
     const previousTrack = previous.get(trackId);
     if (
       !previousTrack ||
+      previousTrack.duration !== nextTrack.duration ||
       previousTrack.muted !== nextTrack.muted ||
+      previousTrack.sourceStartOffset !== nextTrack.sourceStartOffset ||
       previousTrack.volume !== nextTrack.volume ||
-      previousTrack.sourceUrl !== nextTrack.sourceUrl
+      previousTrack.sourceUrl !== nextTrack.sourceUrl ||
+      previousTrack.startOffset !== nextTrack.startOffset
     ) {
       return true;
     }
@@ -68,6 +81,7 @@ export function usePlaybackEngine() {
   const playheadRef = useRef(playheadPosition);
   const videoRef = useRef(video);
   const trackMixRef = useRef(snapshotTrackMix(tracks));
+  const projectDurationRef = useRef(calculateProjectDuration(tracks, video));
 
   useEffect(() => {
     playheadRef.current = playheadPosition;
