@@ -20,6 +20,11 @@ interface LoadedTrack {
   buffer: AudioBuffer;
 }
 
+interface PendingTrackStart {
+  token: symbol;
+  sourceUrl: string;
+}
+
 export type PlaybackErrorCode =
   | 'CONTEXT_FAILED'
   | 'DECODE_FAILED'
@@ -55,7 +60,7 @@ export class PlaybackEngine {
   private audioContext: AudioContext | null = null;
   private bufferCache = new Map<string, AudioBuffer>();
   private pendingBufferLoads = new Map<string, Promise<AudioBuffer>>();
-  private pendingTrackStarts = new Map<string, symbol>();
+  private pendingTrackStarts = new Map<string, PendingTrackStart>();
   private activeNodes = new Map<string, ActivePlaybackNode[]>();
   private currentTracks: TimelineTrack[] = [];
   private rafId: number | null = null;
@@ -212,7 +217,7 @@ export class PlaybackEngine {
         isStarting: false,
         playheadPosition: fromPosition,
         loopEnabled: this.state.loopEnabled,
-        projectDuration,
+        projectDuration: this.state.projectDuration,
       };
       this.startPlayheadPosition = fromPosition;
       this.startContextTime = anchorTime;
@@ -409,15 +414,33 @@ export class PlaybackEngine {
     }
   }
 
-  async syncTracks(tracks: TimelineTrack[]): Promise<void> {
+  async syncTracks(
+    tracks: TimelineTrack[],
+    projectDuration = this.state.projectDuration,
+  ): Promise<void> {
     const previousTracks = new Map(this.currentTracks.map((track) => [track.id, track]));
+    const nextTracks = new Map(tracks.map((track) => [track.id, track]));
     const mixChanges = tracks.filter((track) => {
       const previous = previousTracks.get(track.id);
       return previous && (previous.volume !== track.volume || previous.muted !== track.muted);
     });
+    const structuralChanges = tracks.filter((track) => {
+      const previous = previousTracks.get(track.id);
+      return previous && this.hasStructuralChange(previous, track);
+    });
+    const addedTracks = tracks.filter((track) => !previousTracks.has(track.id));
+    const removedTracks = this.currentTracks.filter((track) => !nextTracks.has(track.id));
     this.currentTracks = [...tracks];
+    this.state.projectDuration = projectDuration;
 
     if (!this.state.isPlaying && !this.state.isStarting) return;
+
+    const reconciliationErrors: PlaybackError[] = [];
+    for (const track of [...removedTracks, ...structuralChanges]) {
+      this.pendingTrackStarts.delete(track.id);
+      const cleanupError = this.stopTrackSources(track.id);
+      if (cleanupError) reconciliationErrors.push(cleanupError);
+    }
 
     for (const track of mixChanges) {
       if (track.muted) this.pendingTrackStarts.delete(track.id);
@@ -427,16 +450,30 @@ export class PlaybackEngine {
     }
 
     const currentPosition = this.getCurrentPlaybackPosition();
-    const missingTracks = mixChanges.filter((track) => {
-      const previous = previousTracks.get(track.id);
-      return (
-        previous?.muted === true &&
-        !track.muted &&
-        Boolean(track.sourceUrl) &&
-        !this.activeNodes.has(track.id) &&
-        currentPosition < track.startOffset + track.duration
+    const missingTracks = [...addedTracks, ...structuralChanges, ...mixChanges].filter(
+      (track, index, candidates) => {
+        const previous = previousTracks.get(track.id);
+        const becameAudible = previous?.muted === true && !track.muted;
+        const requiresReplacement =
+          !previous || this.hasStructuralChange(previous, track) || becameAudible;
+        return (
+          candidates.findIndex((candidate) => candidate.id === track.id) === index &&
+          requiresReplacement &&
+          !track.muted &&
+          Boolean(track.sourceUrl) &&
+          !this.activeNodes.has(track.id) &&
+          currentPosition < track.startOffset + track.duration
+        );
+      },
+    );
+
+    if (reconciliationErrors.length > 0) {
+      throw new PlaybackError(
+        'NODE_CLEANUP_FAILED',
+        'Failed to reconcile changed playback tracks.',
+        { cause: reconciliationErrors },
       );
-    });
+    }
 
     if (missingTracks.length === 0) return;
 
@@ -457,17 +494,20 @@ export class PlaybackEngine {
     const ctx = this.getContext();
     const operationGeneration = this.operationGeneration;
     const pendingTracks = tracks
-      .filter((track) => !this.pendingTrackStarts.has(track.id))
+      .filter((track) => {
+        const pending = this.pendingTrackStarts.get(track.id);
+        return !pending || pending.sourceUrl !== track.sourceUrl;
+      })
       .map((track) => {
         const token = Symbol(track.id);
-        this.pendingTrackStarts.set(track.id, token);
+        this.pendingTrackStarts.set(track.id, { token, sourceUrl: track.sourceUrl });
         return { track, token };
       });
 
     if (pendingTracks.length === 0) return;
 
     try {
-      const loadedTracks = await Promise.all(
+      const loadedTracks = await Promise.allSettled(
         pendingTracks.map(async ({ track, token }) => ({
           track,
           token,
@@ -483,14 +523,28 @@ export class PlaybackEngine {
 
       const currentPosition = this.getCurrentPlaybackPosition();
       const anchorTime = ctx.currentTime;
-      for (const { track, token, buffer } of loadedTracks) {
+      const activeFailures: unknown[] = [];
+      for (let index = 0; index < loadedTracks.length; index++) {
+        const result = loadedTracks[index];
+        if (result.status === 'rejected') {
+          const pendingTrack = pendingTracks[index];
+          if (this.isActiveTrackStartFailure(result.reason, [pendingTrack])) {
+            activeFailures.push(result.reason);
+          }
+          continue;
+        }
+
+        const { track, token, buffer } = result.value;
         const currentTrack = this.currentTracks.find(
           (candidate) => candidate.id === track.id,
         );
+        const pending = this.pendingTrackStarts.get(track.id);
         if (
-          this.pendingTrackStarts.get(track.id) !== token ||
+          pending?.token !== token ||
+          pending.sourceUrl !== track.sourceUrl ||
           !buffer ||
           !currentTrack ||
+          currentTrack.sourceUrl !== track.sourceUrl ||
           currentTrack.muted ||
           this.activeNodes.has(track.id)
         ) {
@@ -503,13 +557,51 @@ export class PlaybackEngine {
           anchorTime,
         );
       }
+
+      if (activeFailures.length === 1) {
+        throw activeFailures[0];
+      }
+      if (activeFailures.length > 1) {
+        throw new PlaybackError(
+          'FETCH_FAILED',
+          'Failed to load multiple active playback tracks.',
+          { cause: activeFailures },
+        );
+      }
     } finally {
       for (const { track, token } of pendingTracks) {
-        if (this.pendingTrackStarts.get(track.id) === token) {
+        if (this.pendingTrackStarts.get(track.id)?.token === token) {
           this.pendingTrackStarts.delete(track.id);
         }
       }
     }
+  }
+
+  private isActiveTrackStartFailure(
+    error: unknown,
+    pendingTracks: { track: TimelineTrack; token: symbol }[],
+  ) {
+    const failedSourceUrl = error instanceof PlaybackError ? error.sourceUrl : undefined;
+    return pendingTracks.some(({ track, token }) => {
+      const pending = this.pendingTrackStarts.get(track.id);
+      const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
+      return (
+        pending?.token === token &&
+        pending.sourceUrl === track.sourceUrl &&
+        currentTrack?.sourceUrl === track.sourceUrl &&
+        !currentTrack.muted &&
+        (!failedSourceUrl || failedSourceUrl === track.sourceUrl)
+      );
+    });
+  }
+
+  private hasStructuralChange(previous: TimelineTrack, next: TimelineTrack) {
+    return (
+      previous.sourceUrl !== next.sourceUrl ||
+      previous.startOffset !== next.startOffset ||
+      previous.duration !== next.duration ||
+      previous.sourceStartOffset !== next.sourceStartOffset
+    );
   }
 
   updateTrackVolume(trackId: string, tracks: TimelineTrack[]) {
@@ -724,6 +816,28 @@ export class PlaybackEngine {
       ? new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to release active audio nodes.', {
           cause: errors,
         })
+      : null;
+  }
+
+  private stopTrackSources(trackId: string): PlaybackError | null {
+    const nodes = [...(this.activeNodes.get(trackId) ?? [])];
+    const errors: unknown[] = [];
+
+    for (const node of nodes) {
+      try {
+        this.cleanupNode(node, true);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.activeNodes.delete(trackId);
+
+    return errors.length > 0
+      ? new PlaybackError(
+          'NODE_CLEANUP_FAILED',
+          `Failed to release changed track "${trackId}".`,
+          { cause: errors },
+        )
       : null;
   }
 

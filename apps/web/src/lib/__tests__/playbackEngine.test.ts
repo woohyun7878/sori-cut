@@ -132,12 +132,12 @@ function createEngine() {
   return engine;
 }
 
-function successfulResponse(): Response {
+function successfulResponse(data = new ArrayBuffer(8)): Response {
   return {
     ok: true,
     status: 200,
     statusText: 'OK',
-    arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    arrayBuffer: () => Promise.resolve(data),
   } as Response;
 }
 
@@ -455,6 +455,205 @@ describe('PlaybackEngine reliability', () => {
 
     expect(createdSources).toHaveLength(0);
     expect(engine.isPlaying).toBe(false);
+  });
+
+  it('suppresses a stale unmute rejection after playback is paused', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const engine = createEngine();
+    const mutedTrack = createTrack({ muted: true });
+    await engine.play([mutedTrack], 0, 5, false);
+
+    const sync = engine.syncTracks([{ ...mutedTrack, muted: false }]);
+    await Promise.resolve();
+    engine.pause();
+    response.reject(new Error('stale network failure'));
+
+    await expect(sync).resolves.toBeUndefined();
+    expect(createdSources).toHaveLength(0);
+    expect(engine.isPlaying).toBe(false);
+  });
+
+  it('suppresses a stale unmute rejection after newer playback starts', async () => {
+    const oldResponse = deferred<Response>();
+    fetchMock
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockResolvedValueOnce(successfulResponse());
+    const engine = createEngine();
+    const mutedTrack = createTrack({ muted: true });
+    await engine.play([mutedTrack], 0, 5, false);
+
+    const staleSync = engine.syncTracks([{ ...mutedTrack, muted: false }]);
+    await Promise.resolve();
+    const replacement = { ...mutedTrack, sourceUrl: 'blob:new', muted: false };
+    await engine.play([replacement], 1, 5, false);
+    oldResponse.reject(new Error('stale old-source failure'));
+
+    await expect(staleSync).resolves.toBeUndefined();
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].start).toHaveBeenCalledWith(0, 1, 4);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('surfaces one active unmute failure across overlapping sync calls', async () => {
+    fetchMock.mockRejectedValue(new Error('active network failure'));
+    const engine = createEngine();
+    const mutedTrack = createTrack({ muted: true });
+    await engine.play([mutedTrack], 0, 5, false);
+
+    const unmutedTrack = { ...mutedTrack, muted: false };
+    const firstSync = engine.syncTracks([unmutedTrack]);
+    const secondSync = engine.syncTracks([{ ...unmutedTrack }]);
+    const results = await Promise.allSettled([firstSync, secondSync]);
+
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'fulfilled']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('schedules valid co-batched tracks when another stale load fails', async () => {
+    const staleResponse = deferred<Response>();
+    const validResponse = deferred<Response>();
+    fetchMock
+      .mockReturnValueOnce(staleResponse.promise)
+      .mockReturnValueOnce(validResponse.promise);
+    const staleTrack = createTrack({
+      id: 'stale',
+      sourceUrl: 'blob:stale',
+      muted: true,
+    });
+    const validTrack = createTrack({
+      id: 'valid',
+      sourceUrl: 'blob:valid',
+      muted: true,
+    });
+    const engine = createEngine();
+    await engine.play([staleTrack, validTrack], 0, 5, false);
+
+    const sync = engine.syncTracks([
+      { ...staleTrack, muted: false },
+      { ...validTrack, muted: false },
+    ]);
+    await Promise.resolve();
+    await engine.syncTracks([
+      staleTrack,
+      { ...validTrack, muted: false },
+    ]);
+    staleResponse.reject(new Error('stale load failed'));
+    validResponse.resolve(successfulResponse());
+    await sync;
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].start).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds a track without restarting existing nodes and extends the boundary', async () => {
+    const existing = createTrack({ id: 'existing', sourceUrl: 'blob:existing' });
+    const added = createTrack({
+      id: 'added',
+      sourceUrl: 'blob:added',
+      duration: 10,
+    });
+    const engine = createEngine();
+    await engine.play([existing], 0, 5, false);
+
+    contextTime = 2;
+    await engine.syncTracks([existing, added], 10);
+
+    expect(createdSources).toHaveLength(2);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].start).toHaveBeenCalledWith(2, 2, 8);
+
+    contextTime = 6;
+    runNextAnimationFrame();
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('removes a track without disturbing retained nodes', async () => {
+    const retained = createTrack({ id: 'retained', sourceUrl: 'blob:retained' });
+    const removed = createTrack({ id: 'removed', sourceUrl: 'blob:removed' });
+    const engine = createEngine();
+    await engine.play([retained, removed], 0, 5, false);
+
+    await engine.syncTracks([retained], 5);
+
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[1].disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces a changed source without disturbing other tracks', async () => {
+    const retained = createTrack({ id: 'retained', sourceUrl: 'blob:retained' });
+    const changed = createTrack({ id: 'changed', sourceUrl: 'blob:old' });
+    const engine = createEngine();
+    await engine.play([retained, changed], 0, 5, false);
+
+    contextTime = 2;
+    await engine.syncTracks([retained, { ...changed, sourceUrl: 'blob:new' }], 5);
+
+    expect(createdSources).toHaveLength(3);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[2].start).toHaveBeenCalledWith(2, 2, 3);
+    expect(fetchMock).toHaveBeenCalledWith('blob:new');
+  });
+
+  it('reschedules timing changes at the current playhead', async () => {
+    const track = createTrack();
+    const engine = createEngine();
+    await engine.play([track], 0, 6, false);
+
+    contextTime = 2;
+    await engine.syncTracks(
+      [{ ...track, startOffset: 1, duration: 6, sourceStartOffset: 1 }],
+      7,
+    );
+
+    expect(createdSources).toHaveLength(2);
+    expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[1].start).toHaveBeenCalledWith(2, 2, 5);
+  });
+
+  it('refreshes unrelated track metadata without rescheduling playback', async () => {
+    const track = createTrack();
+    const engine = createEngine();
+    await engine.play([track], 0, 5, false);
+
+    await engine.syncTracks([{ ...track, name: 'Renamed track' }], 5);
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds pending replacement loads to source identity so the newest URL wins', async () => {
+    const oldResponse = deferred<Response>();
+    const newResponse = deferred<Response>();
+    const oldData = new ArrayBuffer(4);
+    const newData = new ArrayBuffer(6);
+    const oldBuffer = createAudioBuffer(4);
+    const newBuffer = createAudioBuffer(6);
+    fetchMock
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockReturnValueOnce(newResponse.promise);
+    decodeAudioData.mockImplementation((data: ArrayBuffer) =>
+      Promise.resolve(data === oldData ? oldBuffer : newBuffer),
+    );
+    const engine = createEngine();
+    const mutedTrack = createTrack({ muted: true, sourceUrl: 'blob:old' });
+    await engine.play([mutedTrack], 0, 5, false);
+
+    const oldSync = engine.syncTracks([{ ...mutedTrack, muted: false }]);
+    await Promise.resolve();
+    const newTrack = { ...mutedTrack, muted: false, sourceUrl: 'blob:new' };
+    const newSync = engine.syncTracks([newTrack]);
+    newResponse.resolve(successfulResponse(newData));
+    await newSync;
+    oldResponse.resolve(successfulResponse(oldData));
+    await oldSync;
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].buffer).toBe(newBuffer);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['blob:old', 'blob:new']);
   });
 
   it('uses the latest volume and mute values on the next loop', async () => {

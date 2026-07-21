@@ -9,6 +9,7 @@ import { calculateProjectDuration, useProjectStore } from '../store/useProjectSt
 export function usePlaybackEngine() {
   const engineRef = useRef<PlaybackEngine | null>(null);
   const isPlayingRef = useRef(false);
+  const handlingPlaybackErrorRef = useRef(false);
   const throttleRef = useRef(0);
   const lastEnginePositionRef = useRef<number | null>(null);
 
@@ -44,9 +45,20 @@ export function usePlaybackEngine() {
 
   const handlePlaybackError = useCallback(
     (error: PlaybackError) => {
-      console.error('[usePlaybackEngine] Playback failed:', error);
-      isPlayingRef.current = false;
-      setIsPlaying(false);
+      if (handlingPlaybackErrorRef.current) {
+        console.error('[usePlaybackEngine] Playback cleanup failed:', error);
+        return;
+      }
+
+      handlingPlaybackErrorRef.current = true;
+      try {
+        console.error('[usePlaybackEngine] Playback failed:', error);
+        engineRef.current?.pause();
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+      } finally {
+        handlingPlaybackErrorRef.current = false;
+      }
     },
     [setIsPlaying],
   );
@@ -83,8 +95,9 @@ export function usePlaybackEngine() {
 
   useEffect(() => {
     tracksRef.current = tracks;
-    void getEngine().syncTracks(tracks).catch(handlePlaybackError);
-  }, [getEngine, handlePlaybackError, tracks]);
+    const duration = calculateProjectDuration(tracks, video);
+    void getEngine().syncTracks(tracks, duration).catch(handlePlaybackError);
+  }, [getEngine, handlePlaybackError, tracks, video]);
 
   // Respond to isPlaying changes
   useEffect(() => {

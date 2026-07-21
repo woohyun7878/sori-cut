@@ -1,5 +1,6 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PlaybackError } from '../../lib/playbackEngine';
 import { useProjectStore } from '../../store/useProjectStore';
 import { usePlaybackEngine } from '../usePlaybackEngine';
 
@@ -12,6 +13,7 @@ interface MockEngine {
   setLoopEnabled: ReturnType<typeof vi.fn>;
   syncTracks: ReturnType<typeof vi.fn>;
   onEnd: (() => void) | null;
+  onError: ((error: PlaybackError) => void) | null;
   onPlayhead: ((position: number) => void) | null;
 }
 
@@ -29,15 +31,21 @@ vi.mock('../../lib/playbackEngine', () => ({
     setLoopEnabled = vi.fn();
     syncTracks = vi.fn(() => Promise.resolve());
     onEnd: (() => void) | null = null;
+    onError: ((error: PlaybackError) => void) | null = null;
     onPlayhead: ((position: number) => void) | null = null;
 
     constructor() {
       playbackMocks.instances.push(this);
     }
 
-    setCallbacks(onPlayhead: (position: number) => void, onEnd: () => void) {
+    setCallbacks(
+      onPlayhead: (position: number) => void,
+      onEnd: () => void,
+      onError: (error: PlaybackError) => void,
+    ) {
       this.onPlayhead = onPlayhead;
       this.onEnd = onEnd;
+      this.onError = onError;
     }
   },
 }));
@@ -182,9 +190,41 @@ describe('usePlaybackEngine', () => {
       useProjectStore.setState({ tracks: [{ ...track, volume: 0.25 }] });
     });
     await waitFor(() =>
-      expect(engine.syncTracks).toHaveBeenLastCalledWith([{ ...track, volume: 0.25 }]),
+      expect(engine.syncTracks).toHaveBeenLastCalledWith([{ ...track, volume: 0.25 }], 5),
     );
 
     expect(engine.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops engine playback before clearing UI state after a live-sync failure', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const track = {
+      id: 'track-1',
+      name: 'Track 1',
+      type: 'audio' as const,
+      sourceUrl: '',
+      startOffset: 0,
+      duration: 5,
+      sourceStartOffset: 0,
+      muted: false,
+      volume: 1,
+    };
+    useProjectStore.setState({ tracks: [track], isPlaying: true });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenCalledTimes(1));
+
+    const syncError = new Error('unmute failed') as PlaybackError;
+    engine.syncTracks.mockRejectedValueOnce(syncError);
+    engine.pause.mockImplementationOnce(() => engine.onError?.(syncError));
+
+    act(() => {
+      useProjectStore.setState({ tracks: [{ ...track, volume: 0.5 }] });
+    });
+
+    await waitFor(() => expect(useProjectStore.getState().isPlaying).toBe(false));
+    expect(engine.pause).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledTimes(2);
   });
 });
