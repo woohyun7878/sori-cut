@@ -262,8 +262,13 @@ export class PlaybackEngine {
     const candidates = tracks.filter((track) => !track.muted && Boolean(track.sourceUrl));
     const loadedTracks = await Promise.all(
       candidates.map(async (track): Promise<LoadedTrack | null> => {
-        const buffer = await this.loadBuffer(track.sourceUrl);
-        return buffer ? { track, buffer } : null;
+        try {
+          const buffer = await this.loadBuffer(track.sourceUrl);
+          return buffer ? { track, buffer } : null;
+        } catch (error) {
+          if (!this.isTrackSourceCurrent(track, generation)) return null;
+          throw error;
+        }
       }),
     );
 
@@ -432,6 +437,7 @@ export class PlaybackEngine {
     tracks: TimelineTrack[],
     projectDuration = this.state.projectDuration,
   ): Promise<void> {
+    const operationGeneration = this.operationGeneration;
     const previousTracks = new Map(this.currentTracks.map((track) => [track.id, track]));
     const nextTracks = new Map(tracks.map((track) => [track.id, track]));
     const mixChanges = tracks.filter((track) => {
@@ -489,18 +495,22 @@ export class PlaybackEngine {
       );
     }
 
-    if (missingTracks.length === 0) return;
-
-    if (this.state.isStarting) {
+    const hasPendingRestart =
+      this.state.isStarting || this.loopRestartGeneration === operationGeneration;
+    if (
+      hasPendingRestart &&
+      (structuralChanges.length > 0 || removedTracks.length > 0 || missingTracks.length > 0)
+    ) {
       await this.play(
         this.currentTracks,
         currentPosition,
-        this.state.projectDuration,
+        projectDuration,
         this.state.loopEnabled,
       );
       return;
     }
 
+    if (missingTracks.length === 0) return;
     await this.scheduleMissingTracks(missingTracks);
   }
 
@@ -615,6 +625,15 @@ export class PlaybackEngine {
       previous.startOffset !== next.startOffset ||
       previous.duration !== next.duration ||
       previous.sourceStartOffset !== next.sourceStartOffset
+    );
+  }
+
+  private isTrackSourceCurrent(track: TimelineTrack, generation: number) {
+    const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
+    return (
+      this.isCurrentOperation(generation) &&
+      currentTrack?.sourceUrl === track.sourceUrl &&
+      !currentTrack.muted
     );
   }
 

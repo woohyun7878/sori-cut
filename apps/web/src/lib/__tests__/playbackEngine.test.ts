@@ -363,6 +363,51 @@ describe('PlaybackEngine reliability', () => {
     expect(engine.isPlaying).toBe(true);
   });
 
+  it('restarts pending playback when a track is unmuted during startup', async () => {
+    const activeResponse = deferred<Response>();
+    const unmutedResponse = deferred<Response>();
+    fetchMock
+      .mockReturnValueOnce(activeResponse.promise)
+      .mockReturnValueOnce(unmutedResponse.promise);
+    const engine = createEngine();
+    const activeTrack = createTrack({ id: 'active', sourceUrl: 'blob:active' });
+    const mutedTrack = createTrack({ id: 'muted', sourceUrl: 'blob:muted', muted: true });
+
+    const initialPlay = engine.play([activeTrack, mutedTrack], 0, 5, false);
+    await Promise.resolve();
+    const sync = engine.syncTracks([activeTrack, { ...mutedTrack, muted: false }], 5);
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    activeResponse.resolve(successfulResponse());
+    unmutedResponse.resolve(successfulResponse());
+    await Promise.all([initialPlay, sync]);
+
+    expect(createdSources).toHaveLength(2);
+    expect(engine.isStarting).toBe(false);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('preserves a duration update that arrives during startup', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    const track = createTrack();
+    engine.setCallbacks(vi.fn(), onEnd);
+
+    const play = engine.play([track], 0, 5, false);
+    await Promise.resolve();
+    await engine.syncTracks([track], 8);
+    response.resolve(successfulResponse());
+    await play;
+
+    contextTime = 6;
+    runNextAnimationFrame();
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+  });
+
   it('disconnects ended and stopped nodes without retaining ended nodes', async () => {
     const engine = createEngine();
     const tracks = [
@@ -839,6 +884,31 @@ describe('PlaybackEngine reliability', () => {
     expect(engine.isPlaying).toBe(false);
     expect(engine.isStarting).toBe(false);
     expect(animationFrames.size).toBe(0);
+  });
+
+  it('suppresses a removed source rejection during a pending loop restart', async () => {
+    const response = deferred<Response>();
+    const onError = vi.fn();
+    const loopTrack = createTrack({ muted: true, duration: 1 });
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), vi.fn(), onError);
+    await engine.play([loopTrack], 0, 1, true);
+
+    loopTrack.muted = false;
+    fetchMock.mockReturnValueOnce(response.promise);
+    contextTime = 2;
+    runNextAnimationFrame();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await engine.syncTracks([], 2);
+    response.reject(new Error('removed loop source failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+    expect(animationFrames.size).toBe(1);
   });
 
   it('attempts every node and completes destroy when cleanup fails', async () => {
