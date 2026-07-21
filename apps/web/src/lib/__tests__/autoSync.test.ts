@@ -8,9 +8,20 @@ const mediaMock = vi.hoisted(() => ({
     duration: 5,
     format: 'MP3',
     malformedAt: null as 'format' | 'metadata' | null,
+    hasVideo: false,
+    primaryTrackIndex: 0,
     readable: true,
     sampleRate: 8_000,
     track: true,
+    tracks: null as
+      | Array<{
+          channels: number;
+          codec: string | null;
+          duration: number;
+          malformedAt?: 'metadata';
+          sampleRate: number;
+        }>
+      | null,
   },
 }));
 
@@ -20,6 +31,9 @@ vi.mock('mediabunny', () => {
   }
   class Input {
     private readonly metadata = { ...mediaMock.metadata };
+    private readonly tracks = (
+      this.metadata.track ? (this.metadata.tracks ?? [this.metadata]) : []
+    ).map((metadata) => this.createTrack(metadata));
 
     constructor(readonly options: { formats: unknown[]; source: BufferSource }) {
       mediaMock.inputs.push(options);
@@ -36,11 +50,31 @@ vi.mock('mediabunny', () => {
       return { name: this.metadata.format };
     }
 
+    async getAudioTracks() {
+      return this.tracks;
+    }
+
     async getPrimaryAudioTrack() {
-      if (!this.metadata.track) {
+      if (!this.metadata.track || this.metadata.primaryTrackIndex < 0) {
         return null;
       }
-      const metadata = this.metadata;
+      return (
+        this.tracks[this.metadata.primaryTrackIndex] ??
+        this.createTrack(this.metadata)
+      );
+    }
+
+    async getVideoTracks() {
+      return this.metadata.hasVideo ? [{}] : [];
+    }
+
+    private createTrack(metadata: {
+      channels: number;
+      codec: string | null;
+      duration: number;
+      malformedAt?: 'metadata' | 'format' | null;
+      sampleRate: number;
+    }) {
       return {
         getCodec: async () => metadata.codec,
         getSampleRate: async () => metadata.sampleRate,
@@ -173,9 +207,18 @@ function createAudioBuffer(channelData: Float32Array[], sampleRate = SAMPLE_RATE
   } as unknown as AudioBuffer;
 }
 
+function isTransferableArrayBuffer(buffer: ArrayBufferLike): buffer is ArrayBuffer {
+  return Object.prototype.toString.call(buffer) === '[object ArrayBuffer]';
+}
+
 interface StreamResponse extends Response {
   arrayBuffer: ReturnType<typeof vi.fn>;
   bodyCancel: ReturnType<typeof vi.fn>;
+  byobReader: {
+    cancel: ReturnType<typeof vi.fn>;
+    read: ReturnType<typeof vi.fn>;
+    releaseLock: ReturnType<typeof vi.fn>;
+  };
   reader: {
     cancel: ReturnType<typeof vi.fn>;
     read: ReturnType<typeof vi.fn>;
@@ -185,11 +228,13 @@ interface StreamResponse extends Response {
 
 function createStreamResponse(options: {
   body?: boolean;
+  byobOwnership?: 'invalid' | 'valid';
   chunks?: Uint8Array[];
   contentLength?: number;
   pendingRead?: boolean;
   readerCancel?: () => Promise<void>;
   status?: number;
+  supportsByob?: boolean;
 }): StreamResponse {
   const chunks = [...(options.chunks ?? [])];
   const reader = {
@@ -202,6 +247,49 @@ function createStreamResponse(options: {
               : { done: true as const, value: undefined },
           ),
     ),
+    cancel: vi.fn(options.readerCancel ?? (async () => {})),
+    releaseLock: vi.fn(),
+  };
+  const byobReader = {
+    read: vi.fn((view: ArrayBufferView) => {
+      if (chunks.length === 0) {
+        if (isTransferableArrayBuffer(view.buffer)) {
+          structuredClone(view.buffer, { transfer: [view.buffer] });
+        }
+        return Promise.resolve({
+          done: true as const,
+          value: undefined,
+        });
+      }
+
+      const source = chunks[0];
+      const bytesRead = Math.min(source.byteLength, view.byteLength);
+      const requestOffset = view.byteOffset;
+      new Uint8Array(view.buffer, view.byteOffset, bytesRead).set(
+        source.subarray(0, bytesRead),
+      );
+      if (bytesRead === source.byteLength) {
+        chunks.shift();
+      } else {
+        chunks[0] = source.subarray(bytesRead);
+      }
+      if (!isTransferableArrayBuffer(view.buffer)) {
+        throw new TypeError('Expected an ArrayBuffer-backed BYOB request');
+      }
+      const returnedOwner = structuredClone(view.buffer, {
+        transfer: [view.buffer],
+      });
+      if (options.byobOwnership === 'invalid') {
+        return Promise.resolve({
+          done: false as const,
+          value: new Uint8Array(returnedOwner.slice(requestOffset, requestOffset + bytesRead)),
+        });
+      }
+      return Promise.resolve({
+        done: false as const,
+        value: new Uint8Array(returnedOwner, requestOffset, bytesRead),
+      });
+    }),
     cancel: vi.fn(options.readerCancel ?? (async () => {})),
     releaseLock: vi.fn(),
   };
@@ -220,10 +308,19 @@ function createStreamResponse(options: {
         ? null
         : ({
             cancel: bodyCancel,
-            getReader: () => reader,
+            getReader: (readerOptions?: { mode?: string }) => {
+              if (readerOptions?.mode === 'byob') {
+                if (!options.supportsByob) {
+                  throw new TypeError('BYOB is not supported');
+                }
+                return byobReader;
+              }
+              return reader;
+            },
           } as unknown as ReadableStream<Uint8Array>),
     arrayBuffer: vi.fn(),
     bodyCancel,
+    byobReader,
     reader,
   } as unknown as StreamResponse;
 }
@@ -313,9 +410,12 @@ beforeEach(() => {
     duration: 5,
     format: 'MP3',
     malformedAt: null,
+    hasVideo: false,
+    primaryTrackIndex: 0,
     readable: true,
     sampleRate: SAMPLE_RATE,
     track: true,
+    tracks: null,
   });
   decodedReference = createAsymmetricPulseSignal(250);
   decodedTarget = delaySignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
@@ -397,6 +497,97 @@ describe('readResponseBuffer', () => {
     expect(rejected.reader.cancel).toHaveBeenCalled();
   });
 
+  it('rejects a duplicate incoming chunk before allocating a declared destination', async () => {
+    const response = createStreamResponse({
+      chunks: [new Uint8Array(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT + 1)],
+      contentLength: AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+    });
+
+    await expect(
+      readResponseBuffer(
+        response,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+        'too large',
+        undefined,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+      ),
+    ).rejects.toMatchObject({ code: 'content-length-mismatch' });
+    expect(response.reader.cancel).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['declared', 3],
+    ['unknown', undefined],
+  ])('copies the returned %s reader view using its exact offset and ownership', async (_name, declared) => {
+    const owner = Uint8Array.of(99, 1, 2, 3, 99);
+    const response = createStreamResponse({
+      chunks: [owner.subarray(1, 4)],
+      contentLength: declared,
+    });
+
+    const buffer = await readResponseBuffer(response, 3, 'too large', undefined, declared);
+
+    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3]);
+    expect(buffer).not.toBe(owner.buffer);
+  });
+
+  it('handles detached BYOB requests and returned views with different owners and offsets', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1), Uint8Array.of(2, 3)],
+      contentLength: 3,
+      supportsByob: true,
+    });
+
+    const buffer = await readResponseBuffer(response, 3, 'too large', undefined, 3);
+
+    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3]);
+    expect(response.byobReader.read).toHaveBeenCalledTimes(3);
+    expect(response.byobReader.read.mock.results[0].value).toBeInstanceOf(Promise);
+    expect(response.reader.read).not.toHaveBeenCalled();
+  });
+
+  it('uses a BYOB sentinel read to cancel an overdeclared stream', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2, 3)],
+      contentLength: 2,
+      supportsByob: true,
+    });
+
+    await expect(readResponseBuffer(response, 3, 'too large', undefined, 2)).rejects.toMatchObject({
+      code: 'content-length-mismatch',
+    });
+    expect(response.byobReader.cancel).toHaveBeenCalled();
+    expect(response.reader.read).not.toHaveBeenCalled();
+  });
+
+  it('cancels a short BYOB stream that ends before Content-Length', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2)],
+      contentLength: 3,
+      supportsByob: true,
+    });
+
+    await expect(readResponseBuffer(response, 3, 'too large', undefined, 3)).rejects.toMatchObject({
+      code: 'content-length-mismatch',
+    });
+    expect(response.byobReader.cancel).toHaveBeenCalled();
+  });
+
+  it('rejects incompatible BYOB buffer ownership before using the returned view', async () => {
+    const response = createStreamResponse({
+      byobOwnership: 'invalid',
+      chunks: [Uint8Array.of(1)],
+      contentLength: 3,
+      supportsByob: true,
+    });
+
+    await expect(readResponseBuffer(response, 3, 'too large', undefined, 3)).rejects.toMatchObject({
+      code: 'content-length-mismatch',
+      message: expect.stringContaining('buffer ownership'),
+    });
+    expect(response.byobReader.cancel).toHaveBeenCalled();
+  });
+
   it('rejects a null response body instead of using arrayBuffer()', async () => {
     const response = createStreamResponse({ body: false });
 
@@ -462,8 +653,59 @@ describe('inspectEncodedAudioMemory', () => {
       duration: 2.5,
       format,
       sampleRate: 48_000,
+      trackCount: 1,
     });
     expect(mediaMock.inputs.at(-1)?.formats).toEqual(AUTO_SYNC_INPUT_FORMATS);
+  });
+
+  it('accepts video containers while summing every audio track allocation', async () => {
+    Object.assign(mediaMock.metadata, {
+      format: 'MP4',
+      hasVideo: true,
+      primaryTrackIndex: 1,
+      tracks: [
+        { channels: 1, codec: 'aac', duration: 2, sampleRate: 48_000 },
+        { channels: 2, codec: 'aac', duration: 3, sampleRate: 44_100 },
+      ],
+    });
+
+    const result = await inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference');
+
+    expect(result).toMatchObject({
+      channels: 2,
+      codec: 'aac',
+      decodedBytes: 1_442_400,
+      duration: 3,
+      format: 'MP4',
+      sampleRate: 44_100,
+      trackCount: 2,
+    });
+  });
+
+  it('rejects multi-track and chained-stream sums that exceed the decoded budget', async () => {
+    const tracks = [
+      { channels: 2, codec: 'opus', duration: 100, sampleRate: 96_000 },
+      { channels: 2, codec: 'vorbis', duration: 100, sampleRate: 96_000 },
+    ];
+    Object.assign(mediaMock.metadata, {
+      format: 'Ogg',
+      tracks,
+    });
+
+    await expect(inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference')).rejects.toMatchObject(
+      { code: 'decoded-limit' },
+    );
+  });
+
+  it('rejects when the primary browser-decoder selection is not among enumerated tracks', async () => {
+    Object.assign(mediaMock.metadata, {
+      primaryTrackIndex: 99,
+      tracks: [{ channels: 2, codec: 'aac', duration: 2, sampleRate: 48_000 }],
+    });
+
+    await expect(inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference')).rejects.toMatchObject(
+      { code: 'unproven-track-selection' },
+    );
   });
 
   it.each([
@@ -534,6 +776,26 @@ describe('convertAudioBufferToMono', () => {
 });
 
 describe('computeAutoSyncOffset', () => {
+  it.each([
+    ['MP4', 'aac'],
+    ['QuickTime', 'aac'],
+    ['WebM', 'opus'],
+  ])('accepts a normal %s video reference with usable audio', async (format, codec) => {
+    Object.assign(mediaMock.metadata, {
+      codec,
+      format,
+      hasVideo: true,
+      tracks: [{ channels: 2, codec, duration: 5, sampleRate: SAMPLE_RATE }],
+    });
+
+    await expect(
+      computeAutoSyncOffset('blob:video-reference', 'blob:target'),
+    ).resolves.toMatchObject({
+      confidence: expect.any(Number),
+      offsetSeconds: expect.any(Number),
+    });
+  });
+
   it('preserves signed offsets in both directions', async () => {
     const delayed = await computeAutoSyncOffset('blob:reference', 'blob:target');
     expect(delayed.offsetSeconds).toBeCloseTo(-0.5, 5);
@@ -607,6 +869,30 @@ describe('computeAutoSyncOffset', () => {
     );
 
     await expect(computeAutoSyncOffset('blob:webm', 'blob:target')).rejects.toMatchObject({
+      code: 'decoded-limit',
+    });
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('rejects a multi-track MP4 sum before decode even when each track fits alone', async () => {
+    Object.assign(mediaMock.metadata, {
+      format: 'MP4',
+      hasVideo: true,
+      tracks: [
+        { channels: 2, codec: 'aac', duration: 100, sampleRate: 96_000 },
+        { channels: 2, codec: 'aac', duration: 100, sampleRate: 96_000 },
+      ],
+    });
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+
+    await expect(computeAutoSyncOffset('blob:mp4', 'blob:target')).rejects.toMatchObject({
       code: 'decoded-limit',
     });
     expect(decodeAudioData).not.toHaveBeenCalled();

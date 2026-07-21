@@ -10,6 +10,7 @@ import {
   QTFF,
   WAVE,
   WEBM,
+  type InputAudioTrack,
   type InputFormat,
 } from 'mediabunny';
 import {
@@ -44,6 +45,7 @@ export type AutoSyncMediaErrorCode =
   | 'malformed-media'
   | 'missing-response-body'
   | 'no-audio-track'
+  | 'unproven-track-selection'
   | 'unknown-codec'
   | 'unknown-format';
 
@@ -66,6 +68,7 @@ export interface EncodedAudioMemory {
   duration: number;
   format: string;
   sampleRate: number;
+  trackCount: number;
 }
 
 function abortError(): DOMException {
@@ -78,7 +81,11 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-function cancelReaderBestEffort(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+type ResponseBodyReader =
+  | ReadableStreamBYOBReader
+  | ReadableStreamDefaultReader<Uint8Array>;
+
+function cancelReaderBestEffort(reader: ResponseBodyReader): void {
   try {
     void reader.cancel().catch(() => undefined);
   } catch {
@@ -141,6 +148,100 @@ export function getUnknownLengthPayloadLimit(maximumBytes: number): number {
   return maximumBytes;
 }
 
+async function readDeclaredByob(
+  body: ReadableStream<Uint8Array>,
+  declaredBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<ArrayBuffer | null> {
+  let reader: ReadableStreamBYOBReader;
+  try {
+    reader = body.getReader({ mode: 'byob' });
+  } catch {
+    return null;
+  }
+
+  let destination = new Uint8Array(declaredBytes);
+  let totalBytes = 0;
+  try {
+    while (totalBytes < declaredBytes) {
+      const request = destination.subarray(totalBytes);
+      const result = await raceWithAbort(reader.read(request), signal, () => {
+        cancelReaderBestEffort(reader);
+      });
+      throwIfAborted(signal);
+      if (result.done) {
+        break;
+      }
+      if (result.value.byteLength === 0) {
+        throw new AutoSyncMediaError(
+          'content-length-mismatch',
+          'Audio response returned an empty byte-stream view',
+        );
+      }
+
+      if (totalBytes > declaredBytes - result.value.byteLength) {
+        throw new AutoSyncMediaError(
+          'content-length-mismatch',
+          'Audio response did not match its Content-Length',
+        );
+      }
+      const destinationOffset = result.value.byteOffset - totalBytes;
+      if (
+        destinationOffset < 0 ||
+        destinationOffset > result.value.buffer.byteLength ||
+        declaredBytes > result.value.buffer.byteLength - destinationOffset
+      ) {
+        throw new AutoSyncMediaError(
+          'content-length-mismatch',
+          'Audio byte stream returned incompatible buffer ownership',
+        );
+      }
+      destination = new Uint8Array(
+        result.value.buffer,
+        destinationOffset,
+        declaredBytes,
+      );
+      totalBytes += result.value.byteLength;
+    }
+
+    if (totalBytes !== declaredBytes) {
+      throw new AutoSyncMediaError(
+        'content-length-mismatch',
+        'Audio response did not match its Content-Length',
+      );
+    }
+
+    const sentinel = await raceWithAbort(reader.read(new Uint8Array(1)), signal, () => {
+      cancelReaderBestEffort(reader);
+    });
+    throwIfAborted(signal);
+    if (!sentinel.done) {
+      throw new AutoSyncMediaError(
+        'content-length-mismatch',
+        'Audio response did not match its Content-Length',
+      );
+    }
+
+    if (
+      destination.byteOffset === 0 &&
+      destination.byteLength === destination.buffer.byteLength &&
+      destination.buffer instanceof ArrayBuffer
+    ) {
+      return destination.buffer;
+    }
+    return destination.slice().buffer;
+  } catch (error) {
+    cancelReaderBestEffort(reader);
+    throw error;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // A pending read can retain the lock briefly after cancellation.
+    }
+  }
+}
+
 export async function readResponseBuffer(
   response: Response,
   maximumBytes: number,
@@ -163,9 +264,16 @@ export async function readResponseBuffer(
   ) {
     throw new RangeError('declaredBytes must be within the configured encoded limit');
   }
+  if (declaredBytes !== undefined) {
+    const byobBuffer = await readDeclaredByob(response.body, declaredBytes, signal);
+    if (byobBuffer !== null) {
+      return byobBuffer;
+    }
+  }
 
+  // Default readers are the correctness fallback; no fetch chunk-size guarantee is assumed.
   const reader = response.body.getReader();
-  const destination = declaredBytes === undefined ? null : new Uint8Array(declaredBytes);
+  let destination: Uint8Array | null = null;
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
 
@@ -204,7 +312,18 @@ export async function readResponseBuffer(
         throw new AutoSyncMediaError('encoded-limit', limitMessage);
       }
 
-      if (destination) {
+      if (declaredBytes !== undefined && destination === null) {
+        const peakBytes = maximumBytes * 2;
+        if (
+          !Number.isSafeInteger(peakBytes) ||
+          declaredBytes > peakBytes - chunkBytes
+        ) {
+          cancelReaderBestEffort(reader);
+          throw new AutoSyncMediaError('encoded-limit', limitMessage);
+        }
+        destination = new Uint8Array(declaredBytes);
+      }
+      if (destination !== null) {
         destination.set(result.value, totalBytes);
       } else {
         chunks.push(result.value);
@@ -222,7 +341,13 @@ export async function readResponseBuffer(
     }
   }
 
-  if (destination) {
+  if (declaredBytes !== undefined) {
+    if (destination === null) {
+      return new ArrayBuffer(0);
+    }
+    if (!(destination.buffer instanceof ArrayBuffer)) {
+      throw new Error('Auto-sync declared response storage has unsupported buffer ownership');
+    }
     return destination.buffer;
   }
 
@@ -267,30 +392,44 @@ export async function inspectEncodedAudioMemory(
       );
     }
 
-    const [format, track] = await raceWithAbort(
-      Promise.all([input.getFormat(), input.getPrimaryAudioTrack()]),
+    const [format, audioTracks, primaryTrack] = await raceWithAbort(
+      Promise.all([input.getFormat(), input.getAudioTracks(), input.getPrimaryAudioTrack()]),
       signal,
       dispose,
     );
-    if (!track) {
+    if (audioTracks.length === 0) {
       throw new AutoSyncMediaError(
         'no-audio-track',
         `${label} media has no audio track to use for auto-sync`,
       );
     }
+    const primaryTrackIndex = primaryTrack === null ? -1 : audioTracks.indexOf(primaryTrack);
+    if (primaryTrackIndex < 0) {
+      throw new AutoSyncMediaError(
+        'unproven-track-selection',
+        `${label} media audio-track selection cannot be proven safe for browser decoding`,
+      );
+    }
 
-    let codec: string | null;
-    let sampleRate: number;
-    let channels: number;
-    let duration: number;
+    let trackMetadata: Array<{
+      channels: number;
+      codec: string | null;
+      duration: number;
+      sampleRate: number;
+    }>;
     try {
-      [codec, sampleRate, channels, duration] = await raceWithAbort(
-        Promise.all([
-          track.getCodec(),
-          track.getSampleRate(),
-          track.getNumberOfChannels(),
-          track.computeDuration(),
-        ]),
+      trackMetadata = await raceWithAbort(
+        Promise.all(
+          audioTracks.map(async (track: InputAudioTrack) => {
+            const [codec, sampleRate, channels, duration] = await Promise.all([
+              track.getCodec(),
+              track.getSampleRate(),
+              track.getNumberOfChannels(),
+              track.computeDuration(),
+            ]);
+            return { channels, codec, duration, sampleRate };
+          }),
+        ),
         signal,
         dispose,
       );
@@ -303,46 +442,63 @@ export async function inspectEncodedAudioMemory(
       );
     }
 
-    if (!codec) {
-      throw new AutoSyncMediaError(
-        'unknown-codec',
-        `${label} audio codec is not supported for auto-sync`,
-      );
-    }
-    if (
-      !Number.isSafeInteger(sampleRate) ||
-      sampleRate <= 0 ||
-      !Number.isSafeInteger(channels) ||
-      channels <= 0 ||
-      !Number.isFinite(duration) ||
-      duration <= 0
-    ) {
-      throw new AutoSyncMediaError(
-        'invalid-metadata',
-        `${label} audio has invalid duration, sample-rate, or channel metadata`,
-      );
+    let decodedBytes = 0;
+    let duration = 0;
+    for (const metadata of trackMetadata) {
+      if (!metadata.codec) {
+        throw new AutoSyncMediaError(
+          'unknown-codec',
+          `${label} media contains an audio track with an unsupported codec`,
+        );
+      }
+      if (
+        !Number.isSafeInteger(metadata.sampleRate) ||
+        metadata.sampleRate <= 0 ||
+        !Number.isSafeInteger(metadata.channels) ||
+        metadata.channels <= 0 ||
+        !Number.isFinite(metadata.duration) ||
+        metadata.duration <= 0
+      ) {
+        throw new AutoSyncMediaError(
+          'invalid-metadata',
+          `${label} media contains invalid audio duration, sample-rate, or channel metadata`,
+        );
+      }
+
+      const decodedFrames = Math.ceil(metadata.duration * metadata.sampleRate);
+      if (!Number.isSafeInteger(decodedFrames) || decodedFrames <= 0) {
+        throw decodedLimitError(label);
+      }
+      const trackDecodedBytes = checkedProduct([
+        decodedFrames,
+        metadata.channels,
+        Float32Array.BYTES_PER_ELEMENT,
+      ]);
+      if (
+        trackDecodedBytes === null ||
+        decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - trackDecodedBytes
+      ) {
+        throw decodedLimitError(label);
+      }
+      decodedBytes += trackDecodedBytes;
+      duration = Math.max(duration, metadata.duration);
     }
 
-    const decodedFrames = Math.ceil(duration * sampleRate);
-    if (!Number.isSafeInteger(decodedFrames) || decodedFrames <= 0) {
-      throw decodedLimitError(label);
+    const primaryMetadata = trackMetadata[primaryTrackIndex];
+    if (!primaryMetadata?.codec) {
+      throw new AutoSyncMediaError(
+        'unproven-track-selection',
+        `${label} media primary audio-track metadata could not be selected safely`,
+      );
     }
-    const decodedBytes = checkedProduct([
-      decodedFrames,
-      channels,
-      Float32Array.BYTES_PER_ELEMENT,
-    ]);
-    if (decodedBytes === null || decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT) {
-      throw decodedLimitError(label);
-    }
-
     return {
-      channels,
-      codec,
+      channels: primaryMetadata.channels,
+      codec: primaryMetadata.codec,
       decodedBytes,
       duration,
       format: format.name,
-      sampleRate,
+      sampleRate: primaryMetadata.sampleRate,
+      trackCount: audioTracks.length,
     };
   } catch (error) {
     if (error instanceof AutoSyncMediaError) {

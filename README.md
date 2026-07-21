@@ -66,7 +66,9 @@ Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
 (Opus or Vorbis), FLAC, MP3, and WAV inputs. Mediabunny inspects the complete
 bounded encoded input before Web Audio decoding and rejects missing audio
 tracks, malformed or unknown media, invalid metadata, and decoded shapes over
-128 MiB.
+128 MiB. Video tracks do not disqualify a container: the primary audio track
+is selected only after every audio track has been enumerated, validated, and
+included in the conservative decoded-allocation sum.
 
 Each accepted encoded input is capped at 48 MiB and requires a streaming
 response body. The advertised encoded peak for accepted inputs is 96 MiB
@@ -76,6 +78,11 @@ without relying on BYOB readers, fetch chunk sizing, or garbage collection:
   ordinary reader chunk of at most the accepted 48 MiB payload.
 - Without `Content-Length`, retained chunks total at most 48 MiB and can coexist
   with the final assembled copy of at most 48 MiB.
+
+Declared byte streams may use BYOB opportunistically, but correctness does not
+depend on BYOB support or caller-buffer identity: returned views are consumed
+using their own buffer, offset, and length, and ordinary readers remain the
+bounded fallback.
 
 The reference and target are fetched and decoded sequentially. The encoded
 buffer reference is explicitly released before the next input fetch; only the
