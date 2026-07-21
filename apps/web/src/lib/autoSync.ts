@@ -15,12 +15,15 @@ import {
 } from './autoSyncCore';
 
 export const AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT = 48 * 1024 * 1024;
-export const AUTO_SYNC_MAX_AGGREGATE_ENCODED_BYTES = 64 * 1024 * 1024;
+export const AUTO_SYNC_MAX_STREAMING_PEAK_BYTES = 64 * 1024 * 1024;
 export const AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT = 128 * 1024 * 1024;
 export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
   AUTO_SYNC_MAX_ANALYSIS_SAMPLES * Float32Array.BYTES_PER_ELEMENT * 2;
+const AUTO_SYNC_BYOB_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
-const METADATA_TIMEOUT_MS = 5_000;
+const SUPPORTED_AUDIO_FORMAT_ERROR =
+  'Auto-sync supports only PCM/float WAV and MPEG-1 Layer III MP3 with valid structure; ' +
+  'convert AAC/M4A, Ogg, FLAC, or WebM audio before syncing';
 
 export interface AutoSyncResult {
   /** Signed target placement: positive delays it; negative advances its source in-point. */
@@ -36,7 +39,6 @@ export interface AutoSyncOptions {
 
 interface DecodedAnalysis {
   samples: Float32Array;
-  encodedBytes: number;
 }
 
 function abortError(): DOMException {
@@ -49,55 +51,11 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-async function probeAudioDuration(
-  url: string,
-  label: string,
-  signal: AbortSignal | undefined,
-): Promise<number> {
-  throwIfAborted(signal);
-  const audio = new Audio();
-  audio.preload = 'metadata';
-
-  return new Promise<number>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeoutId);
-      signal?.removeEventListener('abort', handleAbort);
-      audio.onloadedmetadata = null;
-      audio.onerror = null;
-      audio.removeAttribute('src');
-      audio.load();
-    };
-    const succeed = () => {
-      const duration = audio.duration;
-      cleanup();
-      if (!Number.isFinite(duration) || duration <= 0) {
-        reject(new Error(`${label} audio has no usable duration for auto-sync`));
-        return;
-      }
-      resolve(duration);
-    };
-    const fail = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const handleAbort = () => fail(abortError());
-    const timeoutId = setTimeout(() => {
-      fail(new Error(`Timed out while reading ${label} audio metadata`));
-    }, METADATA_TIMEOUT_MS);
-
-    audio.onloadedmetadata = succeed;
-    audio.onerror = () => fail(new Error(`Could not read ${label} audio metadata`));
-    signal?.addEventListener('abort', handleAbort, { once: true });
-    if (signal?.aborted) {
-      handleAbort();
-      return;
-    }
-    audio.src = url;
-    audio.load();
-  });
+interface CancellableReader {
+  cancel(): Promise<void>;
 }
 
-function cancelReaderBestEffort(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+function cancelReaderBestEffort(reader: CancellableReader): void {
   try {
     // Cancellation is cleanup; it must never replace the primary abort/limit error.
     void reader.cancel().catch(() => undefined);
@@ -114,56 +72,67 @@ async function cancelResponseBodyBestEffort(response: Response): Promise<void> {
   }
 }
 
-export function getUnknownLengthPayloadLimit(maximumBytes: number): number {
-  return Math.floor(maximumBytes / 2);
+export function getUnknownLengthPayloadLimit(
+  maximumBytes: number,
+  peakBudgetBytes = maximumBytes,
+  retainedBytes = 0,
+): number {
+  const availableBytes = Math.max(0, peakBudgetBytes - retainedBytes);
+  const scratchBytes = getByobScratchBytes(availableBytes);
+  return Math.min(maximumBytes, Math.floor(Math.max(0, availableBytes - scratchBytes) / 2));
 }
 
-export async function readResponseBuffer(
-  response: Response,
-  maximumBytes: number,
+function getByobScratchBytes(availableBytes: number): number {
+  if (availableBytes < 1) {
+    return 0;
+  }
+  return Math.min(AUTO_SYNC_BYOB_CHUNK_BYTES, Math.max(1, Math.floor(availableBytes / 4)));
+}
+
+async function readDeclaredByobBuffer(
+  reader: ReadableStreamBYOBReader,
+  declaredBytes: number,
+  peakBudgetBytes: number,
+  retainedBytes: number,
   limitMessage: string,
   signal: AbortSignal | undefined,
-  declaredBytes?: number,
 ): Promise<ArrayBuffer> {
-  if (!response.body) {
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength > maximumBytes) {
-      throw new Error(limitMessage);
-    }
-    if (declaredBytes !== undefined && buffer.byteLength !== declaredBytes) {
-      throw new Error('Audio response did not match its Content-Length');
-    }
-    return buffer;
+  const scratchBytes = Math.min(
+    AUTO_SYNC_BYOB_CHUNK_BYTES,
+    Math.max(0, peakBudgetBytes - retainedBytes - declaredBytes),
+  );
+  if (scratchBytes < 1) {
+    cancelReaderBestEffort(reader);
+    throw new Error(limitMessage);
   }
 
-  const reader = response.body.getReader();
-  const preallocated = declaredBytes === undefined ? null : new Uint8Array(declaredBytes);
-  const chunks: Uint8Array[] = [];
-  const payloadLimit =
-    preallocated === null ? getUnknownLengthPayloadLimit(maximumBytes) : maximumBytes;
+  const destination = new Uint8Array(declaredBytes);
+  let scratch = new Uint8Array(scratchBytes);
   let totalBytes = 0;
   try {
     while (true) {
-      const result = await raceWithAbort(reader.read(), signal, () => {
-        cancelReaderBestEffort(reader);
-      });
+      const requestBytes = Math.min(scratch.byteLength, Math.max(1, declaredBytes - totalBytes));
+      const result = await raceWithAbort(
+        reader.read(scratch.subarray(0, requestBytes)),
+        signal,
+        () => {
+          cancelReaderBestEffort(reader);
+        },
+      );
       if (result.done) {
         break;
       }
-      const nextTotal = totalBytes + result.value.byteLength;
       if (
-        nextTotal > payloadLimit ||
-        (preallocated !== null && nextTotal > preallocated.byteLength)
+        result.value.byteLength === 0 ||
+        result.value.byteLength > requestBytes ||
+        totalBytes + result.value.byteLength > declaredBytes
       ) {
         cancelReaderBestEffort(reader);
         throw new Error(limitMessage);
       }
-      if (preallocated === null) {
-        chunks.push(result.value.slice());
-      } else {
-        preallocated.set(result.value, totalBytes);
-      }
-      totalBytes = nextTotal;
+      destination.set(result.value, totalBytes);
+      totalBytes += result.value.byteLength;
+      scratch = new Uint8Array(result.value.buffer as ArrayBuffer);
     }
   } finally {
     try {
@@ -173,11 +142,57 @@ export async function readResponseBuffer(
     }
   }
 
-  if (preallocated !== null) {
-    if (totalBytes !== preallocated.byteLength) {
-      throw new Error('Audio response did not match its Content-Length');
+  if (totalBytes !== declaredBytes) {
+    throw new Error('Audio response did not match its Content-Length');
+  }
+  return destination.buffer;
+}
+
+async function readUnknownLengthByobBuffer(
+  reader: ReadableStreamBYOBReader,
+  maximumBytes: number,
+  peakBudgetBytes: number,
+  retainedBytes: number,
+  limitMessage: string,
+  signal: AbortSignal | undefined,
+): Promise<ArrayBuffer> {
+  const availableBytes = Math.max(0, peakBudgetBytes - retainedBytes);
+  const scratchBytes = getByobScratchBytes(availableBytes);
+  const payloadLimit = getUnknownLengthPayloadLimit(maximumBytes, peakBudgetBytes, retainedBytes);
+  if (scratchBytes < 1 || payloadLimit < 1) {
+    cancelReaderBestEffort(reader);
+    throw new Error(limitMessage);
+  }
+
+  let scratch = new Uint8Array(scratchBytes);
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const result = await raceWithAbort(reader.read(scratch), signal, () => {
+        cancelReaderBestEffort(reader);
+      });
+      if (result.done) {
+        break;
+      }
+      if (
+        result.value.byteLength === 0 ||
+        result.value.byteLength > scratchBytes ||
+        totalBytes + result.value.byteLength > payloadLimit
+      ) {
+        cancelReaderBestEffort(reader);
+        throw new Error(limitMessage);
+      }
+      chunks.push(result.value.slice());
+      totalBytes += result.value.byteLength;
+      scratch = new Uint8Array(result.value.buffer as ArrayBuffer);
     }
-    return preallocated.buffer;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // A pending read may retain the lock briefly after cancellation.
+    }
   }
 
   const combined = new Uint8Array(totalBytes);
@@ -187,6 +202,57 @@ export async function readResponseBuffer(
     writeOffset += chunk.byteLength;
   }
   return combined.buffer;
+}
+
+export async function readResponseBuffer(
+  response: Response,
+  maximumBytes: number,
+  limitMessage: string,
+  signal: AbortSignal | undefined,
+  declaredBytes?: number,
+  peakBudgetBytes = maximumBytes,
+  retainedBytes = 0,
+): Promise<ArrayBuffer> {
+  if (declaredBytes !== undefined && declaredBytes > maximumBytes) {
+    await cancelResponseBodyBestEffort(response);
+    throw new Error(limitMessage);
+  }
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maximumBytes || buffer.byteLength + retainedBytes > peakBudgetBytes) {
+      throw new Error(limitMessage);
+    }
+    if (declaredBytes !== undefined && buffer.byteLength !== declaredBytes) {
+      throw new Error('Audio response did not match its Content-Length');
+    }
+    return buffer;
+  }
+
+  let byobReader: ReadableStreamBYOBReader;
+  try {
+    byobReader = response.body.getReader({ mode: 'byob' });
+  } catch {
+    await cancelResponseBodyBestEffort(response);
+    throw new Error(`${limitMessage}; this browser cannot provide bounded audio streaming`);
+  }
+  if (declaredBytes !== undefined) {
+    return readDeclaredByobBuffer(
+      byobReader,
+      declaredBytes,
+      peakBudgetBytes,
+      retainedBytes,
+      limitMessage,
+      signal,
+    );
+  }
+  return readUnknownLengthByobBuffer(
+    byobReader,
+    maximumBytes,
+    peakBudgetBytes,
+    retainedBytes,
+    limitMessage,
+    signal,
+  );
 }
 
 function readFourCc(view: DataView, offset: number): string {
@@ -235,7 +301,11 @@ function inspectWaveMemory(buffer: ArrayBuffer): {
     }
     if (chunkType === 'fmt ') {
       formatChunkCount++;
-      if (formatChunkCount > 1 || chunkBytes < 16) {
+      if (
+        formatChunkCount > 1 ||
+        (chunkBytes !== 16 && chunkBytes !== 18) ||
+        (chunkBytes === 18 && view.getUint16(chunkDataOffset + 16, true) !== 0)
+      ) {
         return null;
       }
       formatTag = view.getUint16(chunkDataOffset, true);
@@ -412,10 +482,7 @@ function inspectMpegAudio(buffer: ArrayBuffer): EncodedAudioMemory | null {
   };
 }
 
-export function inspectEncodedAudioMemory(
-  buffer: ArrayBuffer,
-  _metadataDuration: number,
-): EncodedAudioMemory {
+export function inspectEncodedAudioMemory(buffer: ArrayBuffer): EncodedAudioMemory {
   const bytes = new Uint8Array(buffer);
   const wave = inspectWaveMemory(buffer);
   if (wave) {
@@ -426,14 +493,14 @@ export function inspectEncodedAudioMemory(
     readFourCc(new DataView(buffer), 0) === 'RIFF' &&
     readFourCc(new DataView(buffer), 8) === 'WAVE'
   ) {
-    throw new Error('Auto-sync could not safely inspect WAV metadata');
+    throw new Error(SUPPORTED_AUDIO_FORMAT_ERROR);
   }
 
   const mp3 = inspectMpegAudio(buffer);
   if (mp3) {
     return mp3;
   }
-  throw new Error('Auto-sync cannot safely inspect this audio format; use PCM/float WAV or MP3');
+  throw new Error(SUPPORTED_AUDIO_FORMAT_ERROR);
 }
 
 function raceWithAbort<T>(
@@ -471,22 +538,9 @@ async function decodeToMono(
   url: string,
   label: string,
   signal: AbortSignal | undefined,
-  remainingEncodedBytes: number,
+  retainedAnalysisBytes: number,
 ): Promise<DecodedAnalysis> {
-  const metadataDuration = await probeAudioDuration(url, label, signal);
-  if (metadataDuration < AUTO_SYNC_MIN_DURATION_SECONDS) {
-    throw new Error(
-      `${label} audio is too short for auto-sync; at least ` +
-        `${AUTO_SYNC_MIN_DURATION_SECONDS} second is required`,
-    );
-  }
-  if (metadataDuration > AUTO_SYNC_MAX_DURATION_SECONDS) {
-    throw new Error(
-      `${label} audio is too long for auto-sync; the limit is ` +
-        `${AUTO_SYNC_MAX_DURATION_SECONDS / 60} minutes`,
-    );
-  }
-
+  throwIfAborted(signal);
   const response = await fetch(url, { signal });
   if (!response.ok) {
     const error = new Error(`Failed to fetch ${label} audio: HTTP ${response.status}`);
@@ -508,36 +562,25 @@ async function decodeToMono(
       await cancelResponseBodyBestEffort(response);
       throw error;
     }
-    if (declaredBytes > remainingEncodedBytes) {
-      const error = new Error('Auto-sync inputs exceed the combined 64 MB encoded-audio limit');
-      await cancelResponseBodyBestEffort(response);
-      throw error;
-    }
   }
 
-  const maximumEncodedBytes = Math.min(
-    AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
-    remainingEncodedBytes,
-  );
-  const encodedLimitMessage =
-    remainingEncodedBytes < AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT
-      ? 'Auto-sync inputs exceed the combined 64 MB encoded-audio limit'
-      : `${label} audio exceeds the 48 MB auto-sync encoded-file limit`;
+  const maximumEncodedBytes = AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT;
   const readLimitMessage =
     declaredBytes === undefined
-      ? `${label} audio without Content-Length exceeds its bounded streaming memory limit`
-      : encodedLimitMessage;
+      ? `${label} audio without Content-Length exceeds its bounded streaming-memory limit`
+      : `${label} audio exceeds the 64 MB auto-sync streaming-memory limit`;
   const arrayBuffer = await readResponseBuffer(
     response,
     maximumEncodedBytes,
     readLimitMessage,
     signal,
     declaredBytes,
+    AUTO_SYNC_MAX_STREAMING_PEAK_BYTES,
+    retainedAnalysisBytes,
   );
   throwIfAborted(signal);
-  const encodedBytes = arrayBuffer.byteLength;
 
-  const encodedMemory = inspectEncodedAudioMemory(arrayBuffer, metadataDuration);
+  const encodedMemory = inspectEncodedAudioMemory(arrayBuffer);
   if (encodedMemory.duration > AUTO_SYNC_MAX_DURATION_SECONDS) {
     throw new Error(
       `${label} audio is too long for auto-sync; the limit is ` +
@@ -559,22 +602,40 @@ async function decodeToMono(
     closePromise ??= temporaryContext.close();
     return closePromise;
   };
-  let decoded: AudioBuffer;
+  let decoded: AudioBuffer | undefined;
+  let primaryDecodeError: Error | undefined;
   try {
     decoded = await raceWithAbort(temporaryContext.decodeAudioData(arrayBuffer), signal, () => {
-      void closeTemporaryContext();
+      void closeTemporaryContext().catch(() => undefined);
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw error;
+      primaryDecodeError = error;
+    } else {
+      primaryDecodeError = new Error(
+        `Could not decode ${label} audio for auto-sync: ${
+          error instanceof Error ? error.message : 'unsupported audio data'
+        }`,
+      );
     }
-    throw new Error(
-      `Could not decode ${label} audio for auto-sync: ${
-        error instanceof Error ? error.message : 'unsupported audio data'
-      }`,
-    );
-  } finally {
-    await closeTemporaryContext();
+  }
+  let closeFailed = false;
+  let closeError: unknown;
+  try {
+    await raceWithAbort(closeTemporaryContext(), signal);
+  } catch (error) {
+    closeFailed = true;
+    closeError = error;
+  }
+  if (primaryDecodeError) {
+    throw primaryDecodeError;
+  }
+  throwIfAborted(signal);
+  if (closeFailed) {
+    throw closeError;
+  }
+  if (!decoded) {
+    throw new Error(`Could not decode ${label} audio for auto-sync`);
   }
 
   if (!Number.isFinite(decoded.duration) || decoded.duration <= 0) {
@@ -616,7 +677,29 @@ async function decodeToMono(
   source.connect(offlineContext.destination);
   source.start(0);
 
-  const rendered = await raceWithAbort(offlineContext.startRendering(), signal);
+  const cleanupSource = () => {
+    try {
+      source.stop();
+    } catch {
+      // The source may already have ended or been stopped.
+    }
+    try {
+      source.disconnect();
+    } catch {
+      // Disconnect is best-effort cleanup and must not replace the primary error.
+    }
+    try {
+      source.buffer = null;
+    } catch {
+      // Some browser implementations expose a read-only buffer after start().
+    }
+  };
+  let rendered: AudioBuffer;
+  try {
+    rendered = await raceWithAbort(offlineContext.startRendering(), signal, cleanupSource);
+  } finally {
+    cleanupSource();
+  }
   throwIfAborted(signal);
   const samples = rendered.getChannelData(0);
   if (samples.length !== analysisLength) {
@@ -625,7 +708,6 @@ async function decodeToMono(
 
   return {
     samples: samples.slice(),
-    encodedBytes,
   };
 }
 
@@ -761,17 +843,12 @@ export async function computeAutoSyncOffset(
   targetUrl: string,
   options: AutoSyncOptions = {},
 ): Promise<AutoSyncResult> {
-  const reference = await decodeToMono(
-    referenceUrl,
-    'reference',
-    options.signal,
-    AUTO_SYNC_MAX_AGGREGATE_ENCODED_BYTES,
-  );
+  const reference = await decodeToMono(referenceUrl, 'reference', options.signal, 0);
   const target = await decodeToMono(
     targetUrl,
     'target',
     options.signal,
-    AUTO_SYNC_MAX_AGGREGATE_ENCODED_BYTES - reference.encodedBytes,
+    reference.samples.byteLength,
   );
   if (reference.samples.byteLength + target.samples.byteLength > AUTO_SYNC_MAX_ANALYSIS_BYTES) {
     throw new Error('Auto-sync inputs exceed the combined analysis-memory limit');
