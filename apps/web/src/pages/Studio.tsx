@@ -393,8 +393,7 @@ function PreviewWorkspace() {
       const mediaDuration = Number.isFinite(player.duration)
         ? player.duration
         : (fallbackDuration ?? projectTarget);
-      const target = Math.min(projectTarget, mediaDuration);
-      if (player.ended && target >= mediaDuration) return;
+      if (Number.isFinite(mediaDuration) && projectTarget >= mediaDuration) return;
       if (player.ended) return;
       playVideo(player, sourceGeneration);
     } else {

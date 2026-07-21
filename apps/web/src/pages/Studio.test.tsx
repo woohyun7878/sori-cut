@@ -525,38 +525,47 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).toHaveBeenCalledWith(0.5);
   });
 
-  it('ignores a duplicate seeked event from a completed programmatic operation', () => {
-    storeState.video = {
-      id: 'video-1',
-      name: 'preview.mp4',
-      blob: new Blob(),
-      url: 'blob:preview',
-      duration: 3,
-      width: 1080,
-      height: 1920,
-    };
-    const view = render(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
-    const player = document.querySelector('video') as HTMLVideoElement;
-    Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
-    player.currentTime = 0;
-    vi.clearAllMocks();
+  it.each(['pointer', 'keyboard'] as const)(
+    'keeps duplicate tombstones until an explicit $interaction seek owns the target',
+    (interaction) => {
+      storeState.video = {
+        id: 'video-1',
+        name: 'preview.mp4',
+        blob: new Blob(),
+        url: 'blob:preview',
+        duration: 3,
+        width: 1080,
+        height: 1920,
+      };
+      const view = render(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      const player = document.querySelector('video') as HTMLVideoElement;
+      Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
+      player.currentTime = 0;
+      vi.clearAllMocks();
 
-    storeState.playheadPosition = 1.5;
-    view.rerender(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
-    fireEvent.seeking(player);
-    fireEvent.seeked(player);
-    fireEvent.seeked(player);
+      storeState.playheadPosition = 1.5;
+      view.rerender(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      fireEvent.seeking(player);
+      fireEvent.seeked(player);
+      fireEvent.seeked(player);
+      fireEvent.seeked(player);
+      expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
 
-    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
-  });
+      fireVideoSeekIntent(player, interaction);
+      fireEvent.seeking(player);
+      fireEvent.seeked(player);
+      expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(1);
+      expect(storeState.setPlayheadPosition).toHaveBeenCalledWith(1.5);
+    },
+  );
 
   it('leaves an ended shorter video stopped when project playback resumes at its duration', () => {
     storeState.video = {
@@ -594,6 +603,39 @@ describe('Studio shell', () => {
 
     expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
     expect(player.currentTime).toBe(2);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not start non-ended video when the project target is beyond its duration', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.playheadPosition = 5;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(player, 'ended', { configurable: true, value: false });
+    player.currentTime = 2;
+    vi.clearAllMocks();
+
+    storeState.isPlaying = true;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
