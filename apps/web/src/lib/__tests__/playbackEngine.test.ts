@@ -429,7 +429,7 @@ describe('PlaybackEngine reliability', () => {
     expect(animationFrames.size).toBe(1);
   });
 
-  it('atomically reschedules source changes and removals at the current position', async () => {
+  it('stops only replaced and removed tracks before scheduling the replacement', async () => {
     const engine = createEngine();
     const first = createTrack({ id: 'first', sourceUrl: 'blob:first' });
     const second = createTrack({ id: 'second', sourceUrl: 'blob:second' });
@@ -443,6 +443,131 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
     expect(createdSources[2].start).toHaveBeenCalledWith(2, 2, 3);
     expect(engine.isPlaying).toBe(true);
+  });
+
+  it.each([
+    ['startOffset', { startOffset: 1 }, [2, 1, 4]],
+    ['sourceStartOffset', { sourceStartOffset: 1 }, [2, 3, 3]],
+    ['duration', { duration: 4 }, [2, 2, 2]],
+  ])(
+    'reschedules only a track whose %s changes while playing',
+    async (_field, update, schedule) => {
+      const engine = createEngine();
+      const unchanged = createTrack({ id: 'unchanged', sourceUrl: 'blob:unchanged' });
+      const changed = createTrack({ id: 'changed', sourceUrl: 'blob:changed' });
+      await engine.play([unchanged, changed], 0, 6, false);
+
+      contextTime = 2;
+      await engine.syncTracks([unchanged, { ...changed, ...update }], 6);
+
+      expect(createdSources).toHaveLength(3);
+      expect(createdSources[0].stop).not.toHaveBeenCalled();
+      expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+      expect(createdSources[2].start).toHaveBeenCalledWith(...schedule);
+      expect(engine.isPlaying).toBe(true);
+    },
+  );
+
+  it('loads a deferred addition without interrupting playback and starts it at the advanced playhead', async () => {
+    const engine = createEngine();
+    const unchanged = createTrack({ id: 'unchanged', sourceUrl: 'blob:unchanged' });
+    await engine.play([unchanged], 0, 5, false);
+    const response = deferred<Response>();
+    fetchMock.mockReturnValueOnce(response.promise);
+
+    contextTime = 2;
+    const addition = createTrack({ id: 'addition', sourceUrl: 'blob:addition' });
+    const sync = engine.syncTracks([unchanged, addition], 5);
+    await Promise.resolve();
+    contextTime = 3;
+    response.resolve(successfulResponse());
+    await sync;
+
+    expect(createdSources).toHaveLength(2);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].start).toHaveBeenCalledWith(3, 3, 2);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('loads a deferred replacement without stopping an unaffected source or freezing its offset', async () => {
+    const engine = createEngine();
+    const unchanged = createTrack({ id: 'unchanged', sourceUrl: 'blob:unchanged' });
+    const replaced = createTrack({ id: 'replaced', sourceUrl: 'blob:replaced' });
+    await engine.play([unchanged, replaced], 0, 5, false);
+    const response = deferred<Response>();
+    fetchMock.mockReturnValueOnce(response.promise);
+
+    contextTime = 2;
+    const replacement = { ...replaced, sourceUrl: 'blob:replacement' };
+    const sync = engine.syncTracks([unchanged, replacement], 5);
+    await Promise.resolve();
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+
+    contextTime = 3;
+    response.resolve(successfulResponse());
+    await sync;
+
+    expect(createdSources).toHaveLength(3);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[2].start).toHaveBeenCalledWith(3, 3, 2);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('ignores stale replacement loads and errors after a newer source wins', async () => {
+    const engine = createEngine();
+    const unchanged = createTrack({ id: 'unchanged', sourceUrl: 'blob:unchanged' });
+    const replaced = createTrack({ id: 'replaced', sourceUrl: 'blob:replaced' });
+    await engine.play([unchanged, replaced], 0, 5, false);
+    const staleResponse = deferred<Response>();
+    const currentResponse = deferred<Response>();
+    fetchMock
+      .mockReturnValueOnce(staleResponse.promise)
+      .mockReturnValueOnce(currentResponse.promise);
+
+    contextTime = 1;
+    const staleSync = engine.syncTracks(
+      [unchanged, { ...replaced, sourceUrl: 'blob:stale-replacement' }],
+      5,
+    );
+    await Promise.resolve();
+    contextTime = 2;
+    const currentSync = engine.syncTracks(
+      [unchanged, { ...replaced, sourceUrl: 'blob:current-replacement' }],
+      5,
+    );
+    await Promise.resolve();
+
+    staleResponse.reject(new Error('stale network failure'));
+    await expect(staleSync).resolves.toBeUndefined();
+    contextTime = 3;
+    currentResponse.resolve(successfulResponse());
+    await currentSync;
+
+    expect(createdSources).toHaveLength(3);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[2].start).toHaveBeenCalledWith(3, 3, 2);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('uses video-only project duration extensions and shortenings as the live boundary', async () => {
+    const onEnd = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd);
+    await engine.play([], 0, 2, false);
+
+    contextTime = 1;
+    await engine.syncTracks([], 4);
+    contextTime = 2.5;
+    runNextAnimationFrame();
+    expect(engine.isPlaying).toBe(true);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    await engine.syncTracks([], 2);
+    expect(engine.isPlaying).toBe(false);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(animationFrames.size).toBe(0);
   });
 
   it('synchronizes live volume without restarting playback', async () => {

@@ -284,4 +284,90 @@ describe('Studio shell', () => {
     fireEvent.seeked(player as HTMLVideoElement);
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
+
+  it('restarts an ended video for a near-end project seek within drift tolerance', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    storeState.playheadPosition = 2;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video');
+    expect(player).not.toBeNull();
+    Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    let currentTime = 2;
+    const setCurrentTime = vi.fn((value: number) => {
+      currentTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: setCurrentTime,
+    });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1.8;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(setCurrentTime).toHaveBeenCalledWith(1.8);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('restarts an ended very short video when the project loops', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 0.2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    storeState.playheadPosition = 0.2;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video');
+    expect(player).not.toBeNull();
+    Object.defineProperty(player, 'duration', { configurable: true, value: 0.2 });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    let currentTime = 0.2;
+    const setCurrentTime = vi.fn((value: number) => {
+      currentTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: setCurrentTime,
+    });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 0;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(setCurrentTime).toHaveBeenCalledWith(0);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  });
 });

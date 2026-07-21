@@ -198,6 +198,68 @@ describe('usePlaybackEngine', () => {
     expect(engine.play).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['startOffset', { startOffset: 1 }, 6],
+    ['sourceStartOffset', { sourceStartOffset: 1 }, 5],
+    ['duration', { duration: 4 }, 4],
+  ])(
+    'synchronizes a live %s change without restarting playback',
+    async (_field, update, expectedDuration) => {
+      const track = {
+        id: 'track-1',
+        name: 'Track 1',
+        type: 'audio' as const,
+        sourceUrl: 'blob:track-1',
+        startOffset: 0,
+        duration: 5,
+        sourceStartOffset: 0,
+        muted: false,
+        volume: 1,
+      };
+      useProjectStore.setState({ tracks: [track], isPlaying: true });
+      render(<Harness />);
+      const engine = playbackMocks.instances[0];
+      await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+
+      const updatedTrack = { ...track, ...update };
+      act(() => {
+        useProjectStore.setState({ tracks: [updatedTrack] });
+      });
+
+      await waitFor(() =>
+        expect(engine.syncTracks).toHaveBeenLastCalledWith([updatedTrack], expectedDuration),
+      );
+      expect(engine.play).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('synchronizes video-only project duration extensions and shortenings', async () => {
+    const video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    useProjectStore.setState({ tracks: [], video, isPlaying: true });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    await waitFor(() => expect(engine.play).toHaveBeenCalledWith([], 0, 2, false));
+
+    act(() => {
+      useProjectStore.setState({ video: { ...video, duration: 4 } });
+    });
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenLastCalledWith([], 4));
+
+    act(() => {
+      useProjectStore.setState({ video: { ...video, duration: 1 } });
+    });
+    await waitFor(() => expect(engine.syncTracks).toHaveBeenLastCalledWith([], 1));
+    expect(engine.play).toHaveBeenCalledTimes(1);
+  });
+
   it('pauses existing playback when a live mix update fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const track = {

@@ -223,17 +223,22 @@ function PreviewWorkspace() {
     const mediaDuration = Number.isFinite(player.duration)
       ? player.duration
       : (video?.duration ?? playheadPosition);
-    const nextTime = Math.min(playheadPosition, mediaDuration);
+    const nextTime = Math.min(Math.max(playheadPosition, 0), mediaDuration);
+    const shouldResumeFromEnd =
+      player.ended && isPlaying && mediaDuration > 0 && nextTime >= 0 && nextTime < mediaDuration;
+    if (shouldResumeFromEnd) {
+      syncingVideoRef.current = true;
+      player.currentTime = nextTime;
+      void player.play().catch(() => setIsPlaying(false));
+      return;
+    }
+
     if (Math.abs(player.currentTime - nextTime) <= 0.35) {
       return;
     }
 
-    const shouldResumeFromEnd = player.ended && isPlaying && nextTime < mediaDuration;
     syncingVideoRef.current = true;
     player.currentTime = nextTime;
-    if (shouldResumeFromEnd) {
-      void player.play().catch(() => setIsPlaying(false));
-    }
   }, [isPlaying, playheadPosition, setIsPlaying, video?.duration]);
 
   useEffect(() => {

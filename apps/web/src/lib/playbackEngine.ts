@@ -255,7 +255,7 @@ export class PlaybackEngine {
       if (!loadedTrack) continue;
       const currentTrack = this.currentTracks.find(
         (track) =>
-          track.id === loadedTrack.track.id && track.sourceUrl === loadedTrack.track.sourceUrl,
+          track.id === loadedTrack.track.id && this.hasSameSchedule(track, loadedTrack.track),
       );
       if (!currentTrack || currentTrack.muted) continue;
       this.scheduleTrack(
@@ -416,9 +416,19 @@ export class PlaybackEngine {
     projectDuration = this.state.projectDuration,
   ): Promise<void> {
     const previousTracks = new Map(this.currentTracks.map((track) => [track.id, track]));
-    const topologyChanged =
-      previousTracks.size !== tracks.length ||
-      tracks.some((track) => previousTracks.get(track.id)?.sourceUrl !== track.sourceUrl);
+    const wasActive = this.state.isPlaying || this.state.isStarting;
+    const currentPosition = wasActive
+      ? this.getCurrentPlaybackPosition()
+      : this.state.playheadPosition;
+    const durationChanged = this.state.projectDuration !== projectDuration;
+    const removedTrackIds = [...previousTracks.keys()].filter(
+      (trackId) => !tracks.some((track) => track.id === trackId),
+    );
+    const scheduleChanges = tracks.filter((track) => {
+      const previous = previousTracks.get(track.id);
+      return !previous || !this.hasSameSchedule(previous, track);
+    });
+    const scheduleChangeIds = new Set(scheduleChanges.map((track) => track.id));
     const mixChanges = tracks.filter((track) => {
       const previous = previousTracks.get(track.id);
       return previous && (previous.volume !== track.volume || previous.muted !== track.muted);
@@ -426,15 +436,37 @@ export class PlaybackEngine {
     this.currentTracks = [...tracks];
     this.state.projectDuration = projectDuration;
 
-    if (!this.state.isPlaying && !this.state.isStarting) return;
+    if (!wasActive) return;
 
     const isRestartingLoop = this.loopRestartGeneration === this.operationGeneration;
-    if (topologyChanged || ((this.state.isStarting || isRestartingLoop) && mixChanges.length > 0)) {
-      const currentPosition = isRestartingLoop
-        ? this.state.playheadPosition
-        : this.getCurrentPlaybackPosition();
+    if (this.state.isStarting || isRestartingLoop) {
+      if (
+        removedTrackIds.length === 0 &&
+        scheduleChanges.length === 0 &&
+        mixChanges.length === 0 &&
+        !durationChanged
+      ) {
+        return;
+      }
       await this.play(this.currentTracks, currentPosition, projectDuration, this.state.loopEnabled);
       return;
+    }
+
+    if (currentPosition >= projectDuration) {
+      this.finishPlaybackAtEnd();
+      return;
+    }
+
+    const cleanupErrors: PlaybackError[] = [];
+    for (const trackId of [...removedTrackIds, ...scheduleChangeIds]) {
+      this.pendingTrackStarts.delete(trackId);
+      const cleanupError = this.stopTrackSources(trackId);
+      if (cleanupError) cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to reconcile active audio nodes.', {
+        cause: cleanupErrors,
+      });
     }
 
     for (const track of mixChanges) {
@@ -444,34 +476,23 @@ export class PlaybackEngine {
       }
     }
 
-    const currentPosition = this.getCurrentPlaybackPosition();
-    const missingTracks = mixChanges.filter((track) => {
+    const tracksToSchedule = tracks.filter((track) => {
       const previous = previousTracks.get(track.id);
       return (
-        previous?.muted === true &&
-        !track.muted &&
         Boolean(track.sourceUrl) &&
+        !track.muted &&
         !this.activeNodes.has(track.id) &&
-        currentPosition < track.startOffset + track.duration
+        currentPosition < track.startOffset + track.duration &&
+        (scheduleChangeIds.has(track.id) || previous?.muted === true)
       );
     });
 
-    if (missingTracks.length === 0) return;
+    if (tracksToSchedule.length === 0) return;
 
-    if (this.state.isStarting) {
-      await this.play(
-        this.currentTracks,
-        currentPosition,
-        this.state.projectDuration,
-        this.state.loopEnabled,
-      );
-      return;
-    }
-
-    await this.scheduleMissingTracks(missingTracks);
+    await this.scheduleTracksAtCurrentPosition(tracksToSchedule);
   }
 
-  private async scheduleMissingTracks(tracks: TimelineTrack[]) {
+  private async scheduleTracksAtCurrentPosition(tracks: TimelineTrack[]) {
     const ctx = this.getContext();
     const operationGeneration = this.operationGeneration;
     const pendingTracks = tracks
@@ -496,7 +517,7 @@ export class PlaybackEngine {
               this.pendingTrackStarts.get(track.id) !== token ||
               !currentTrack ||
               currentTrack.muted ||
-              currentTrack.sourceUrl !== track.sourceUrl
+              !this.hasSameSchedule(currentTrack, track)
             ) {
               return { track, token, buffer: null };
             }
@@ -517,6 +538,7 @@ export class PlaybackEngine {
           !buffer ||
           !currentTrack ||
           currentTrack.muted ||
+          !this.hasSameSchedule(currentTrack, track) ||
           this.activeNodes.has(track.id)
         ) {
           continue;
@@ -720,6 +742,26 @@ export class PlaybackEngine {
     }
   }
 
+  private stopTrackSources(trackId: string): PlaybackError | null {
+    const nodes = [...(this.activeNodes.get(trackId) ?? [])];
+    const errors: unknown[] = [];
+
+    for (const node of nodes) {
+      try {
+        this.cleanupNode(node, true);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.activeNodes.delete(trackId);
+
+    return errors.length > 0
+      ? new PlaybackError('NODE_CLEANUP_FAILED', `Failed to release track "${trackId}".`, {
+          cause: errors,
+        })
+      : null;
+  }
+
   private stopSources(): PlaybackError | null {
     const nodes = [...this.activeNodes.values()].flat();
     const errors: unknown[] = [];
@@ -742,6 +784,15 @@ export class PlaybackEngine {
 
   private isCurrentOperation(generation: number) {
     return !this.destroyed && generation === this.operationGeneration;
+  }
+
+  private hasSameSchedule(first: TimelineTrack, second: TimelineTrack) {
+    return (
+      first.sourceUrl === second.sourceUrl &&
+      first.startOffset === second.startOffset &&
+      first.sourceStartOffset === second.sourceStartOffset &&
+      first.duration === second.duration
+    );
   }
 
   private isAlreadyStoppedError(error: unknown) {

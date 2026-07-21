@@ -6,24 +6,34 @@ import {
   useProjectStore,
 } from '../store/useProjectStore';
 
-interface TrackMixSnapshot {
+interface TrackPlaybackSnapshot {
+  duration: number;
   muted: boolean;
   sourceUrl: string;
+  sourceStartOffset: number;
+  startOffset: number;
   volume: number;
 }
 
-function snapshotTrackMix(tracks: TimelineTrack[]) {
-  return new Map<string, TrackMixSnapshot>(
+function snapshotTracks(tracks: TimelineTrack[]) {
+  return new Map<string, TrackPlaybackSnapshot>(
     tracks.map((track) => [
       track.id,
-      { muted: track.muted, sourceUrl: track.sourceUrl, volume: track.volume },
+      {
+        duration: track.duration,
+        muted: track.muted,
+        sourceUrl: track.sourceUrl,
+        sourceStartOffset: track.sourceStartOffset,
+        startOffset: track.startOffset,
+        volume: track.volume,
+      },
     ]),
   );
 }
 
-function hasMeaningfulTrackMixChange(
-  previous: Map<string, TrackMixSnapshot>,
-  next: Map<string, TrackMixSnapshot>,
+function hasPlaybackTrackChange(
+  previous: Map<string, TrackPlaybackSnapshot>,
+  next: Map<string, TrackPlaybackSnapshot>,
 ) {
   if (previous.size !== next.size) return true;
 
@@ -31,9 +41,12 @@ function hasMeaningfulTrackMixChange(
     const previousTrack = previous.get(trackId);
     if (
       !previousTrack ||
+      previousTrack.duration !== nextTrack.duration ||
       previousTrack.muted !== nextTrack.muted ||
-      previousTrack.volume !== nextTrack.volume ||
-      previousTrack.sourceUrl !== nextTrack.sourceUrl
+      previousTrack.sourceUrl !== nextTrack.sourceUrl ||
+      previousTrack.sourceStartOffset !== nextTrack.sourceStartOffset ||
+      previousTrack.startOffset !== nextTrack.startOffset ||
+      previousTrack.volume !== nextTrack.volume
     ) {
       return true;
     }
@@ -66,7 +79,8 @@ export function usePlaybackEngine() {
   const loopEnabledRef = useRef(loopEnabled);
   const playheadRef = useRef(playheadPosition);
   const videoRef = useRef(video);
-  const trackMixRef = useRef(snapshotTrackMix(tracks));
+  const trackSnapshotRef = useRef(snapshotTracks(tracks));
+  const projectDurationRef = useRef(calculateProjectDuration(tracks, video));
 
   useEffect(() => {
     playheadRef.current = playheadPosition;
@@ -127,14 +141,16 @@ export function usePlaybackEngine() {
 
   useEffect(() => {
     tracksRef.current = tracks;
-    const nextMix = snapshotTrackMix(tracks);
-    const mixChanged = hasMeaningfulTrackMixChange(trackMixRef.current, nextMix);
-    trackMixRef.current = nextMix;
-    if (!mixChanged) return;
+    const nextSnapshot = snapshotTracks(tracks);
+    const tracksChanged = hasPlaybackTrackChange(trackSnapshotRef.current, nextSnapshot);
+    const duration = calculateProjectDuration(tracks, video);
+    const durationChanged = projectDurationRef.current !== duration;
+    trackSnapshotRef.current = nextSnapshot;
+    projectDurationRef.current = duration;
+    if (!tracksChanged && !durationChanged) return;
 
-    const duration = calculateProjectDuration(tracks, videoRef.current);
     void getEngine().syncTracks(tracks, duration).catch(handlePlaybackError);
-  }, [getEngine, handlePlaybackError, tracks]);
+  }, [getEngine, handlePlaybackError, tracks, video]);
 
   // Respond to isPlaying changes
   useEffect(() => {
