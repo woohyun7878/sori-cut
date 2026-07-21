@@ -502,4 +502,28 @@ describe('PlaybackEngine reliability', () => {
     expect(engine.isPlaying).toBe(false);
     expect(animationFrames.size).toBe(0);
   });
+
+  it('does not resurrect playback when stopped during a pending loop restart', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const loopTrack = createTrack({ muted: true, duration: 1 });
+    const engine = createEngine();
+    await engine.play([loopTrack], 0, 1, true);
+
+    loopTrack.muted = false;
+    contextTime = 2;
+    runNextAnimationFrame();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    engine.stop();
+    response.resolve(successfulResponse());
+    await vi.waitFor(() => expect(decodeAudioData).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(createdSources).toHaveLength(0);
+    expect(engine.isPlaying).toBe(false);
+    expect(engine.isStarting).toBe(false);
+    expect(animationFrames.size).toBe(0);
+  });
 });
