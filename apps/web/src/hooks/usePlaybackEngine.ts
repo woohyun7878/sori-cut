@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { PlaybackEngine } from '../lib/playbackEngine';
+import { PlaybackEngine, type PlaybackError } from '../lib/playbackEngine';
 import { calculateProjectDuration, useProjectStore } from '../store/useProjectStore';
 
 /**
@@ -10,8 +10,7 @@ export function usePlaybackEngine() {
   const engineRef = useRef<PlaybackEngine | null>(null);
   const isPlayingRef = useRef(false);
   const throttleRef = useRef(0);
-  // Flag to distinguish engine-driven position updates from user-initiated seeks
-  const engineUpdatingRef = useRef(false);
+  const lastEnginePositionRef = useRef<number | null>(null);
 
   // Subscribe to store slices
   const tracks = useProjectStore((s) => s.tracks);
@@ -40,6 +39,15 @@ export function usePlaybackEngine() {
     return engineRef.current;
   }, []);
 
+  const handlePlaybackError = useCallback(
+    (error: PlaybackError) => {
+      console.error('[usePlaybackEngine] Playback failed:', error);
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+    },
+    [setIsPlaying],
+  );
+
   // Set up engine callbacks
   useEffect(() => {
     const engine = getEngine();
@@ -50,27 +58,29 @@ export function usePlaybackEngine() {
         const now = performance.now();
         if (now - throttleRef.current < 33) return;
         throttleRef.current = now;
-        engineUpdatingRef.current = true;
+        lastEnginePositionRef.current = position;
         setPlayheadPosition(position);
-        engineUpdatingRef.current = false;
       },
       // onPlaybackEnd
       () => {
         if (loopEnabledRef.current) {
           // Re-schedule from the beginning for loop
           const duration = calculateProjectDuration(tracksRef.current, videoRef.current);
-          void engine.play(tracksRef.current, 0, duration, true);
+          void engine
+            .play(tracksRef.current, 0, duration, true)
+            .catch(handlePlaybackError);
         } else {
           setIsPlaying(false);
         }
       },
+      handlePlaybackError,
     );
 
     return () => {
       engine.destroy();
       engineRef.current = null;
     };
-  }, [getEngine, setIsPlaying, setPlayheadPosition]);
+  }, [getEngine, handlePlaybackError, setIsPlaying, setPlayheadPosition]);
 
   // Respond to isPlaying changes
   useEffect(() => {
@@ -79,28 +89,37 @@ export function usePlaybackEngine() {
 
     if (isPlaying && !isPlayingRef.current) {
       // Start playing
-      void engine.play(tracksRef.current, playheadRef.current, duration, loopEnabledRef.current);
+      void engine
+        .play(tracksRef.current, playheadRef.current, duration, loopEnabledRef.current)
+        .catch(handlePlaybackError);
     } else if (!isPlaying && isPlayingRef.current) {
       // Pause
       engine.pause();
     }
 
     isPlayingRef.current = isPlaying;
-  }, [isPlaying, getEngine, video]);
+  }, [isPlaying, getEngine, handlePlaybackError, video]);
 
   // Handle seeking: when the playhead changes and it wasn't from the engine, seek the engine
   useEffect(() => {
-    if (engineUpdatingRef.current) return;
+    if (lastEnginePositionRef.current === playheadPosition) {
+      lastEnginePositionRef.current = null;
+      return;
+    }
     if (!isPlayingRef.current) return;
 
     const engine = getEngine();
     const duration = calculateProjectDuration(tracksRef.current, videoRef.current);
-    engine.seek(tracksRef.current, playheadPosition, duration, loopEnabledRef.current);
-  }, [playheadPosition, getEngine]);
+    void engine
+      .seek(tracksRef.current, playheadPosition, duration, loopEnabledRef.current)
+      .catch(handlePlaybackError);
+  }, [playheadPosition, getEngine, handlePlaybackError]);
 
   // Preload buffers when tracks change
   useEffect(() => {
     const engine = getEngine();
-    void engine.preloadTracks(tracks);
+    void engine.preloadTracks(tracks).catch((error: unknown) => {
+      console.error('[usePlaybackEngine] Audio preload failed:', error);
+    });
   }, [tracks, getEngine]);
 }
