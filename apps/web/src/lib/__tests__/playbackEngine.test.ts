@@ -297,19 +297,46 @@ describe('PlaybackEngine reliability', () => {
     expect(engine.isPlaying).toBe(true);
   });
 
-  it('does not start a source after stop cancels an in-flight load', async () => {
+  it.each(['pause', 'stop', 'destroy'] as const)(
+    '%s during startup cancels without restarting playback',
+    async (action) => {
+      const response = deferred<Response>();
+      fetchMock.mockReturnValue(response.promise);
+      const engine = createEngine();
+
+      const play = engine.play([createTrack()], 0, 5, false);
+      await Promise.resolve();
+      engine[action]();
+      response.resolve(successfulResponse());
+      await play;
+
+      expect(createdSources).toHaveLength(0);
+      expect(engine.isPlaying).toBe(false);
+      expect(engine.isStarting).toBe(false);
+    },
+  );
+
+  it('restarts a pending play at the requested seek position', async () => {
     const response = deferred<Response>();
     fetchMock.mockReturnValue(response.promise);
     const engine = createEngine();
+    const track = createTrack();
 
-    const play = engine.play([createTrack()], 0, 5, false);
+    const initialPlay = engine.play([track], 0, 5, false);
     await Promise.resolve();
-    engine.stop();
-    response.resolve(successfulResponse());
-    await play;
+    expect(engine.isStarting).toBe(true);
 
-    expect(createdSources).toHaveLength(0);
-    expect(engine.isPlaying).toBe(false);
+    const seek = engine.seek([track], 2, 5, false);
+    expect(engine.isStarting).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    response.resolve(successfulResponse());
+    await Promise.all([initialPlay, seek]);
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdSources[0].start).toHaveBeenCalledWith(0, 2, 3);
+    expect(engine.isStarting).toBe(false);
+    expect(engine.isPlaying).toBe(true);
   });
 
   it('disconnects ended and stopped nodes without retaining ended nodes', async () => {

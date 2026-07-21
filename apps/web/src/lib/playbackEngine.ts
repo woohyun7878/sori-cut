@@ -2,6 +2,7 @@ import type { TimelineTrack } from '../store/useProjectStore';
 
 interface PlaybackState {
   isPlaying: boolean;
+  isStarting: boolean;
   playheadPosition: number;
   loopEnabled: boolean;
   projectDuration: number;
@@ -66,6 +67,7 @@ export class PlaybackEngine {
   private onPlaybackError: PlaybackErrorCallback | null = null;
   private state: PlaybackState = {
     isPlaying: false,
+    isStarting: false,
     playheadPosition: 0,
     loopEnabled: false,
     projectDuration: 0,
@@ -183,6 +185,7 @@ export class PlaybackEngine {
     this.cancelAnimationLoop();
     this.stopSources();
     this.state.isPlaying = false;
+    this.state.isStarting = true;
 
     try {
       const ctx = this.getContext();
@@ -198,6 +201,7 @@ export class PlaybackEngine {
 
       this.state = {
         isPlaying: true,
+        isStarting: false,
         playheadPosition: fromPosition,
         loopEnabled,
         projectDuration,
@@ -212,6 +216,7 @@ export class PlaybackEngine {
       this.cancelAnimationLoop();
       this.stopSources();
       this.state.isPlaying = false;
+      this.state.isStarting = false;
       throw this.toPlaybackError(
         error,
         'SCHEDULE_FAILED',
@@ -343,6 +348,7 @@ export class PlaybackEngine {
     this.stopSources();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
+    this.state.isStarting = false;
   }
 
   stop() {
@@ -350,6 +356,7 @@ export class PlaybackEngine {
     this.stopSources();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
+    this.state.isStarting = false;
     this.state.playheadPosition = 0;
   }
 
@@ -359,7 +366,7 @@ export class PlaybackEngine {
     projectDuration: number,
     loopEnabled: boolean,
   ): Promise<void> {
-    if (this.state.isPlaying) {
+    if (this.state.isPlaying || this.state.isStarting) {
       await this.play(tracks, position, projectDuration, loopEnabled);
     } else {
       this.operationGeneration++;
@@ -408,6 +415,7 @@ export class PlaybackEngine {
 
         this.operationGeneration++;
         this.state.isPlaying = false;
+        this.state.isStarting = false;
         this.stopSources();
         this.onPlayheadUpdate?.(this.state.projectDuration);
         this.onPlaybackEnd?.();
@@ -463,6 +471,7 @@ export class PlaybackEngine {
       );
     }
     this.state.isPlaying = false;
+    this.state.isStarting = false;
     this.reportInternalError(error);
   }
 
@@ -580,12 +589,17 @@ export class PlaybackEngine {
     return this.state.isPlaying;
   }
 
+  get isStarting() {
+    return this.state.isStarting;
+  }
+
   destroy() {
     this.destroyed = true;
     this.operationGeneration++;
     this.cancelAnimationLoop();
     this.stopSources();
     this.state.isPlaying = false;
+    this.state.isStarting = false;
     this.bufferCache.clear();
     this.pendingBufferLoads.clear();
 
