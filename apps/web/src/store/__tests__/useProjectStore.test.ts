@@ -266,6 +266,26 @@ describe('useProjectStore', () => {
       useProjectStore.getState().loadFromSaved({ projectName: 'Fresh' });
       expect(useProjectStore.getState().recordings).toHaveLength(0);
     });
+
+    it('migrates a legacy timeline offset into the signed sync offset', () => {
+      useProjectStore.getState().loadFromSaved({
+        tracks: [
+          {
+            id: 'legacy-track',
+            name: 'Legacy',
+            type: 'audio',
+            sourceUrl: 'blob:legacy',
+            startOffset: 2.5,
+            duration: 10,
+            sourceStartOffset: 1,
+            muted: false,
+            volume: 1,
+          },
+        ],
+      });
+
+      expect(useProjectStore.getState().tracks[0].syncOffset).toBe(2.5);
+    });
   });
 
   describe('blob URL lifecycle', () => {

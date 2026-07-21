@@ -29,7 +29,10 @@ const PEAK_EXCLUSION_FRAMES = 2;
 const DISTINCT_PEAK_MARGIN = 0.25;
 
 export interface CrossCorrelationResult {
-  /** Lag in 8 kHz analysis samples, quantized to the 20 ms envelope frame. */
+  /**
+   * Target timeline placement in 8 kHz analysis samples, quantized to 20 ms.
+   * Positive delays the target; negative advances it within the source.
+   */
   lagSamples: number;
   /** Overlap-weighted, normalized correlation confidence (0-1). */
   confidence: number;

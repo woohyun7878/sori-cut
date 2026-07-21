@@ -280,8 +280,9 @@ export async function loadProject(id: string): Promise<LoadedProject | null> {
     return {
       ...t,
       sourceUrl,
-      // Migrate projects saved before sourceStartOffset existed.
+      // Migrate projects saved before sourceStartOffset and syncOffset existed.
       sourceStartOffset: t.sourceStartOffset ?? 0,
+      syncOffset: t.syncOffset ?? t.startOffset,
     };
   });
 

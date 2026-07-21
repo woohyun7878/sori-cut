@@ -14,11 +14,13 @@ import {
   type CrossCorrelationResult,
 } from './autoSyncCore';
 
-const MAX_AUDIO_FILE_BYTES = 256 * 1024 * 1024;
+export const AUTO_SYNC_MAX_FILE_BYTES = 64 * 1024 * 1024;
+export const AUTO_SYNC_MAX_TOTAL_FILE_BYTES = 96 * 1024 * 1024;
+export const AUTO_SYNC_MAX_DECODED_BYTES = 64 * 1024 * 1024;
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
 
 export interface AutoSyncResult {
-  /** Optimal offset in seconds (positive = recording should start later on timeline). */
+  /** Signed target placement: positive delays it; negative advances into its source. */
   offsetSeconds: number;
   /** Normalized correlation confidence (0-1). */
   confidence: number;
@@ -27,6 +29,24 @@ export interface AutoSyncResult {
 export interface AutoSyncOptions {
   signal?: AbortSignal;
   workerTimeoutMs?: number;
+}
+
+export type AutoSyncResourceLimitCode = 'individual-input' | 'aggregate-input' | 'decoded-audio';
+
+export class AutoSyncResourceLimitError extends Error {
+  readonly name = 'AutoSyncResourceLimitError';
+
+  constructor(
+    readonly code: AutoSyncResourceLimitCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+interface DecodedInput {
+  encodedBytes: number;
+  samples: Float32Array;
 }
 
 function abortError(): DOMException {
@@ -70,54 +90,57 @@ function raceWithAbort<T>(
   });
 }
 
+function assertInputBudget(label: string, bytes: number, consumedBytes: number): void {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) {
+    throw new Error(`${label} audio reported an invalid file size`);
+  }
+  if (bytes > AUTO_SYNC_MAX_FILE_BYTES) {
+    throw new AutoSyncResourceLimitError(
+      'individual-input',
+      `${label} audio exceeds the 64 MB auto-sync file limit. Use a shorter or more compressed file.`,
+    );
+  }
+  if (consumedBytes + bytes > AUTO_SYNC_MAX_TOTAL_FILE_BYTES) {
+    throw new AutoSyncResourceLimitError(
+      'aggregate-input',
+      'Combined auto-sync inputs exceed the 96 MB memory budget. Use shorter or more compressed files.',
+    );
+  }
+}
+
 async function decodeToMono(
   url: string,
   label: string,
+  consumedBytes: number,
   signal: AbortSignal | undefined,
-): Promise<Float32Array> {
+): Promise<DecodedInput> {
   throwIfAborted(signal);
   const response = await fetch(url, { signal });
   if (!response.ok) {
     throw new Error(`Failed to fetch ${label} audio: HTTP ${response.status}`);
   }
-
-  const declaredBytes = Number(response.headers?.get('content-length'));
-  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_AUDIO_FILE_BYTES) {
-    throw new Error(`${label} audio exceeds the 256 MB auto-sync file limit`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  if (arrayBuffer.byteLength > MAX_AUDIO_FILE_BYTES) {
-    throw new Error(`${label} audio exceeds the 256 MB auto-sync file limit`);
-  }
-  throwIfAborted(signal);
-
-  const temporaryContext = new AudioContext({
-    sampleRate: AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
-  });
-  let closePromise: Promise<void> | undefined;
-  const closeTemporaryContext = () => {
-    closePromise ??= temporaryContext.close();
-    return closePromise;
-  };
-  let decoded: AudioBuffer;
-  try {
-    decoded = await raceWithAbort(temporaryContext.decodeAudioData(arrayBuffer), signal, () => {
-      void closeTemporaryContext();
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw error;
+  const contentLength = response.headers?.get('content-length');
+  if (contentLength !== null && contentLength !== undefined) {
+    const declaredBytes = Number(contentLength);
+    if (Number.isFinite(declaredBytes)) {
+      assertInputBudget(label, declaredBytes, consumedBytes);
     }
-    throw new Error(
-      `Could not decode ${label} audio for auto-sync: ${
-        error instanceof Error ? error.message : 'unsupported audio data'
-      }`,
-    );
-  } finally {
-    await closeTemporaryContext();
   }
 
+  const { decoded, encodedBytes } = await decodeResponseAudio(
+    response,
+    label,
+    consumedBytes,
+    signal,
+  );
+
+  const decodedBytes = decoded.length * decoded.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
+  if (!Number.isSafeInteger(decodedBytes) || decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES) {
+    throw new AutoSyncResourceLimitError(
+      'decoded-audio',
+      `${label} audio expands beyond the 64 MB decoded-audio budget. Use fewer channels or a shorter file.`,
+    );
+  }
   if (!Number.isFinite(decoded.duration) || decoded.duration <= 0) {
     throw new Error(`${label} audio has no usable duration for auto-sync`);
   }
@@ -149,15 +172,116 @@ async function decodeToMono(
   source.buffer = decoded;
   source.connect(offlineContext.destination);
   source.start(0);
+  let sourceReleased = false;
+  const releaseSource = () => {
+    if (!sourceReleased) {
+      sourceReleased = true;
+      source.buffer = null;
+      source.disconnect();
+    }
+  };
 
-  const rendered = await raceWithAbort(offlineContext.startRendering(), signal);
+  try {
+    const rendered = await raceWithAbort(offlineContext.startRendering(), signal, releaseSource);
+    throwIfAborted(signal);
+    const samples = rendered.getChannelData(0);
+    if (samples.length !== analysisLength) {
+      throw new Error(`${label} audio produced an invalid auto-sync analysis buffer`);
+    }
+
+    return { encodedBytes, samples };
+  } finally {
+    releaseSource();
+  }
+}
+
+async function decodeResponseAudio(
+  response: Response,
+  label: string,
+  consumedBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<{ decoded: AudioBuffer; encodedBytes: number }> {
+  const encoded = await readResponseWithinBudget(response, label, consumedBytes, signal);
+  const encodedBytes = encoded.byteLength;
   throwIfAborted(signal);
-  const samples = rendered.getChannelData(0);
-  if (samples.length !== analysisLength) {
-    throw new Error(`${label} audio produced an invalid auto-sync analysis buffer`);
+
+  const temporaryContext = new AudioContext({
+    sampleRate: AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
+  });
+  let closePromise: Promise<void> | undefined;
+  const closeTemporaryContext = () => {
+    closePromise ??= temporaryContext.close();
+    return closePromise;
+  };
+
+  try {
+    const decoded = await raceWithAbort(temporaryContext.decodeAudioData(encoded), signal, () => {
+      void closeTemporaryContext();
+    });
+    return { decoded, encodedBytes };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error;
+    }
+    throw new Error(
+      `Could not decode ${label} audio for auto-sync: ${
+        error instanceof Error ? error.message : 'unsupported audio data'
+      }`,
+    );
+  } finally {
+    await closeTemporaryContext();
+  }
+}
+
+async function readResponseWithinBudget(
+  response: Response,
+  label: string,
+  consumedBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<ArrayBuffer> {
+  if (!response.body) {
+    const encoded = await response.arrayBuffer();
+    assertInputBudget(label, encoded.byteLength, consumedBytes);
+    return encoded;
   }
 
-  return samples.slice();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      throwIfAborted(signal);
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      assertInputBudget(label, totalBytes, consumedBytes);
+      chunks.push(value);
+    }
+  } catch (error) {
+    try {
+      await reader.cancel(error);
+    } catch (cancelError) {
+      throw new Error(
+        `Auto-sync failed while cancelling the ${label} download: ${
+          cancelError instanceof Error ? cancelError.message : 'unknown cancellation error'
+        }`,
+      );
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+
+  const encoded = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    encoded.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return encoded.buffer;
 }
 
 function parseWorkerResponse(value: unknown, maxLagSamples: number): CrossCorrelationResult {
@@ -284,26 +408,30 @@ function correlateInWorker(
  * Determine the timeline offset between a reference track and a target track.
  *
  * Analysis accepts up to five minutes per input, searches +/-10 seconds, and
- * resolves lag to the nearest 20 ms envelope frame.
+ * resolves lag to the nearest 20 ms envelope frame. Inputs are fetched and
+ * decoded sequentially under individual and aggregate memory budgets.
  */
 export async function computeAutoSyncOffset(
   referenceUrl: string,
   targetUrl: string,
   options: AutoSyncOptions = {},
 ): Promise<AutoSyncResult> {
-  const [reference, target] = await Promise.all([
-    decodeToMono(referenceUrl, 'reference', options.signal),
-    decodeToMono(targetUrl, 'target', options.signal),
-  ]);
+  const referenceInput = await decodeToMono(referenceUrl, 'reference', 0, options.signal);
+  const targetInput = await decodeToMono(
+    targetUrl,
+    'target',
+    referenceInput.encodedBytes,
+    options.signal,
+  );
   const { lagSamples, confidence } = await correlateInWorker(
-    reference,
-    target,
+    referenceInput.samples,
+    targetInput.samples,
     AUTO_SYNC_MAX_LAG_SAMPLES,
     options,
   );
 
   return {
-    offsetSeconds: -lagSamples / AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
+    offsetSeconds: lagSamples / AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
     confidence,
   };
 }

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { computeAutoSyncOffset } from '../autoSync';
+import {
+  AUTO_SYNC_MAX_FILE_BYTES,
+  AUTO_SYNC_MAX_TOTAL_FILE_BYTES,
+  AutoSyncResourceLimitError,
+  computeAutoSyncOffset,
+} from '../autoSync';
 import {
   AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
   AUTO_SYNC_FRAME_SIZE,
@@ -32,6 +37,27 @@ function createPatternSignal(frameCount: number): Float32Array {
         amplitude * Math.sin((2 * Math.PI * 5 * i) / AUTO_SYNC_FRAME_SIZE);
     }
   }
+  return signal;
+}
+
+function createAsymmetricPulseSignal(frameCount: number): Float32Array {
+  const amplitudes = new Map([
+    [11, 0.28],
+    [37, 0.92],
+    [88, 0.41],
+    [143, 0.73],
+    [207, 0.19],
+  ]);
+  const signal = new Float32Array(frameCount * AUTO_SYNC_FRAME_SIZE);
+
+  for (let frame = 0; frame < frameCount; frame++) {
+    const amplitude = amplitudes.get(frame) ?? 0.015;
+    for (let i = 0; i < AUTO_SYNC_FRAME_SIZE; i++) {
+      signal[frame * AUTO_SYNC_FRAME_SIZE + i] =
+        amplitude * Math.sin((2 * Math.PI * 5 * i) / AUTO_SYNC_FRAME_SIZE);
+    }
+  }
+
   return signal;
 }
 
@@ -72,6 +98,7 @@ function createMockMonoBuffer(data: Float32Array): AudioBuffer {
 let decodedReference: Float32Array;
 let decodedTarget: Float32Array;
 let fetchedUrls: string[];
+let analysisEvents: string[];
 let workerTerminations: number;
 
 class MockAutoSyncWorker {
@@ -140,8 +167,9 @@ class SilentWorker extends MockAutoSyncWorker {
 beforeEach(() => {
   vi.useRealTimers();
   fetchedUrls = [];
+  analysisEvents = [];
   workerTerminations = 0;
-  decodedReference = createPatternSignal(250);
+  decodedReference = createAsymmetricPulseSignal(250);
   decodedTarget = delaySignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
 
   vi.stubGlobal('Worker', MockAutoSyncWorker);
@@ -149,6 +177,9 @@ beforeEach(() => {
     'AudioContext',
     class {
       async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
+        analysisEvents.push(
+          data.byteLength === TARGET_BYTES ? 'decode:target' : 'decode:reference',
+        );
         return createMockMonoBuffer(
           data.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
         );
@@ -180,6 +211,7 @@ beforeEach(() => {
             return this.value;
           },
           connect: vi.fn(),
+          disconnect: vi.fn(),
           start: vi.fn(),
         };
       }
@@ -189,6 +221,7 @@ beforeEach(() => {
       }
 
       async startRendering(): Promise<AudioBuffer> {
+        analysisEvents.push('render');
         const source = this.connectedBuffer?.getChannelData(0) ?? new Float32Array();
         return createMockMonoBuffer(source.slice(0, this.length));
       }
@@ -198,6 +231,7 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (url: string) => {
       fetchedUrls.push(url);
+      analysisEvents.push(`fetch:${url}`);
       const isTarget = url.includes('target') || url === 'blob:tar';
       return {
         ok: true,
@@ -210,18 +244,34 @@ beforeEach(() => {
 });
 
 describe('computeAutoSyncOffset', () => {
-  it('returns the delayed target offset within the documented 20 ms tolerance', async () => {
+  it('returns a negative placement for an asymmetrically pulsed target that is delayed', async () => {
     const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
 
-    expect(result.offsetSeconds).toBeCloseTo(0.5, 5);
+    expect(result.offsetSeconds).toBeCloseTo(-0.5, 5);
     expect(result.confidence).toBeGreaterThan(0.9);
     expect(workerTerminations).toBe(1);
   });
 
-  it('fetches both audio sources', async () => {
+  it('returns a positive placement for an asymmetrically pulsed target that is advanced', async () => {
+    decodedTarget = advanceSignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
+
+    const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
+
+    expect(result.offsetSeconds).toBeCloseTo(0.5, 5);
+    expect(result.confidence).toBeGreaterThan(0.9);
+  });
+
+  it('fetches, decodes, and renders the two inputs sequentially', async () => {
     await computeAutoSyncOffset('blob:ref', 'blob:tar');
 
-    expect(fetchedUrls).toEqual(expect.arrayContaining(['blob:ref', 'blob:tar']));
+    expect(analysisEvents).toEqual([
+      'fetch:blob:ref',
+      'decode:reference',
+      'render',
+      'fetch:blob:tar',
+      'decode:target',
+      'render',
+    ]);
   });
 
   it('reports actionable fetch and duration-limit errors', async () => {
@@ -254,6 +304,7 @@ describe('computeAutoSyncOffset', () => {
           return {
             duration: 301,
             length: 1,
+            numberOfChannels: 1,
             sampleRate: SAMPLE_RATE,
           } as AudioBuffer;
         }
@@ -264,6 +315,103 @@ describe('computeAutoSyncOffset', () => {
     await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
       'the limit is 5 minutes',
     );
+  });
+
+  it('rejects individual and aggregate encoded input budgets with typed errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'content-length': String(AUTO_SYNC_MAX_FILE_BYTES + 1),
+        }),
+        arrayBuffer: async () => new ArrayBuffer(0),
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      name: 'AutoSyncResourceLimitError',
+      code: 'individual-input',
+      message: expect.stringContaining('shorter or more compressed'),
+    } satisfies Partial<AutoSyncResourceLimitError>);
+
+    const firstBytes = AUTO_SYNC_MAX_TOTAL_FILE_BYTES - AUTO_SYNC_MAX_FILE_BYTES + 1;
+    const secondBytes = AUTO_SYNC_MAX_FILE_BYTES;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const isTarget = url === 'blob:tar';
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            'content-length': String(isTarget ? secondBytes : firstBytes),
+          }),
+          arrayBuffer: async () =>
+            ({ byteLength: isTarget ? secondBytes : firstBytes }) as ArrayBuffer,
+        };
+      }),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      name: 'AutoSyncResourceLimitError',
+      code: 'aggregate-input',
+      message: expect.stringContaining('Combined auto-sync inputs'),
+    } satisfies Partial<AutoSyncResourceLimitError>);
+  });
+
+  it('cancels an unknown-length response stream before assembling oversized input', async () => {
+    const cancel = vi.fn(async () => {});
+    const releaseLock = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body: {
+          getReader: () => ({
+            read: vi
+              .fn()
+              .mockResolvedValueOnce({
+                done: false,
+                value: { byteLength: AUTO_SYNC_MAX_FILE_BYTES + 1 },
+              }),
+            cancel,
+            releaseLock,
+          }),
+        },
+        arrayBuffer: vi.fn(),
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      name: 'AutoSyncResourceLimitError',
+      code: 'individual-input',
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(releaseLock).toHaveBeenCalledOnce();
+  });
+
+  it('does not fetch or decode the target after reference decoding fails', async () => {
+    let decodeAttempts = 0;
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        async decodeAudioData(): Promise<AudioBuffer> {
+          decodeAttempts++;
+          throw new Error('broken reference');
+        }
+        async close() {}
+      },
+    );
+
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'Could not decode reference audio',
+    );
+    expect(fetchedUrls).toEqual(['blob:ref']);
+    expect(decodeAttempts).toBe(1);
   });
 
   it('rejects malformed and explicit worker errors and always terminates', async () => {
@@ -319,7 +467,8 @@ describe('computeAutoSyncOffset', () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(decoderCloses).toBe(2);
+    expect(decoderCloses).toBe(1);
+    expect(fetchedUrls).toEqual(['blob:ref']);
   });
 });
 

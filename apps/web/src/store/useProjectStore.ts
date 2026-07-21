@@ -50,6 +50,8 @@ export interface TimelineTrack {
   duration: number;
   /** Seconds into the source media where this clip begins playing. */
   sourceStartOffset: number;
+  /** Signed auto/manual sync adjustment used to replace prior applications safely. */
+  syncOffset?: number;
   muted: boolean;
   volume: number;
 }
@@ -62,6 +64,7 @@ interface AddTrackInput {
   sourceUrl?: string;
   startOffset?: number;
   sourceStartOffset?: number;
+  syncOffset?: number;
   type?: TrackType;
   volume?: number;
 }
@@ -195,6 +198,7 @@ function sanitizeTrack(track: AddTrackInput, existingTracks: TimelineTrack[], fa
     startOffset: Math.max(track.startOffset ?? 0, 0),
     duration: Math.max(track.duration ?? fallbackDuration, 0.5),
     sourceStartOffset: Math.max(track.sourceStartOffset ?? 0, 0),
+    syncOffset: track.syncOffset ?? track.startOffset ?? 0,
     muted: track.muted ?? false,
     volume: clamp(track.volume ?? 0.9, 0, 1),
   };
@@ -227,10 +231,11 @@ export const useProjectStore = create<ProjectState>()(undoMiddleware((set, get) 
   setProjectName: (name) => set({ projectName: name }),
   loadFromSaved: (saved) =>
     set((state) => {
-      // Migrate tracks saved before sourceStartOffset existed.
+      // Migrate tracks saved before sourceStartOffset and syncOffset existed.
       const migratedTracks = saved.tracks?.map((track) => ({
         ...track,
         sourceStartOffset: track.sourceStartOffset ?? 0,
+        syncOffset: track.syncOffset ?? track.startOffset,
       }));
 
       const nextState = {
