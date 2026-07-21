@@ -7,15 +7,17 @@ const storeState = {
   originalAudio: null,
   stems: [],
   recordings: [],
-  video: null as {
-    id: string;
-    name: string;
-    blob: Blob;
-    url: string;
-    duration: number;
-    width: number;
-    height: number;
-  } | null,
+  video: null as
+    | {
+        id: string;
+        name: string;
+        blob: Blob;
+        url: string;
+        duration: number;
+        width: number;
+        height: number;
+      }
+    | null,
   tracks: [],
   selectedTrackId: null,
   playheadPosition: 0,
@@ -444,42 +446,45 @@ describe('Studio shell', () => {
   it.each([
     { duration: 2, target: 1.999 },
     { duration: 0.2, target: 0.1 },
-  ])('repositions and resumes ended video at project target $target', ({ duration, target }) => {
-    storeState.video = {
-      id: 'video-1',
-      name: 'preview.mp4',
-      blob: new Blob(),
-      url: 'blob:preview',
-      duration,
-      width: 1080,
-      height: 1920,
-    };
-    storeState.isPlaying = true;
-    storeState.playheadPosition = duration;
-    const view = render(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
-    const player = document.querySelector('video') as HTMLVideoElement;
-    Object.defineProperty(player, 'duration', { configurable: true, value: duration });
-    Object.defineProperty(player, 'ended', { configurable: true, value: true });
-    player.currentTime = duration;
-    fireEvent.seeked(player);
-    vi.clearAllMocks();
+  ])(
+    'repositions and resumes ended video at project target $target',
+    ({ duration, target }) => {
+      storeState.video = {
+        id: 'video-1',
+        name: 'preview.mp4',
+        blob: new Blob(),
+        url: 'blob:preview',
+        duration,
+        width: 1080,
+        height: 1920,
+      };
+      storeState.isPlaying = true;
+      storeState.playheadPosition = duration;
+      const view = render(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      const player = document.querySelector('video') as HTMLVideoElement;
+      Object.defineProperty(player, 'duration', { configurable: true, value: duration });
+      Object.defineProperty(player, 'ended', { configurable: true, value: true });
+      player.currentTime = duration;
+      fireEvent.seeked(player);
+      vi.clearAllMocks();
 
-    storeState.playheadPosition = target;
-    view.rerender(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
+      storeState.playheadPosition = target;
+      view.rerender(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
 
-    expect(player.currentTime).toBe(target);
-    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
-    fireEvent.seeked(player);
-    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
-  });
+      expect(player.currentTime).toBe(target);
+      expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+      fireEvent.seeked(player);
+      expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not resume an ended video while project playback is paused', () => {
     storeState.video = {

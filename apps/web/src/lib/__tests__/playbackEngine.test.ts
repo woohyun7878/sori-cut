@@ -143,7 +143,8 @@ function successfulResponse(data = new ArrayBuffer(8)): Response {
 
 function runNextAnimationFrame() {
   const entry = animationFrames.entries().next().value as
-    [number, FrameRequestCallback] | undefined;
+    | [number, FrameRequestCallback]
+    | undefined;
   if (!entry) throw new Error('No animation frame was scheduled.');
   animationFrames.delete(entry[0]);
   entry[1](0);
@@ -280,7 +281,9 @@ describe('PlaybackEngine reliability', () => {
     await play;
 
     expect(createdSources).toHaveLength(2);
-    expect(createdSources[0].start.mock.calls[0][0]).toBe(createdSources[1].start.mock.calls[0][0]);
+    expect(createdSources[0].start.mock.calls[0][0]).toBe(
+      createdSources[1].start.mock.calls[0][0],
+    );
     expect(contextTimeReads).toBe(1);
   });
 
@@ -430,7 +433,10 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources[0].disconnect).toHaveBeenCalledTimes(1);
     expect(createdGains[0].disconnect).toHaveBeenCalledTimes(1);
 
-    engine.updateTrackVolume('ended', [{ ...tracks[0], volume: 0.25 }, tracks[1]]);
+    engine.updateTrackVolume('ended', [
+      { ...tracks[0], volume: 0.25 },
+      tracks[1],
+    ]);
     expect(createdGains[0].gain.linearRampToValueAtTime).not.toHaveBeenCalled();
 
     engine.stop();
@@ -550,7 +556,9 @@ describe('PlaybackEngine reliability', () => {
 
   it('suppresses a stale unmute rejection after newer playback starts', async () => {
     const oldResponse = deferred<Response>();
-    fetchMock.mockReturnValueOnce(oldResponse.promise).mockResolvedValueOnce(successfulResponse());
+    fetchMock
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockResolvedValueOnce(successfulResponse());
     const engine = createEngine();
     const mutedTrack = createTrack({ muted: true });
     await engine.play([mutedTrack], 0, 5, false);
@@ -585,7 +593,9 @@ describe('PlaybackEngine reliability', () => {
   it('schedules valid co-batched tracks when another stale load fails', async () => {
     const staleResponse = deferred<Response>();
     const validResponse = deferred<Response>();
-    fetchMock.mockReturnValueOnce(staleResponse.promise).mockReturnValueOnce(validResponse.promise);
+    fetchMock
+      .mockReturnValueOnce(staleResponse.promise)
+      .mockReturnValueOnce(validResponse.promise);
     const staleTrack = createTrack({
       id: 'stale',
       sourceUrl: 'blob:stale',
@@ -604,7 +614,10 @@ describe('PlaybackEngine reliability', () => {
       { ...validTrack, muted: false },
     ]);
     await Promise.resolve();
-    await engine.syncTracks([staleTrack, { ...validTrack, muted: false }]);
+    await engine.syncTracks([
+      staleTrack,
+      { ...validTrack, muted: false },
+    ]);
     staleResponse.reject(new Error('stale load failed'));
     validResponse.resolve(successfulResponse());
     await sync;
@@ -670,7 +683,10 @@ describe('PlaybackEngine reliability', () => {
     await engine.play([track], 0, 6, false);
 
     contextTime = 2;
-    await engine.syncTracks([{ ...track, startOffset: 1, duration: 6, sourceStartOffset: 1 }], 7);
+    await engine.syncTracks(
+      [{ ...track, startOffset: 1, duration: 6, sourceStartOffset: 1 }],
+      7,
+    );
 
     expect(createdSources).toHaveLength(2);
     expect(createdSources[0].stop).toHaveBeenCalledTimes(1);
@@ -696,7 +712,9 @@ describe('PlaybackEngine reliability', () => {
     const newData = new ArrayBuffer(6);
     const oldBuffer = createAudioBuffer(4);
     const newBuffer = createAudioBuffer(6);
-    fetchMock.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
+    fetchMock
+      .mockReturnValueOnce(oldResponse.promise)
+      .mockReturnValueOnce(newResponse.promise);
     decodeAudioData.mockImplementation((data: ArrayBuffer) =>
       Promise.resolve(data === oldData ? oldBuffer : newBuffer),
     );

@@ -220,23 +220,26 @@ function PreviewWorkspace() {
   const [safeAreaVisible, setSafeAreaVisible] = useState(true);
   const [previewZoom, setPreviewZoom] = useState(1);
 
-  const seekVideoProgrammatically = useCallback((player: HTMLVideoElement, target: number) => {
-    const pending = pendingVideoSeekRef.current;
-    if (pending) {
-      const latestTarget = pending.queuedTarget ?? pending.activeTarget;
-      if (Math.abs(latestTarget - target) > 0.01) {
-        pending.queuedTarget = target;
+  const seekVideoProgrammatically = useCallback(
+    (player: HTMLVideoElement, target: number) => {
+      const pending = pendingVideoSeekRef.current;
+      if (pending) {
+        const latestTarget = pending.queuedTarget ?? pending.activeTarget;
+        if (Math.abs(latestTarget - target) > 0.01) {
+          pending.queuedTarget = target;
+        }
+        if (player.currentTime !== target) {
+          player.currentTime = target;
+        }
+        return;
       }
-      if (player.currentTime !== target) {
-        player.currentTime = target;
-      }
-      return;
-    }
-    if (player.currentTime === target) return;
+      if (player.currentTime === target) return;
 
-    pendingVideoSeekRef.current = { activeTarget: target, queuedTarget: null };
-    player.currentTime = target;
-  }, []);
+      pendingVideoSeekRef.current = { activeTarget: target, queuedTarget: null };
+      player.currentTime = target;
+    },
+    [],
+  );
 
   useEffect(() => {
     const player = videoRef.current;
@@ -257,7 +260,13 @@ function PreviewWorkspace() {
     if (Math.abs(player.currentTime - target) > 0.35) {
       seekVideoProgrammatically(player, target);
     }
-  }, [isPlaying, playheadPosition, seekVideoProgrammatically, setIsPlaying, video?.duration]);
+  }, [
+    isPlaying,
+    playheadPosition,
+    seekVideoProgrammatically,
+    setIsPlaying,
+    video?.duration,
+  ]);
 
   useEffect(() => {
     const player = videoRef.current;
