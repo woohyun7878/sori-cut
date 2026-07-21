@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { computeAutoSyncOffset } from '../lib/autoSync';
-import {
-  clampSyncOffset,
-  mapSignedSyncOffset,
-  SYNC_OFFSET_LIMIT_SECONDS,
-} from '../lib/syncOffset';
+import { AUTO_SYNC_MAX_LAG_SECONDS, computeAutoSyncOffset } from '../lib/autoSync';
+import { createSyncTrackUpdate } from '../lib/syncAlignment';
 import { useProjectStore } from '../store/useProjectStore';
 
 /** Below this normalized confidence, the auto-sync offset is likely unreliable. */
 const LOW_CONFIDENCE_THRESHOLD = 0.1;
 
 function offsetToPercent(offset: number) {
-  return 50 + (offset / SYNC_OFFSET_LIMIT_SECONDS) * 38;
+  return 50 + (offset / AUTO_SYNC_MAX_LAG_SECONDS) * 38;
 }
 
 export function SyncControls() {
@@ -19,12 +15,17 @@ export function SyncControls() {
   const tracks = useProjectStore((state) => state.tracks);
   const updateTrack = useProjectStore((state) => state.updateTrack);
   const syncTracks = useMemo(() => tracks.filter((track) => track.type !== 'video'), [tracks]);
+  const tracksRef = useRef(tracks);
+  const videoRef = useRef(video);
+  tracksRef.current = tracks;
+  videoRef.current = video;
   const [selectedTrackId, setSelectedTrackId] = useState('');
+  const selectedTrackIdRef = useRef(selectedTrackId);
+  selectedTrackIdRef.current = selectedTrackId;
   const [offset, setOffset] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const selectedTrackIdRef = useRef('');
 
   useEffect(() => {
     if (!syncTracks.length) {
@@ -40,37 +41,16 @@ export function SyncControls() {
   const selectedTrack = syncTracks.find((track) => track.id === selectedTrackId) ?? null;
 
   useEffect(() => {
-    selectedTrackIdRef.current = selectedTrackId;
     if (selectedTrack) {
       setOffset(selectedTrack.syncOffset ?? selectedTrack.startOffset);
     }
-  }, [selectedTrack, selectedTrackId]);
+  }, [selectedTrack]);
 
   useEffect(() => () => cleanupRef.current?.(), []);
 
   const stopPreview = () => {
     cleanupRef.current?.();
     cleanupRef.current = null;
-  };
-
-  const applyOffset = (signedOffset: number) => {
-    if (!selectedTrack) {
-      setMessage('No track selected.');
-      return null;
-    }
-
-    const latestTrack = useProjectStore
-      .getState()
-      .tracks.find((track) => track.id === selectedTrack.id);
-    if (!latestTrack) {
-      setMessage('The selected track is no longer available.');
-      return null;
-    }
-
-    const updates = mapSignedSyncOffset(latestTrack, signedOffset);
-    setOffset(updates.syncOffset ?? 0);
-    updateTrack(latestTrack.id, updates);
-    return updates.syncOffset ?? 0;
   };
 
   const handlePreview = async () => {
@@ -107,25 +87,20 @@ export function SyncControls() {
 
     try {
       setMessage('Preview playing...');
+      const previewUpdate = createSyncTrackUpdate(selectedTrack, offset);
+      previewAudio.currentTime = previewUpdate.sourceStartOffset;
 
-      if (offset >= 0) {
+      if (previewUpdate.startOffset > 0) {
         await previewVideo.play();
         timers.push(
           window.setTimeout(() => {
             void previewAudio.play().catch(() => {
               setMessage('Browser blocked autoplay.');
             });
-          }, offset * 1000),
+          }, previewUpdate.startOffset * 1000),
         );
       } else {
-        await previewAudio.play();
-        timers.push(
-          window.setTimeout(() => {
-            void previewVideo.play().catch(() => {
-              setMessage('Browser blocked autoplay.');
-            });
-          }, Math.abs(offset) * 1000),
-        );
+        await Promise.all([previewVideo.play(), previewAudio.play()]);
       }
     } catch (caughtError) {
       setMessage(
@@ -149,10 +124,7 @@ export function SyncControls() {
           <select
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
             value={selectedTrackId}
-            onChange={(event) => {
-              selectedTrackIdRef.current = event.target.value;
-              setSelectedTrackId(event.target.value);
-            }}
+            onChange={(event) => setSelectedTrackId(event.target.value)}
           >
             {syncTracks.length ? (
               syncTracks.map((track) => (
@@ -168,7 +140,8 @@ export function SyncControls() {
 
         {!syncTracks.length ? (
           <p className="rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-sm text-gray-400">
-            No audio tracks yet. Add an audio, stem, or recording track to sync it against your video.
+            No audio tracks yet. Add an audio, stem, or recording track to sync it against your
+            video.
           </p>
         ) : null}
 
@@ -176,12 +149,12 @@ export function SyncControls() {
           Offset slider ({offset.toFixed(2)}s)
           <input
             className="mt-2 h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-800 accent-brand-500"
-            max={SYNC_OFFSET_LIMIT_SECONDS}
-            min={-SYNC_OFFSET_LIMIT_SECONDS}
+            max={AUTO_SYNC_MAX_LAG_SECONDS}
+            min={-AUTO_SYNC_MAX_LAG_SECONDS}
             step={0.01}
             type="range"
             value={offset}
-            onChange={(event) => setOffset(clampSyncOffset(Number(event.target.value)))}
+            onChange={(event) => setOffset(Number(event.target.value))}
           />
         </label>
 
@@ -189,12 +162,12 @@ export function SyncControls() {
           Precise offset
           <input
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
-            max={SYNC_OFFSET_LIMIT_SECONDS}
-            min={-SYNC_OFFSET_LIMIT_SECONDS}
+            max={AUTO_SYNC_MAX_LAG_SECONDS}
+            min={-AUTO_SYNC_MAX_LAG_SECONDS}
             step={0.01}
             type="number"
             value={offset}
-            onChange={(event) => setOffset(clampSyncOffset(Number(event.target.value)))}
+            onChange={(event) => setOffset(Number(event.target.value))}
           />
         </label>
 
@@ -203,13 +176,17 @@ export function SyncControls() {
           <div className="relative h-20 overflow-hidden rounded-xl bg-gray-950" aria-hidden="true">
             <div className="absolute inset-y-0 left-1/2 w-px bg-gray-700" />
             <div className="absolute left-[20%] top-5 h-4 w-[55%] rounded-full bg-blue-500/80">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Video</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">
+                Video
+              </span>
             </div>
             <div
               className="absolute top-11 h-4 w-[55%] rounded-full bg-brand-500/80 transition-all"
               style={{ left: `${offsetToPercent(offset)}%`, transform: 'translateX(-50%)' }}
             >
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Audio</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">
+                Audio
+              </span>
             </div>
           </div>
         </div>
@@ -238,8 +215,6 @@ export function SyncControls() {
               }
 
               const referenceUrl = video.url;
-              const targetUrl = selectedTrack.sourceUrl;
-              const targetTrackId = selectedTrack.id;
               if (!referenceUrl) {
                 setMessage('No reference audio found.');
                 return;
@@ -249,22 +224,20 @@ export function SyncControls() {
               setMessage('Analyzing for auto sync...');
 
               try {
-                const result = await computeAutoSyncOffset(referenceUrl, targetUrl);
-                const latestState = useProjectStore.getState();
-                const latestTrack = latestState.tracks.find(
-                  (track) => track.id === targetTrackId,
-                );
+                const result = await computeAutoSyncOffset(referenceUrl, selectedTrack.sourceUrl);
+                const currentTrack =
+                  tracksRef.current.find((track) => track.id === selectedTrack.id) ?? null;
                 if (
-                  selectedTrackIdRef.current !== targetTrackId ||
-                  latestState.video?.url !== referenceUrl ||
-                  latestTrack?.sourceUrl !== targetUrl
+                  !currentTrack ||
+                  currentTrack.sourceUrl !== selectedTrack.sourceUrl ||
+                  videoRef.current?.url !== referenceUrl ||
+                  selectedTrackIdRef.current !== selectedTrack.id
                 ) {
-                  setMessage(
-                    'Auto sync result discarded because the selection, video, or target track changed. Run auto sync again.',
+                  throw new Error(
+                    'The reference or target changed during auto-sync; run it again.',
                   );
-                  return;
                 }
-                const computedOffset = clampSyncOffset(result.offsetSeconds);
+                const computedOffset = result.offsetSeconds;
                 const confidencePercent = Math.round(result.confidence * 100);
 
                 // Surface the suggested offset on the slider so the user can review/preview it.
@@ -276,9 +249,9 @@ export function SyncControls() {
                     `⚠️ Auto sync confidence is low (${confidencePercent}%). The suggested ${computedOffset.toFixed(2)}s offset may be inaccurate — preview and adjust it manually before applying.`,
                   );
                 } else {
-                  const appliedOffset = applyOffset(computedOffset);
+                  updateTrack(currentTrack.id, createSyncTrackUpdate(currentTrack, computedOffset));
                   setMessage(
-                    `Auto sync done: ${appliedOffset?.toFixed(2)}s offset (${confidencePercent}% confidence)`,
+                    `Auto sync done: ${computedOffset.toFixed(2)}s offset (${confidencePercent}% confidence)`,
                   );
                 }
               } catch (error) {
@@ -298,9 +271,18 @@ export function SyncControls() {
             className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
             type="button"
             onClick={() => {
-              const appliedOffset = applyOffset(offset);
-              if (appliedOffset !== null) {
-                setMessage(`Applied ${appliedOffset.toFixed(2)}s offset to timeline.`);
+              if (!selectedTrack) {
+                setMessage('No track selected.');
+                return;
+              }
+
+              try {
+                updateTrack(selectedTrack.id, createSyncTrackUpdate(selectedTrack, offset));
+                setMessage('Offset applied to timeline.');
+              } catch (error) {
+                setMessage(
+                  error instanceof Error ? error.message : 'Could not apply the sync offset.',
+                );
               }
             }}
           >

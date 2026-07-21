@@ -267,7 +267,7 @@ describe('useProjectStore', () => {
       expect(useProjectStore.getState().recordings).toHaveLength(0);
     });
 
-    it('migrates positive, negative, and common legacy trim into signed sync offsets', () => {
+    it('migrates existing clip timing into a stable sync baseline', () => {
       useProjectStore.getState().loadFromSaved({
         tracks: [
           {
@@ -275,9 +275,9 @@ describe('useProjectStore', () => {
             name: 'Legacy',
             type: 'audio',
             sourceUrl: 'blob:legacy',
-            startOffset: 2.5,
-            duration: 10,
-            sourceStartOffset: 1,
+            startOffset: 3,
+            sourceStartOffset: 2,
+            duration: 12,
             muted: false,
             volume: 1,
           },
@@ -287,8 +287,8 @@ describe('useProjectStore', () => {
             type: 'audio',
             sourceUrl: 'blob:legacy-negative',
             startOffset: 1,
-            duration: 10,
             sourceStartOffset: 3,
+            duration: 12,
             muted: false,
             volume: 1,
           },
@@ -298,8 +298,8 @@ describe('useProjectStore', () => {
             type: 'audio',
             sourceUrl: 'blob:legacy-common',
             startOffset: 2,
-            duration: 10,
             sourceStartOffset: 2,
+            duration: 12,
             muted: false,
             volume: 1,
           },
@@ -309,16 +309,21 @@ describe('useProjectStore', () => {
             type: 'audio',
             sourceUrl: 'blob:legacy-before-source',
             startOffset: 4,
-            duration: 10,
             sourceStartOffset: undefined as unknown as number,
+            duration: 12,
             muted: false,
             volume: 1,
           },
         ],
       });
 
+      expect(useProjectStore.getState().tracks[0]).toMatchObject({
+        syncOffset: 1,
+        syncBaseSourceStartOffset: 2,
+        syncBaseDuration: 12,
+      });
       expect(useProjectStore.getState().tracks.map((track) => track.syncOffset)).toEqual([
-        1.5,
+        1,
         -2,
         0,
         4,
@@ -436,11 +441,15 @@ describe('useProjectStore', () => {
       expect(first.startOffset).toBe(0);
       expect(first.duration).toBe(4);
       expect(first.sourceStartOffset).toBe(0);
+      expect(first.syncOffset).toBe(0);
 
       const second = tracks.find((t) => t.id !== 'track-1')!;
       expect(second.startOffset).toBe(4);
       expect(second.duration).toBe(6);
       expect(second.sourceStartOffset).toBe(4);
+      expect(second.syncOffset).toBe(0);
+      expect(second.syncBaseSourceStartOffset).toBe(4);
+      expect(second.syncBaseDuration).toBe(6);
     });
 
     it('accumulates sourceStartOffset when splitting an already-split clip', () => {
@@ -474,6 +483,28 @@ describe('useProjectStore', () => {
       const second = useProjectStore.getState().tracks.find((t) => t.id !== 'track-1')!;
       expect(second.sourceStartOffset).toBe(2 + (5 - 2));
     });
+
+    it('preserves a short split duration when applying complete sync timing', () => {
+      addSourceTrack();
+      useProjectStore.getState().splitTrackAtPosition('track-1', 0.2);
+
+      useProjectStore.getState().updateTrack('track-1', {
+        startOffset: 1,
+        sourceStartOffset: 0,
+        duration: 0.2,
+        syncOffset: 1,
+        syncBaseSourceStartOffset: 0,
+        syncBaseDuration: 0.2,
+      });
+
+      expect(
+        useProjectStore.getState().tracks.find((track) => track.id === 'track-1'),
+      ).toMatchObject({
+        startOffset: 1,
+        duration: 0.2,
+        syncOffset: 1,
+      });
+    });
   });
 
   describe('trimTrack', () => {
@@ -495,6 +526,9 @@ describe('useProjectStore', () => {
       expect(track.startOffset).toBe(4);
       expect(track.duration).toBe(6);
       expect(track.sourceStartOffset).toBe(2);
+      expect(track.syncOffset).toBe(2);
+      expect(track.syncBaseSourceStartOffset).toBe(2);
+      expect(track.syncBaseDuration).toBe(6);
     });
 
     it('only shrinks duration when trimming from the end', () => {
@@ -504,6 +538,21 @@ describe('useProjectStore', () => {
       expect(track.startOffset).toBe(2);
       expect(track.duration).toBe(5);
       expect(track.sourceStartOffset).toBe(0);
+    });
+
+    it('preserves negative sync state when only the clip end changes', () => {
+      useProjectStore.getState().updateTrack('track-1', {
+        startOffset: 0,
+        sourceStartOffset: 4,
+        duration: 6,
+        syncOffset: -4,
+      });
+
+      useProjectStore.getState().trimTrack('track-1', 0, 5);
+
+      const track = useProjectStore.getState().tracks.find((t) => t.id === 'track-1')!;
+      expect(track.syncOffset).toBe(-4);
+      expect(track.sourceStartOffset).toBe(4);
     });
 
     it('accumulates sourceStartOffset over successive start trims', () => {
@@ -522,7 +571,9 @@ describe('useProjectStore', () => {
       expect(track.sourceStartOffset).toBe(1);
 
       useProjectStore.getState().trimTrack('track-1', 0, 10);
-      expect(useProjectStore.getState().tracks.find((t) => t.id === 'track-1')!.sourceStartOffset).toBe(0);
+      expect(
+        useProjectStore.getState().tracks.find((t) => t.id === 'track-1')!.sourceStartOffset,
+      ).toBe(0);
     });
   });
 

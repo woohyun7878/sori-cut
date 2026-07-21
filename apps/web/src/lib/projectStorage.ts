@@ -1,6 +1,11 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { AudioFile, Stem, Recording, VideoFile, TimelineTrack } from '../store/useProjectStore';
-import { deriveSignedSyncOffset } from './syncOffset';
+import type {
+  AudioFile,
+  Stem,
+  Recording,
+  VideoFile,
+  TimelineTrack,
+} from '../store/useProjectStore';
 
 // --- Types ---
 
@@ -53,13 +58,14 @@ const DB_VERSION = 1;
 let dbPromise: Promise<IDBPDatabase<SoriCutDB>> | null = null;
 
 export function migrateStoredTimelineTrack(track: TimelineTrack): TimelineTrack {
+  const sourceStartOffset = track.sourceStartOffset ?? 0;
   return {
     ...track,
-    sourceStartOffset: track.sourceStartOffset ?? 0,
-    syncOffset: deriveSignedSyncOffset({
-      ...track,
-      sourceStartOffset: track.sourceStartOffset ?? 0,
-    }),
+    sourceStartOffset,
+    syncOffset: track.syncOffset ?? track.startOffset - sourceStartOffset,
+    syncBaseSourceStartOffset:
+      track.syncBaseSourceStartOffset ?? sourceStartOffset,
+    syncBaseDuration: track.syncBaseDuration ?? track.duration,
   };
 }
 

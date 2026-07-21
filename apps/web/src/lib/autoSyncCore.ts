@@ -30,8 +30,8 @@ const DISTINCT_PEAK_MARGIN = 0.25;
 
 export interface CrossCorrelationResult {
   /**
-   * Target timeline placement in 8 kHz analysis samples, quantized to 20 ms.
-   * Positive delays the target; negative advances it within the source.
+   * Signed target timeline placement in 8 kHz analysis samples: positive delays
+   * the target, negative advances it. Quantized to the 20 ms envelope frame.
    */
   lagSamples: number;
   /** Overlap-weighted, normalized correlation confidence (0-1). */
