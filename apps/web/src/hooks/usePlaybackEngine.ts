@@ -27,7 +27,6 @@ export function usePlaybackEngine() {
   const playheadRef = useRef(playheadPosition);
   const videoRef = useRef(video);
 
-  useEffect(() => { tracksRef.current = tracks; }, [tracks]);
   useEffect(() => { playheadRef.current = playheadPosition; }, [playheadPosition]);
   useEffect(() => { videoRef.current = video; }, [video]);
 
@@ -81,6 +80,11 @@ export function usePlaybackEngine() {
       engineRef.current = null;
     };
   }, [getEngine, handlePlaybackError, setIsPlaying, setPlayheadPosition]);
+
+  useEffect(() => {
+    tracksRef.current = tracks;
+    void getEngine().syncTracks(tracks).catch(handlePlaybackError);
+  }, [getEngine, handlePlaybackError, tracks]);
 
   // Respond to isPlaying changes
   useEffect(() => {

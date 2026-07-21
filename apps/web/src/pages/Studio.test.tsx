@@ -7,7 +7,17 @@ const storeState = {
   originalAudio: null,
   stems: [],
   recordings: [],
-  video: null,
+  video: null as
+    | {
+        id: string;
+        name: string;
+        blob: Blob;
+        url: string;
+        duration: number;
+        width: number;
+        height: number;
+      }
+    | null,
   tracks: [],
   selectedTrackId: null,
   playheadPosition: 0,
@@ -46,9 +56,13 @@ vi.mock('../components/Toast', () => ({ Toast: () => null }));
 vi.mock('../components/ShortcutHelpModal', () => ({ ShortcutHelpModal: () => null }));
 
 describe('Studio shell', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   beforeEach(() => {
+    vi.clearAllMocks();
     localStorage.clear();
     storeState.originalAudio = null;
     storeState.stems = [];
@@ -56,6 +70,10 @@ describe('Studio shell', () => {
     storeState.video = null;
     storeState.tracks = [];
     storeState.selectedTrackId = null;
+    storeState.playheadPosition = 0;
+    storeState.isPlaying = false;
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
   });
 
   it('renders the editor zones and defaults to the Media workspace', () => {
@@ -161,5 +179,90 @@ describe('Studio shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Audio', pressed: false }));
     expect(screen.getByLabelText('Audio & Stems panel')).toHaveClass('is-open');
     expect(screen.getByText('Audio uploader')).toBeInTheDocument();
+  });
+
+  it('keeps project playback running when a shorter video ends naturally', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video');
+    expect(player).not.toBeNull();
+    vi.clearAllMocks();
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+
+    fireEvent.pause(player as HTMLVideoElement);
+
+    expect(storeState.setIsPlaying).not.toHaveBeenCalled();
+  });
+
+  it('stops project playback when the user explicitly pauses video', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video');
+    expect(player).not.toBeNull();
+    vi.clearAllMocks();
+    Object.defineProperty(player, 'ended', { configurable: true, value: false });
+
+    fireEvent.pause(player as HTMLVideoElement);
+
+    expect(storeState.setIsPlaying).toHaveBeenCalledWith(false);
+  });
+
+  it('restarts an ended shorter video when the project playhead loops', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    storeState.playheadPosition = 2;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video');
+    expect(player).not.toBeNull();
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 0;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    expect(storeState.setIsPlaying).not.toHaveBeenCalledWith(false);
   });
 });

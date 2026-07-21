@@ -55,6 +55,7 @@ export class PlaybackEngine {
   private audioContext: AudioContext | null = null;
   private bufferCache = new Map<string, AudioBuffer>();
   private pendingBufferLoads = new Map<string, Promise<AudioBuffer>>();
+  private pendingTrackStarts = new Map<string, symbol>();
   private activeNodes = new Map<string, ActivePlaybackNode[]>();
   private currentTracks: TimelineTrack[] = [];
   private rafId: number | null = null;
@@ -184,22 +185,26 @@ export class PlaybackEngine {
   ): Promise<void> {
     const generation = ++this.operationGeneration;
     this.loopRestartGeneration = null;
+    this.pendingTrackStarts.clear();
     this.cancelAnimationLoop();
-    this.stopSources();
     this.state.isPlaying = false;
     this.state.isStarting = true;
+    this.state.playheadPosition = fromPosition;
     this.state.loopEnabled = loopEnabled;
+    this.state.projectDuration = projectDuration;
+    this.currentTracks = [...tracks];
 
     try {
+      const cleanupError = this.stopSources();
+      if (cleanupError) throw cleanupError;
+
       const ctx = this.getContext();
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
-
       if (!this.isCurrentOperation(generation)) return;
 
-      this.currentTracks = [...tracks];
-      const anchorTime = await this.scheduleAllTracks(tracks, fromPosition, generation);
+      const anchorTime = await this.scheduleAllTracks(this.currentTracks, fromPosition, generation);
       if (anchorTime === null || !this.isCurrentOperation(generation)) return;
 
       this.state = {
@@ -217,9 +222,10 @@ export class PlaybackEngine {
 
       this.operationGeneration++;
       this.cancelAnimationLoop();
-      this.stopSources();
+      const cleanupError = this.stopSources();
       this.state.isPlaying = false;
       this.state.isStarting = false;
+      if (cleanupError) this.reportInternalError(cleanupError);
       throw this.toPlaybackError(
         error,
         'SCHEDULE_FAILED',
@@ -248,7 +254,18 @@ export class PlaybackEngine {
     for (const loadedTrack of loadedTracks) {
       if (!this.isCurrentOperation(generation)) return null;
       if (!loadedTrack) continue;
-      this.scheduleTrack(ctx, loadedTrack, fromPosition, anchorTime);
+      const currentTrack = this.currentTracks.find(
+        (track) =>
+          track.id === loadedTrack.track.id &&
+          track.sourceUrl === loadedTrack.track.sourceUrl,
+      );
+      if (!currentTrack || currentTrack.muted) continue;
+      this.scheduleTrack(
+        ctx,
+        { track: currentTrack, buffer: loadedTrack.buffer },
+        fromPosition,
+        anchorTime,
+      );
     }
 
     return anchorTime;
@@ -349,20 +366,24 @@ export class PlaybackEngine {
   pause() {
     this.operationGeneration++;
     this.loopRestartGeneration = null;
-    this.stopSources();
+    this.pendingTrackStarts.clear();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
     this.state.isStarting = false;
+    const cleanupError = this.stopSources();
+    if (cleanupError) this.reportInternalError(cleanupError);
   }
 
   stop() {
     this.operationGeneration++;
     this.loopRestartGeneration = null;
-    this.stopSources();
+    this.pendingTrackStarts.clear();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
     this.state.isStarting = false;
     this.state.playheadPosition = 0;
+    const cleanupError = this.stopSources();
+    if (cleanupError) this.reportInternalError(cleanupError);
   }
 
   async seek(
@@ -376,6 +397,7 @@ export class PlaybackEngine {
     } else {
       this.operationGeneration++;
       this.loopRestartGeneration = null;
+      this.pendingTrackStarts.clear();
       this.state.playheadPosition = position;
     }
   }
@@ -384,6 +406,109 @@ export class PlaybackEngine {
     this.state.loopEnabled = enabled;
     if (!enabled && this.loopRestartGeneration === this.operationGeneration) {
       this.finishPlaybackAtEnd();
+    }
+  }
+
+  async syncTracks(tracks: TimelineTrack[]): Promise<void> {
+    const previousTracks = new Map(this.currentTracks.map((track) => [track.id, track]));
+    const mixChanges = tracks.filter((track) => {
+      const previous = previousTracks.get(track.id);
+      return previous && (previous.volume !== track.volume || previous.muted !== track.muted);
+    });
+    this.currentTracks = [...tracks];
+
+    if (!this.state.isPlaying && !this.state.isStarting) return;
+
+    for (const track of mixChanges) {
+      if (track.muted) this.pendingTrackStarts.delete(track.id);
+      if (this.activeNodes.has(track.id)) {
+        this.updateTrackVolume(track.id, this.currentTracks);
+      }
+    }
+
+    const currentPosition = this.getCurrentPlaybackPosition();
+    const missingTracks = mixChanges.filter((track) => {
+      const previous = previousTracks.get(track.id);
+      return (
+        previous?.muted === true &&
+        !track.muted &&
+        Boolean(track.sourceUrl) &&
+        !this.activeNodes.has(track.id) &&
+        currentPosition < track.startOffset + track.duration
+      );
+    });
+
+    if (missingTracks.length === 0) return;
+
+    if (this.state.isStarting) {
+      await this.play(
+        this.currentTracks,
+        currentPosition,
+        this.state.projectDuration,
+        this.state.loopEnabled,
+      );
+      return;
+    }
+
+    await this.scheduleMissingTracks(missingTracks);
+  }
+
+  private async scheduleMissingTracks(tracks: TimelineTrack[]) {
+    const ctx = this.getContext();
+    const operationGeneration = this.operationGeneration;
+    const pendingTracks = tracks
+      .filter((track) => !this.pendingTrackStarts.has(track.id))
+      .map((track) => {
+        const token = Symbol(track.id);
+        this.pendingTrackStarts.set(track.id, token);
+        return { track, token };
+      });
+
+    if (pendingTracks.length === 0) return;
+
+    try {
+      const loadedTracks = await Promise.all(
+        pendingTracks.map(async ({ track, token }) => ({
+          track,
+          token,
+          buffer: await this.loadBuffer(track.sourceUrl),
+        })),
+      );
+      if (
+        !this.isCurrentOperation(operationGeneration) ||
+        !this.state.isPlaying
+      ) {
+        return;
+      }
+
+      const currentPosition = this.getCurrentPlaybackPosition();
+      const anchorTime = ctx.currentTime;
+      for (const { track, token, buffer } of loadedTracks) {
+        const currentTrack = this.currentTracks.find(
+          (candidate) => candidate.id === track.id,
+        );
+        if (
+          this.pendingTrackStarts.get(track.id) !== token ||
+          !buffer ||
+          !currentTrack ||
+          currentTrack.muted ||
+          this.activeNodes.has(track.id)
+        ) {
+          continue;
+        }
+        this.scheduleTrack(
+          ctx,
+          { track: currentTrack, buffer },
+          currentPosition,
+          anchorTime,
+        );
+      }
+    } finally {
+      for (const { track, token } of pendingTracks) {
+        if (this.pendingTrackStarts.get(track.id) === token) {
+          this.pendingTrackStarts.delete(track.id);
+        }
+      }
     }
   }
 
@@ -402,6 +527,22 @@ export class PlaybackEngine {
       gain.gain.setValueAtTime(currentVolume, now);
       gain.gain.linearRampToValueAtTime(targetVolume, now + GAIN_RAMP_SECONDS);
     }
+  }
+
+  private getCurrentPlaybackPosition() {
+    if (
+      !this.state.isPlaying ||
+      !this.audioContext ||
+      this.loopRestartGeneration === this.operationGeneration
+    ) {
+      return this.state.playheadPosition;
+    }
+
+    const elapsed = this.audioContext.currentTime - this.startContextTime;
+    return Math.min(
+      this.startPlayheadPosition + Math.max(elapsed, 0),
+      this.state.projectDuration,
+    );
   }
 
   private startAnimationLoop(generation: number) {
@@ -443,11 +584,14 @@ export class PlaybackEngine {
 
     const generation = ++this.operationGeneration;
     this.loopRestartGeneration = generation;
-    this.stopSources();
-    this.state.playheadPosition = 0;
-    this.onPlayheadUpdate?.(0);
+    this.pendingTrackStarts.clear();
 
     try {
+      const cleanupError = this.stopSources();
+      if (cleanupError) throw cleanupError;
+
+      this.state.playheadPosition = 0;
+      this.onPlayheadUpdate?.(0);
       const anchorTime = await this.scheduleAllTracks(this.currentTracks, 0, generation);
       if (anchorTime === null || !this.isCurrentOperation(generation)) return;
 
@@ -471,21 +615,13 @@ export class PlaybackEngine {
   private finishPlaybackAtEnd() {
     this.operationGeneration++;
     this.loopRestartGeneration = null;
+    this.pendingTrackStarts.clear();
     this.cancelAnimationLoop();
     this.state.isPlaying = false;
     this.state.isStarting = false;
     this.state.playheadPosition = this.state.projectDuration;
-    try {
-      this.stopSources();
-    } catch (error) {
-      this.reportInternalError(
-        this.toPlaybackError(
-          error,
-          'NODE_CLEANUP_FAILED',
-          'Failed to release audio nodes at the end of playback.',
-        ),
-      );
-    }
+    const cleanupError = this.stopSources();
+    if (cleanupError) this.reportInternalError(cleanupError);
     this.onPlayheadUpdate?.(this.state.projectDuration);
     this.onPlaybackEnd?.();
   }
@@ -495,21 +631,21 @@ export class PlaybackEngine {
 
     this.operationGeneration++;
     this.loopRestartGeneration = null;
+    this.pendingTrackStarts.clear();
     this.cancelAnimationLoop();
-    try {
-      this.stopSources();
-    } catch (cleanupError) {
-      this.reportInternalError(
-        this.toPlaybackError(
-          cleanupError,
-          'NODE_CLEANUP_FAILED',
-          'Failed to release audio nodes after playback failed.',
-        ),
-      );
-    }
+    const cleanupError = this.stopSources();
     this.state.isPlaying = false;
     this.state.isStarting = false;
-    this.reportInternalError(error);
+    if (cleanupError) {
+      this.reportInternalError(
+        new PlaybackError(error.code, `${error.message} Cleanup also failed.`, {
+          sourceUrl: error.sourceUrl,
+          cause: [error, cleanupError],
+        }),
+      );
+    } else {
+      this.reportInternalError(error);
+    }
   }
 
   private cancelAnimationLoop() {
@@ -542,49 +678,53 @@ export class PlaybackEngine {
     node.cleanedUp = true;
     node.source.onended = null;
 
-    let firstError: unknown;
+    const errors: unknown[] = [];
     if (stopSource) {
       try {
         node.source.stop();
       } catch (error) {
-        if (!this.isAlreadyStoppedError(error)) firstError = error;
+        if (!this.isAlreadyStoppedError(error)) errors.push(error);
       }
     }
 
     try {
       node.source.disconnect();
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
 
     try {
       node.gain.disconnect();
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
 
     this.removeActiveNode(node);
-    if (firstError) throw firstError;
+    if (errors.length > 0) {
+      throw new PlaybackError('NODE_CLEANUP_FAILED', `Failed to release track "${node.trackId}".`, {
+        cause: errors,
+      });
+    }
   }
 
-  private stopSources() {
+  private stopSources(): PlaybackError | null {
     const nodes = [...this.activeNodes.values()].flat();
-    let firstError: unknown;
+    const errors: unknown[] = [];
 
     for (const node of nodes) {
       try {
         this.cleanupNode(node, true);
       } catch (error) {
-        firstError ??= error;
+        errors.push(error);
       }
     }
     this.activeNodes.clear();
 
-    if (firstError) {
-      throw new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to release active audio nodes.', {
-        cause: firstError,
-      });
-    }
+    return errors.length > 0
+      ? new PlaybackError('NODE_CLEANUP_FAILED', 'Failed to release active audio nodes.', {
+          cause: errors,
+        })
+      : null;
   }
 
   private isCurrentOperation(generation: number) {
@@ -634,8 +774,10 @@ export class PlaybackEngine {
     this.destroyed = true;
     this.operationGeneration++;
     this.loopRestartGeneration = null;
+    this.pendingTrackStarts.clear();
     this.cancelAnimationLoop();
-    this.stopSources();
+    const errorCallback = this.onPlaybackError;
+    const cleanupError = this.stopSources();
     this.state.isPlaying = false;
     this.state.isStarting = false;
     this.bufferCache.clear();
@@ -643,16 +785,36 @@ export class PlaybackEngine {
 
     const context = this.audioContext;
     this.audioContext = null;
-    if (context) {
-      void context.close().catch((error: unknown) => {
-        this.reportInternalError(
-          this.toPlaybackError(error, 'CONTEXT_FAILED', 'Failed to close the Web Audio context.'),
-        );
-      });
-    }
-
     this.onPlayheadUpdate = null;
     this.onPlaybackEnd = null;
     this.onPlaybackError = null;
+
+    if (context) {
+      try {
+        void context.close().catch((error: unknown) => {
+          this.reportError(
+            errorCallback,
+            this.toPlaybackError(error, 'CONTEXT_FAILED', 'Failed to close the Web Audio context.'),
+          );
+        });
+      } catch (error) {
+        this.reportError(
+          errorCallback,
+          this.toPlaybackError(error, 'CONTEXT_FAILED', 'Failed to close the Web Audio context.'),
+        );
+      }
+    }
+
+    if (cleanupError) {
+      this.reportError(errorCallback, cleanupError);
+    }
+  }
+
+  private reportError(callback: PlaybackErrorCallback | null, error: PlaybackError) {
+    if (callback) {
+      callback(error);
+    } else {
+      console.error('[PlaybackEngine]', error);
+    }
   }
 }

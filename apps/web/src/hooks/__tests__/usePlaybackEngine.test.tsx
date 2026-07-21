@@ -10,6 +10,7 @@ interface MockEngine {
   preloadTracks: ReturnType<typeof vi.fn>;
   seek: ReturnType<typeof vi.fn>;
   setLoopEnabled: ReturnType<typeof vi.fn>;
+  syncTracks: ReturnType<typeof vi.fn>;
   onEnd: (() => void) | null;
   onPlayhead: ((position: number) => void) | null;
 }
@@ -26,6 +27,7 @@ vi.mock('../../lib/playbackEngine', () => ({
     preloadTracks = vi.fn(() => Promise.resolve());
     seek = vi.fn(() => Promise.resolve());
     setLoopEnabled = vi.fn();
+    syncTracks = vi.fn(() => Promise.resolve());
     onEnd: (() => void) | null = null;
     onPlayhead: ((position: number) => void) | null = null;
 
@@ -157,5 +159,32 @@ describe('usePlaybackEngine', () => {
 
     await waitFor(() => expect(useProjectStore.getState().isPlaying).toBe(false));
     expect(useProjectStore.getState().playheadPosition).toBe(5);
+  });
+
+  it('synchronizes track mix changes without starting playback again', async () => {
+    const track = {
+      id: 'track-1',
+      name: 'Track 1',
+      type: 'audio' as const,
+      sourceUrl: '',
+      startOffset: 0,
+      duration: 5,
+      sourceStartOffset: 0,
+      muted: false,
+      volume: 1,
+    };
+    useProjectStore.setState({ tracks: [track], isPlaying: true });
+    render(<Harness />);
+    const engine = playbackMocks.instances[0];
+    await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useProjectStore.setState({ tracks: [{ ...track, volume: 0.25 }] });
+    });
+    await waitFor(() =>
+      expect(engine.syncTracks).toHaveBeenLastCalledWith([{ ...track, volume: 0.25 }]),
+    );
+
+    expect(engine.play).toHaveBeenCalledTimes(1);
   });
 });

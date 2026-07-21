@@ -217,10 +217,16 @@ function PreviewWorkspace() {
 
   useEffect(() => {
     const player = videoRef.current;
-    if (player && Math.abs(player.currentTime - playheadPosition) > 0.35) {
+    if (!player) return;
+
+    const wasEnded = player.ended;
+    if (Math.abs(player.currentTime - playheadPosition) > 0.35) {
       player.currentTime = Math.min(playheadPosition, player.duration || playheadPosition);
     }
-  }, [playheadPosition]);
+    if (wasEnded && isPlaying && playheadPosition < 0.35) {
+      void player.play().catch(() => setIsPlaying(false));
+    }
+  }, [isPlaying, playheadPosition, setIsPlaying]);
 
   useEffect(() => {
     const player = videoRef.current;
@@ -284,7 +290,9 @@ function PreviewWorkspace() {
               muted
               playsInline
               onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
+              onPause={(event) => {
+                if (!event.currentTarget.ended) setIsPlaying(false);
+              }}
               onSeeked={(event) => setPlayheadPosition(event.currentTarget.currentTime)}
             />
           ) : (

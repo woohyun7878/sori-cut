@@ -59,6 +59,7 @@ function createTrack(overrides: Partial<TimelineTrack> = {}): TimelineTrack {
 const createdSources: MockSource[] = [];
 const createdGains: MockGain[] = [];
 const decodeAudioData = vi.fn();
+const closeAudioContext = vi.fn();
 const fetchMock = vi.fn();
 const engines: PlaybackEngine[] = [];
 const animationFrames = new Map<number, FrameRequestCallback>();
@@ -121,7 +122,7 @@ class MockAudioContext {
 
   close() {
     this.state = 'closed';
-    return Promise.resolve();
+    return closeAudioContext();
   }
 }
 
@@ -178,6 +179,7 @@ describe('PlaybackEngine reliability', () => {
     startCount = 0;
     throwOnStartNumber = null;
     decodeAudioData.mockResolvedValue(createAudioBuffer());
+    closeAudioContext.mockResolvedValue(undefined);
     fetchMock.mockResolvedValue(successfulResponse());
   });
 
@@ -382,6 +384,97 @@ describe('PlaybackEngine reliability', () => {
     expect(contextTimeReads).toBe(2);
   });
 
+  it('synchronizes live volume without restarting playback', async () => {
+    const engine = createEngine();
+    const track = createTrack();
+    await engine.play([track], 0, 5, false);
+
+    await engine.syncTracks([{ ...track, volume: 0.25 }]);
+    await engine.syncTracks([{ ...track, volume: 0.25 }]);
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdGains[0].gain.linearRampToValueAtTime).toHaveBeenCalledTimes(1);
+    expect(createdGains[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.25, 0.01);
+  });
+
+  it('smooths a live mute to zero without restarting playback', async () => {
+    const engine = createEngine();
+    const track = createTrack();
+    await engine.play([track], 0, 5, false);
+
+    await engine.syncTracks([{ ...track, muted: true }]);
+
+    expect(createdSources).toHaveLength(1);
+    expect(createdGains[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 0.01);
+  });
+
+  it('starts an initially muted track at the current playhead when unmuted', async () => {
+    const engine = createEngine();
+    const activeTrack = createTrack({ id: 'active', sourceUrl: 'blob:active' });
+    const mutedTrack = createTrack({ id: 'muted', sourceUrl: 'blob:muted', muted: true });
+    await engine.play([activeTrack, mutedTrack], 0, 5, false);
+    contextTime = 2;
+
+    await engine.syncTracks([activeTrack, { ...mutedTrack, muted: false }]);
+
+    expect(createdSources).toHaveLength(2);
+    expect(createdSources[0].stop).not.toHaveBeenCalled();
+    expect(createdSources[1].start).toHaveBeenCalledWith(2, 2, 3);
+    expect(engine.isPlaying).toBe(true);
+  });
+
+  it('does not duplicate a pending unmute across rapid track syncs', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const engine = createEngine();
+    const mutedTrack = createTrack({ muted: true });
+    await engine.play([mutedTrack], 0, 5, false);
+
+    const unmutedTrack = { ...mutedTrack, muted: false };
+    const firstSync = engine.syncTracks([unmutedTrack]);
+    const secondSync = engine.syncTracks([{ ...unmutedTrack }]);
+    response.resolve(successfulResponse());
+    await Promise.all([firstSync, secondSync]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createdSources).toHaveLength(1);
+  });
+
+  it('does not start a pending unmute after playback is paused', async () => {
+    const response = deferred<Response>();
+    fetchMock.mockReturnValue(response.promise);
+    const engine = createEngine();
+    const mutedTrack = createTrack({ muted: true });
+    await engine.play([mutedTrack], 0, 5, false);
+
+    const sync = engine.syncTracks([{ ...mutedTrack, muted: false }]);
+    await Promise.resolve();
+    engine.pause();
+    response.resolve(successfulResponse());
+    await sync;
+
+    expect(createdSources).toHaveLength(0);
+    expect(engine.isPlaying).toBe(false);
+  });
+
+  it('uses the latest volume and mute values on the next loop', async () => {
+    const first = createTrack({ id: 'first', sourceUrl: 'blob:first' });
+    const second = createTrack({ id: 'second', sourceUrl: 'blob:second' });
+    const engine = createEngine();
+    await engine.play([first, second], 0, 5, true);
+
+    await engine.syncTracks([
+      { ...first, volume: 0.3 },
+      { ...second, muted: true },
+    ]);
+    contextTime = 6;
+    runNextAnimationFrame();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(3));
+
+    expect(createdGains[2].gain.value).toBe(0.3);
+    expect(createdSources.filter((source) => source.start.mock.calls.length > 0)).toHaveLength(3);
+  });
+
   it('does not spawn stale loop nodes when a seek wins a loop-load race', async () => {
     const loopResponse = deferred<Response>();
     fetchMock.mockReturnValue(loopResponse.promise);
@@ -524,6 +617,60 @@ describe('PlaybackEngine reliability', () => {
     expect(createdSources).toHaveLength(0);
     expect(engine.isPlaying).toBe(false);
     expect(engine.isStarting).toBe(false);
+    expect(animationFrames.size).toBe(0);
+  });
+
+  it('attempts every node and completes destroy when cleanup fails', async () => {
+    const onError = vi.fn();
+    const first = createTrack({ id: 'first', sourceUrl: 'blob:first' });
+    const second = createTrack({ id: 'second', sourceUrl: 'blob:second' });
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), vi.fn(), onError);
+    await engine.play([first, second], 0, 5, false);
+    createdSources[0].stop.mockImplementation(() => {
+      throw new Error('stop failed');
+    });
+    createdSources[0].disconnect.mockImplementation(() => {
+      throw new Error('source disconnect failed');
+    });
+    createdGains[0].disconnect.mockImplementation(() => {
+      throw new Error('gain disconnect failed');
+    });
+
+    expect(() => engine.destroy()).not.toThrow();
+
+    expect(createdSources[1].stop).toHaveBeenCalledTimes(1);
+    expect(createdSources[1].disconnect).toHaveBeenCalledTimes(1);
+    expect(createdGains[1].disconnect).toHaveBeenCalledTimes(1);
+    expect(closeAudioContext).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toMatchObject({ code: 'NODE_CLEANUP_FAILED' });
+    const nodeErrors = onError.mock.calls[0][0].cause as PlaybackError[];
+    expect(nodeErrors[0].cause).toHaveLength(3);
+    await expect(engine.loadBuffer('blob:first')).rejects.toMatchObject({
+      code: 'CONTEXT_FAILED',
+    });
+  });
+
+  it('stops consistently and reports once when loop restart cleanup fails', async () => {
+    const onEnd = vi.fn();
+    const onError = vi.fn();
+    const engine = createEngine();
+    engine.setCallbacks(vi.fn(), onEnd, onError);
+    await engine.play([createTrack()], 0, 1, true);
+    createdSources[0].stop.mockImplementation(() => {
+      throw new Error('stop failed');
+    });
+
+    contextTime = 2;
+    runNextAnimationFrame();
+    await Promise.resolve();
+
+    expect(engine.isPlaying).toBe(false);
+    expect(engine.isStarting).toBe(false);
+    expect(onEnd).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toMatchObject({ code: 'NODE_CLEANUP_FAILED' });
     expect(animationFrames.size).toBe(0);
   });
 });
