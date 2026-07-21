@@ -91,6 +91,47 @@ describe('createSyncTrackUpdate', () => {
     });
   });
 
+  it('preserves post-sync trim and split displacement for same and new positive offsets', () => {
+    const initiallySynced = { ...track, ...createSyncTrackUpdate(track, 3) };
+    const trimmedAfterSync = {
+      ...initiallySynced,
+      startOffset: 5,
+      sourceStartOffset: 2,
+      duration: 18,
+    };
+    expect(createSyncTrackUpdate(trimmedAfterSync, 3)).toMatchObject({
+      startOffset: 5,
+      sourceStartOffset: 2,
+      duration: 18,
+      syncOffset: 3,
+    });
+    expect(createSyncTrackUpdate(trimmedAfterSync, 5)).toMatchObject({
+      startOffset: 7,
+      sourceStartOffset: 2,
+      duration: 18,
+      syncOffset: 5,
+    });
+
+    const splitAfterSync = {
+      ...initiallySynced,
+      startOffset: 8,
+      sourceStartOffset: 5,
+      duration: 7,
+    };
+    expect(createSyncTrackUpdate(splitAfterSync, 3)).toMatchObject({
+      startOffset: 8,
+      sourceStartOffset: 5,
+      duration: 7,
+      syncOffset: 3,
+    });
+    expect(createSyncTrackUpdate(splitAfterSync, 1)).toMatchObject({
+      startOffset: 6,
+      sourceStartOffset: 5,
+      duration: 7,
+      syncOffset: 1,
+    });
+  });
+
   it('preserves existing source trims and derived clip placement', () => {
     const trimmedTrack = makeTrack({
       startOffset: 2,
@@ -100,9 +141,9 @@ describe('createSyncTrackUpdate', () => {
       syncBaseDuration: 20,
     });
     expect(createSyncTrackUpdate(trimmedTrack, -4)).toMatchObject({
-      startOffset: 0,
-      sourceStartOffset: 4,
-      duration: 18,
+      startOffset: 2,
+      sourceStartOffset: 6,
+      duration: 16,
       syncOffset: -4,
     });
     expect(createSyncTrackUpdate(trimmedTrack, 3)).toMatchObject({
@@ -246,9 +287,9 @@ describe('SyncControls', () => {
       expect(storeState.updateTrack).toHaveBeenCalledWith(
         track.id,
         expect.objectContaining({
-          startOffset: 0,
-          sourceStartOffset: 4,
-          duration: 16,
+          startOffset: 2,
+          sourceStartOffset: 6,
+          duration: 14,
           syncOffset: -4,
         }),
       );
@@ -268,6 +309,31 @@ describe('SyncControls', () => {
     await waitFor(() => expect(computeAutoSyncOffsetMock).toHaveBeenCalledOnce());
 
     storeState.video = { url: 'blob:replacement-video' };
+    rerender(<SyncControls />);
+    resolveAnalysis({ offsetSeconds: 2, confidence: 0.9 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'The reference or target changed during auto-sync',
+      );
+    });
+    expect(storeState.updateTrack).not.toHaveBeenCalled();
+  });
+
+  it('does not apply analysis when a stable target ID points to replacement media', async () => {
+    let resolveAnalysis!: (result: { offsetSeconds: number; confidence: number }) => void;
+    computeAutoSyncOffsetMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAnalysis = resolve;
+      }),
+    );
+    const { rerender } = render(<SyncControls />);
+    await waitFor(() => expect(screen.getByLabelText('Target track')).toHaveValue(track.id));
+    fireEvent.click(screen.getByRole('button', { name: 'Auto Sync' }));
+    await waitFor(() => expect(computeAutoSyncOffsetMock).toHaveBeenCalledOnce());
+
+    track = makeTrack({ sourceUrl: 'blob:replacement-voice' });
+    storeState.tracks = [track];
     rerender(<SyncControls />);
     resolveAnalysis({ offsetSeconds: 2, confidence: 0.9 });
 

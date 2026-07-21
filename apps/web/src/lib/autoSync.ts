@@ -97,40 +97,87 @@ async function probeAudioDuration(
   });
 }
 
-async function readBoundedAudioResponse(
+function cancelReaderBestEffort(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    // Cancellation is cleanup; it must never replace the primary abort/limit error.
+    void reader.cancel().catch(() => undefined);
+  } catch {
+    // Some stream implementations throw synchronously from cancel().
+  }
+}
+
+async function cancelResponseBodyBestEffort(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Preserve the HTTP/limit error that caused cancellation.
+  }
+}
+
+export function getUnknownLengthPayloadLimit(maximumBytes: number): number {
+  return Math.floor(maximumBytes / 2);
+}
+
+export async function readResponseBuffer(
   response: Response,
   maximumBytes: number,
   limitMessage: string,
   signal: AbortSignal | undefined,
+  declaredBytes?: number,
 ): Promise<ArrayBuffer> {
   if (!response.body) {
     const buffer = await response.arrayBuffer();
     if (buffer.byteLength > maximumBytes) {
       throw new Error(limitMessage);
     }
+    if (declaredBytes !== undefined && buffer.byteLength !== declaredBytes) {
+      throw new Error('Audio response did not match its Content-Length');
+    }
     return buffer;
   }
 
   const reader = response.body.getReader();
+  const preallocated = declaredBytes === undefined ? null : new Uint8Array(declaredBytes);
   const chunks: Uint8Array[] = [];
+  const payloadLimit =
+    preallocated === null ? getUnknownLengthPayloadLimit(maximumBytes) : maximumBytes;
   let totalBytes = 0;
   try {
     while (true) {
       const result = await raceWithAbort(reader.read(), signal, () => {
-        void reader.cancel();
+        cancelReaderBestEffort(reader);
       });
       if (result.done) {
         break;
       }
-      if (totalBytes + result.value.byteLength > maximumBytes) {
-        await reader.cancel();
+      const nextTotal = totalBytes + result.value.byteLength;
+      if (
+        nextTotal > payloadLimit ||
+        (preallocated !== null && nextTotal > preallocated.byteLength)
+      ) {
+        cancelReaderBestEffort(reader);
         throw new Error(limitMessage);
       }
-      chunks.push(result.value);
-      totalBytes += result.value.byteLength;
+      if (preallocated === null) {
+        chunks.push(result.value.slice());
+      } else {
+        preallocated.set(result.value, totalBytes);
+      }
+      totalBytes = nextTotal;
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // A pending read may retain the lock briefly after cancellation.
+    }
+  }
+
+  if (preallocated !== null) {
+    if (totalBytes !== preallocated.byteLength) {
+      throw new Error('Audio response did not match its Content-Length');
+    }
+    return preallocated.buffer;
   }
 
   const combined = new Uint8Array(totalBytes);
@@ -249,19 +296,29 @@ async function decodeToMono(
 
   const response = await fetch(url, { signal });
   if (!response.ok) {
-    throw new Error(`Failed to fetch ${label} audio: HTTP ${response.status}`);
+    const error = new Error(`Failed to fetch ${label} audio: HTTP ${response.status}`);
+    await cancelResponseBodyBestEffort(response);
+    throw error;
   }
 
   const contentLength = response.headers?.get('content-length');
-  const declaredBytes = contentLength === null ? undefined : Number(contentLength);
-  if (declaredBytes !== undefined && Number.isFinite(declaredBytes)) {
+  const parsedContentLength = contentLength === null ? undefined : Number(contentLength);
+  const declaredBytes =
+    parsedContentLength !== undefined &&
+    Number.isSafeInteger(parsedContentLength) &&
+    parsedContentLength >= 0
+      ? parsedContentLength
+      : undefined;
+  if (declaredBytes !== undefined) {
     if (declaredBytes > AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT) {
-      await response.body?.cancel();
-      throw new Error(`${label} audio exceeds the 48 MB auto-sync encoded-file limit`);
+      const error = new Error(`${label} audio exceeds the 48 MB auto-sync encoded-file limit`);
+      await cancelResponseBodyBestEffort(response);
+      throw error;
     }
     if (declaredBytes > remainingEncodedBytes) {
-      await response.body?.cancel();
-      throw new Error('Auto-sync inputs exceed the combined 64 MB encoded-audio limit');
+      const error = new Error('Auto-sync inputs exceed the combined 64 MB encoded-audio limit');
+      await cancelResponseBodyBestEffort(response);
+      throw error;
     }
   }
 
@@ -273,11 +330,16 @@ async function decodeToMono(
     remainingEncodedBytes < AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT
       ? 'Auto-sync inputs exceed the combined 64 MB encoded-audio limit'
       : `${label} audio exceeds the 48 MB auto-sync encoded-file limit`;
-  const arrayBuffer = await readBoundedAudioResponse(
+  const readLimitMessage =
+    declaredBytes === undefined
+      ? `${label} audio without Content-Length exceeds its bounded streaming memory limit`
+      : encodedLimitMessage;
+  const arrayBuffer = await readResponseBuffer(
     response,
     maximumEncodedBytes,
-    encodedLimitMessage,
+    readLimitMessage,
     signal,
+    declaredBytes,
   );
   throwIfAborted(signal);
 

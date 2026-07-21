@@ -19,19 +19,23 @@ export function createSyncTrackUpdate(
     );
   }
 
-  const baseSourceStartOffset = track.syncBaseSourceStartOffset ?? track.sourceStartOffset;
-  const baseDuration = track.syncBaseDuration ?? track.duration;
-  const unclampedTimelineStart = requestedOffset + baseSourceStartOffset;
-  const sourceTrim = Math.max(0, -unclampedTimelineStart);
+  const previousOffset = track.syncOffset ?? 0;
+  const previousTimelineDelay = Math.max(0, previousOffset);
+  const previousSourceTrim = Math.max(0, -previousOffset);
+  const baseStartOffset = Math.max(0, track.startOffset - previousTimelineDelay);
+  const baseSourceStartOffset = Math.max(0, track.sourceStartOffset - previousSourceTrim);
+  const baseDuration = track.duration + previousSourceTrim;
+  const nextTimelineDelay = Math.max(0, requestedOffset);
+  const nextSourceTrim = Math.max(0, -requestedOffset);
   const minimumRemainingDuration = Math.min(0.5, baseDuration);
-  if (baseDuration - sourceTrim < minimumRemainingDuration) {
+  if (baseDuration - nextSourceTrim < minimumRemainingDuration) {
     throw new Error('Negative sync offset exceeds the available source duration');
   }
 
   return {
-    startOffset: Math.max(0, unclampedTimelineStart),
-    sourceStartOffset: baseSourceStartOffset + sourceTrim,
-    duration: baseDuration - sourceTrim,
+    startOffset: baseStartOffset + nextTimelineDelay,
+    sourceStartOffset: baseSourceStartOffset + nextSourceTrim,
+    duration: baseDuration - nextSourceTrim,
     syncOffset: requestedOffset,
     syncBaseSourceStartOffset: baseSourceStartOffset,
     syncBaseDuration: baseDuration,

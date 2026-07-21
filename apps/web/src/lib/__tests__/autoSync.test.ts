@@ -3,6 +3,8 @@ import {
   AUTO_SYNC_MAX_AGGREGATE_ENCODED_BYTES,
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   computeAutoSyncOffset,
+  getUnknownLengthPayloadLimit,
+  readResponseBuffer,
 } from '../autoSync';
 import {
   AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
@@ -121,6 +123,33 @@ function createWaveHeader(options: {
   writeText(36, 'data');
   view.setUint32(40, options.dataBytes, true);
   return buffer;
+}
+
+function createStreamResponse(options: {
+  chunks?: Uint8Array[];
+  cancel?: () => Promise<void>;
+  pendingRead?: boolean;
+}): Response {
+  const chunks = [...(options.chunks ?? [])];
+  const reader = {
+    read: vi.fn(() =>
+      options.pendingRead
+        ? new Promise<ReadableStreamReadResult<Uint8Array>>(() => {})
+        : Promise.resolve(
+            chunks.length
+              ? { done: false as const, value: chunks.shift()! }
+              : { done: true as const, value: undefined },
+          ),
+    ),
+    cancel: vi.fn(options.cancel ?? (async () => {})),
+    releaseLock: vi.fn(),
+  };
+  return {
+    body: {
+      getReader: () => reader,
+    },
+    arrayBuffer: vi.fn(),
+  } as unknown as Response;
 }
 
 let decodedReference: Float32Array;
@@ -285,6 +314,51 @@ beforeEach(() => {
   );
 });
 
+describe('readResponseBuffer', () => {
+  it('preallocates and accepts the exact declared Content-Length boundary', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2), Uint8Array.of(3, 4)],
+    });
+
+    const buffer = await readResponseBuffer(response, 4, 'too large', undefined, 4);
+
+    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3, 4]);
+    expect(response.arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('reserves assembly headroom for unknown-length responses at exact boundaries', async () => {
+    expect(getUnknownLengthPayloadLimit(8)).toBe(4);
+    const accepted = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2), Uint8Array.of(3, 4)],
+    });
+    await expect(readResponseBuffer(accepted, 8, 'too large', undefined)).resolves.toHaveProperty(
+      'byteLength',
+      4,
+    );
+
+    const rejected = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2, 3, 4), Uint8Array.of(5)],
+    });
+    await expect(readResponseBuffer(rejected, 8, 'too large', undefined)).rejects.toThrow(
+      'too large',
+    );
+  });
+
+  it('preserves AbortError when stream cancellation rejects', async () => {
+    const cancel = vi.fn(async () => {
+      throw new Error('cancel failed');
+    });
+    const response = createStreamResponse({ cancel, pendingRead: true });
+    const controller = new AbortController();
+    const pending = readResponseBuffer(response, 8, 'too large', controller.signal);
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
 describe('computeAutoSyncOffset', () => {
   it('advances a delayed target within the documented 20 ms tolerance', async () => {
     const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
@@ -368,6 +442,44 @@ describe('computeAutoSyncOffset', () => {
     await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
       'the limit is 5 minutes',
     );
+  });
+
+  it('cancels rejected and oversized responses without masking the primary error', async () => {
+    const cancelRejected = vi.fn(async () => {
+      throw new Error('cancel failed');
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        body: { cancel: cancelRejected },
+      })),
+    );
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'Failed to fetch reference audio: HTTP 503',
+    );
+    expect(cancelRejected).toHaveBeenCalledOnce();
+
+    const cancelOversized = vi.fn(async () => {
+      throw new Error('cancel failed');
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({
+          'content-length': String(48 * MEBIBYTE + 1),
+        }),
+        body: { cancel: cancelOversized },
+      })),
+    );
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      '48 MB auto-sync encoded-file limit',
+    );
+    expect(cancelOversized).toHaveBeenCalledOnce();
   });
 
   it('rejects overlong compressed audio from metadata before fetching or decoding', async () => {
