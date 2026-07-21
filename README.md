@@ -19,6 +19,7 @@ sori-cut replaces the fragmented workflow of music short-form content creators (
 - **TypeScript + React** (Vite)
 - **TailwindCSS** for styling
 - **Web Audio API** for recording & audio processing
+- **Mediabunny** for bounded browser-side media metadata inspection
 - **FFmpeg.wasm** for video/audio manipulation
 - **pnpm workspaces** monorepo
 
@@ -58,6 +59,27 @@ pnpm build
 ```
 
 The dev server will start at `http://localhost:3000`.
+
+## Auto-sync media limits
+
+Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
+(Opus or Vorbis), FLAC, MP3, and WAV inputs. Mediabunny inspects the complete
+bounded encoded input before Web Audio decoding and rejects missing audio
+tracks, malformed or unknown media, invalid metadata, and decoded shapes over
+128 MiB.
+
+Each accepted encoded input is capped at 48 MiB and requires a streaming
+response body. The advertised encoded peak for accepted inputs is 96 MiB
+without relying on BYOB readers, fetch chunk sizing, or garbage collection:
+
+- With `Content-Length`, a destination of at most 48 MiB can coexist with one
+  ordinary reader chunk of at most the accepted 48 MiB payload.
+- Without `Content-Length`, retained chunks total at most 48 MiB and can coexist
+  with the final assembled copy of at most 48 MiB.
+
+The reference and target are fetched and decoded sequentially. The encoded
+buffer reference is explicitly released before the next input fetch; only the
+bounded 8 kHz mono analysis array is retained.
 
 ## Deployment (GitHub Pages)
 
