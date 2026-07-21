@@ -283,8 +283,16 @@ describe('Studio shell', () => {
       </MemoryRouter>,
     );
     const player = document.querySelector('video') as HTMLVideoElement;
+    let mediaTime = 0;
+    const setCurrentTime = vi.fn((value: number) => {
+      mediaTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => mediaTime,
+      set: setCurrentTime,
+    });
     Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
-    player.currentTime = 0;
     vi.clearAllMocks();
 
     storeState.playheadPosition = 5;
@@ -297,6 +305,15 @@ describe('Studio shell', () => {
     fireEvent.seeked(player);
 
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+    expect(setCurrentTime).toHaveBeenCalledTimes(1);
+
+    storeState.playheadPosition = 6;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(setCurrentTime).toHaveBeenCalledTimes(1);
 
     player.currentTime = 1.25;
     fireEvent.seeked(player);
@@ -423,4 +440,38 @@ describe('Studio shell', () => {
       expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
     },
   );
+
+  it('does not resume an ended video while project playback is paused', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.playheadPosition = 2;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    player.currentTime = 2;
+    fireEvent.seeked(player);
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1.8;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(player.currentTime).toBe(2);
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
 });
