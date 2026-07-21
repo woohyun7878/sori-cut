@@ -1,317 +1,460 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeAutoSyncOffset } from '../autoSync';
-import { crossCorrelate } from '../autoSyncCore';
+import {
+  AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
+  AUTO_SYNC_FRAME_SIZE,
+  AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
+  AUTO_SYNC_MAX_CORRELATION_TERMS,
+  AUTO_SYNC_MAX_LAG_SAMPLES,
+  crossCorrelate,
+  getCorrelationDimensions,
+  parseCorrelationRequest,
+} from '../autoSyncCore';
 
-// --- Mock Worker for the auto-sync cross-correlation ---
-//
-// The real `computeAutoSyncOffset` offloads `crossCorrelate` to a Web Worker.
-// jsdom has no Worker, so we stub the global with a mock that runs the real
-// pure `crossCorrelate` synchronously (following the stemSeparation.worker
-// test pattern). This keeps the end-to-end behavior identical while the heavy
-// math itself is also covered directly in the `crossCorrelate` suite below.
-class MockAutoSyncWorker {
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: ((event: ErrorEvent) => void) | null = null;
-  private terminated = false;
+const SAMPLE_RATE = AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
+const REFERENCE_BYTES = 100;
+const TARGET_BYTES = 200;
 
-  postMessage(msg: unknown) {
-    if (this.terminated) return;
-
-    const data = msg as {
-      type: string;
-      reference: Float32Array;
-      target: Float32Array;
-      maxLagSamples: number;
-    };
-
-    if (data.type === 'correlate') {
-      setTimeout(() => {
-        if (this.terminated) return;
-        try {
-          const { lagSamples, confidence } = crossCorrelate(
-            data.reference,
-            data.target,
-            data.maxLagSamples,
-          );
-          this.onmessage?.({ data: { type: 'result', lagSamples, confidence } } as MessageEvent);
-        } catch (err) {
-          this.onmessage?.({
-            data: { type: 'error', message: err instanceof Error ? err.message : 'error' },
-          } as MessageEvent);
-        }
-      }, 0);
-    }
-  }
-
-  terminate() {
-    this.terminated = true;
-  }
+function frameAmplitude(frame: number): number {
+  let hash = frame + 1;
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
+  hash ^= hash >>> 16;
+  return 0.08 + ((hash >>> 0) / 0x1_0000_0000) * 0.84;
 }
 
-/** Worker variant that always reports an error, to cover the rejection path. */
-class MockAutoSyncWorkerError {
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: ((event: ErrorEvent) => void) | null = null;
-
-  postMessage(msg: unknown) {
-    const data = msg as { type: string };
-    if (data.type === 'correlate') {
-      setTimeout(() => {
-        this.onmessage?.({
-          data: { type: 'error', message: 'Correlation failed' },
-        } as MessageEvent);
-      }, 0);
+function createPatternSignal(frameCount: number): Float32Array {
+  const signal = new Float32Array(frameCount * AUTO_SYNC_FRAME_SIZE);
+  for (let frame = 0; frame < frameCount; frame++) {
+    const amplitude = frameAmplitude(frame);
+    for (let i = 0; i < AUTO_SYNC_FRAME_SIZE; i++) {
+      signal[frame * AUTO_SYNC_FRAME_SIZE + i] =
+        amplitude * Math.sin((2 * Math.PI * 5 * i) / AUTO_SYNC_FRAME_SIZE);
     }
   }
-
-  terminate() {}
+  return signal;
 }
 
-// --- Mocks for Web Audio API ---
-
-function createMockMonoBuffer(
-  length: number,
-  sampleRate: number,
-  fillFn?: (i: number) => number,
-): AudioBuffer {
-  const data = new Float32Array(length);
-  if (fillFn) {
-    for (let i = 0; i < length; i++) {
-      data[i] = fillFn(i);
-    }
+function delaySignal(
+  source: Float32Array,
+  delaySamples: number,
+  scale = 1,
+  dcOffset = 0,
+): Float32Array {
+  const target = new Float32Array(source.length);
+  target.fill(dcOffset);
+  for (let i = delaySamples; i < target.length; i++) {
+    target[i] = source[i - delaySamples] * scale + dcOffset;
   }
+  return target;
+}
 
+function advanceSignal(source: Float32Array, advanceSamples: number): Float32Array {
+  const target = new Float32Array(source.length);
+  for (let i = 0; i + advanceSamples < source.length; i++) {
+    target[i] = source[i + advanceSamples];
+  }
+  return target;
+}
+
+function createMockMonoBuffer(data: Float32Array): AudioBuffer {
   return {
     numberOfChannels: 1,
-    length,
-    sampleRate,
-    duration: length / sampleRate,
+    length: data.length,
+    sampleRate: SAMPLE_RATE,
+    duration: data.length / SAMPLE_RATE,
     getChannelData: () => data,
     copyFromChannel: vi.fn(),
     copyToChannel: vi.fn(),
   } as unknown as AudioBuffer;
 }
 
-// Use a pseudo-random chirp signal that has a unique correlation peak.
-function testSignal(i: number) {
-  // Linear chirp: frequency increases over time → aperiodic.
-  const t = i / SAMPLE_RATE;
-  return Math.sin(2 * Math.PI * (100 * t + 200 * t * t));
+let decodedReference: Float32Array;
+let decodedTarget: Float32Array;
+let fetchedUrls: string[];
+let workerTerminations: number;
+
+class MockAutoSyncWorker {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
+  protected terminated = false;
+
+  postMessage(value: unknown) {
+    if (this.terminated) {
+      return;
+    }
+    const message = parseCorrelationRequest(value);
+    setTimeout(() => {
+      if (this.terminated) {
+        return;
+      }
+      try {
+        this.onmessage?.({
+          data: {
+            type: 'result',
+            ...crossCorrelate(message.reference, message.target, message.maxLagSamples),
+          },
+        } as MessageEvent);
+      } catch (error) {
+        this.onmessage?.({
+          data: {
+            type: 'error',
+            message: error instanceof Error ? error.message : 'Correlation failed',
+          },
+        } as MessageEvent);
+      }
+    }, 0);
+  }
+
+  terminate() {
+    this.terminated = true;
+    workerTerminations++;
+  }
 }
 
-// Track calls to detect which URL was fetched.
-let fetchedUrls: string[] = [];
+class MalformedResultWorker extends MockAutoSyncWorker {
+  override postMessage() {
+    setTimeout(() => {
+      this.onmessage?.({
+        data: { type: 'result', lagSamples: 1, confidence: 0.8 },
+      } as MessageEvent);
+    }, 0);
+  }
+}
 
-const SAMPLE_RATE = 8000;
-const SIGNAL_LENGTH = SAMPLE_RATE * 4; // 4 seconds
-const DELAY_SAMPLES = SAMPLE_RATE * 2; // target delayed by 2 seconds
+class ErrorResultWorker extends MockAutoSyncWorker {
+  override postMessage() {
+    setTimeout(() => {
+      this.onmessage?.({
+        data: { type: 'error', message: 'Correlation failed' },
+      } as MessageEvent);
+    }, 0);
+  }
+}
+
+class SilentWorker extends MockAutoSyncWorker {
+  override postMessage() {}
+}
 
 beforeEach(() => {
+  vi.useRealTimers();
   fetchedUrls = [];
+  workerTerminations = 0;
+  decodedReference = createPatternSignal(250);
+  decodedTarget = delaySignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
 
-  // Auto-sync offloads cross-correlation to a Web Worker; stub it globally.
   vi.stubGlobal('Worker', MockAutoSyncWorker);
-
-  // Use buffer size as a discriminator: reference = 100 bytes, target = 200 bytes.
-  const REF_SIZE = 100;
-  const TAR_SIZE = 200;
-
   vi.stubGlobal(
     'AudioContext',
     class {
-      sampleRate = SAMPLE_RATE;
       async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
-        // Decide signal based on buffer size (preserved through .slice(0)).
-        const signalFn = data.byteLength === TAR_SIZE
-          ? (i: number) => (i >= DELAY_SAMPLES ? testSignal(i - DELAY_SAMPLES) : 0)
-          : testSignal;
-        return createMockMonoBuffer(SIGNAL_LENGTH, SAMPLE_RATE, signalFn);
+        return createMockMonoBuffer(
+          data.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
+        );
       }
       async close() {}
     },
   );
-
-  // OfflineAudioContext passes through the buffer set on its source.
   vi.stubGlobal(
     'OfflineAudioContext',
     class {
-      private length: number;
-      private rate: number;
+      private readonly length: number;
       private connectedBuffer: AudioBuffer | null = null;
 
-      constructor(_channels: number, length: number, sampleRate: number) {
+      constructor(_channels: number, length: number, _sampleRate: number) {
         this.length = length;
-        this.rate = sampleRate;
       }
 
       createBufferSource() {
-        const setConnectedBuffer = (b: AudioBuffer | null) => {
-          this.connectedBuffer = b;
+        const connectBuffer = (buffer: AudioBuffer | null) => {
+          this.connectedBuffer = buffer;
         };
         return {
-          _buffer: null as AudioBuffer | null,
-          set buffer(b: AudioBuffer | null) {
-            this._buffer = b;
-            setConnectedBuffer(b);
+          value: null as AudioBuffer | null,
+          set buffer(buffer: AudioBuffer | null) {
+            this.value = buffer;
+            connectBuffer(buffer);
           },
-          get buffer() { return this._buffer; },
+          get buffer() {
+            return this.value;
+          },
           connect: vi.fn(),
           start: vi.fn(),
         };
       }
 
-      get destination() { return {}; }
+      get destination() {
+        return {};
+      }
 
       async startRendering(): Promise<AudioBuffer> {
-        if (this.connectedBuffer) {
-          const srcData = this.connectedBuffer.getChannelData(0);
-          return createMockMonoBuffer(this.length, this.rate, (i) =>
-            i < srcData.length ? srcData[i] : 0,
-          );
-        }
-        return createMockMonoBuffer(this.length, this.rate);
+        const source = this.connectedBuffer?.getChannelData(0) ?? new Float32Array();
+        return createMockMonoBuffer(source.slice(0, this.length));
       }
     },
   );
-
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       fetchedUrls.push(url);
-      // Assign different buffer sizes so decodeAudioData can distinguish.
       const isTarget = url.includes('target') || url === 'blob:tar';
-      const buf = new ArrayBuffer(isTarget ? TAR_SIZE : REF_SIZE);
       return {
         ok: true,
-        arrayBuffer: async () => buf,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => new ArrayBuffer(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
       };
     }),
   );
 });
 
 describe('computeAutoSyncOffset', () => {
-  it('detects a positive time offset when the target is delayed', async () => {
-    const result = await computeAutoSyncOffset(
-      'blob:http://localhost/reference',
-      'blob:http://localhost/target',
+  it('returns the delayed target offset within the documented 20 ms tolerance', async () => {
+    const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
+
+    expect(result.offsetSeconds).toBeCloseTo(0.5, 5);
+    expect(result.confidence).toBeGreaterThan(0.9);
+    expect(workerTerminations).toBe(1);
+  });
+
+  it('fetches both audio sources', async () => {
+    await computeAutoSyncOffset('blob:ref', 'blob:tar');
+
+    expect(fetchedUrls).toEqual(expect.arrayContaining(['blob:ref', 'blob:tar']));
+  });
+
+  it('reports actionable fetch and duration-limit errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        headers: new Headers(),
+        arrayBuffer: async () => new ArrayBuffer(0),
+      })),
+    );
+    await expect(computeAutoSyncOffset('bad', 'bad')).rejects.toThrow(
+      'Failed to fetch reference audio: HTTP 404',
     );
 
-    // The offset should be approximately 2 seconds (the delay we introduced).
-    expect(result.offsetSeconds).toBeCloseTo(2, 0);
-    expect(result.confidence).toBeGreaterThan(0);
-    expect(result.confidence).toBeLessThanOrEqual(1);
-  });
-
-  it('fetches both URLs', async () => {
-    await computeAutoSyncOffset('blob:ref', 'blob:tar');
-    expect(fetchedUrls).toContain('blob:ref');
-    expect(fetchedUrls).toContain('blob:tar');
-  });
-
-  it('returns zero offset when signals are identical', async () => {
-    // Force all OfflineAudioContext renders to return the same signal.
     vi.stubGlobal(
-      'OfflineAudioContext',
-      class {
-        private length: number;
-        private rate: number;
-        constructor(_c: number, length: number, rate: number) {
-          this.length = length;
-          this.rate = rate;
-        }
-        createBufferSource() {
-          return { buffer: null, connect: vi.fn(), start: vi.fn() };
-        }
-        get destination() { return {}; }
-        async startRendering() {
-          return createMockMonoBuffer(this.length, this.rate, testSignal);
-        }
-      },
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => new ArrayBuffer(REFERENCE_BYTES),
+      })),
     );
     vi.stubGlobal(
       'AudioContext',
       class {
-        sampleRate = SAMPLE_RATE;
-        async decodeAudioData() {
-          return createMockMonoBuffer(SIGNAL_LENGTH, SAMPLE_RATE, testSignal);
+        async decodeAudioData(): Promise<AudioBuffer> {
+          return {
+            duration: 301,
+            length: 1,
+            sampleRate: SAMPLE_RATE,
+          } as AudioBuffer;
         }
         async close() {}
       },
     );
 
-    const result = await computeAutoSyncOffset('blob:ref', 'blob:tar');
-    expect(result.offsetSeconds).toBeCloseTo(0, 1);
-  });
-
-  it('throws when fetch fails', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) })),
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'the limit is 5 minutes',
     );
-
-    await expect(computeAutoSyncOffset('bad-url', 'bad-url')).rejects.toThrow(/Failed to fetch/);
   });
 
-  it('rejects when the correlation worker reports an error', async () => {
-    vi.stubGlobal('Worker', MockAutoSyncWorkerError);
+  it('rejects malformed and explicit worker errors and always terminates', async () => {
+    vi.stubGlobal('Worker', MalformedResultWorker);
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'invalid correlation result',
+    );
+    expect(workerTerminations).toBe(1);
 
+    vi.stubGlobal('Worker', ErrorResultWorker);
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
+      'Correlation failed',
+    );
+    expect(workerTerminations).toBe(2);
+  });
+
+  it('times out, aborts, and terminates a worker that never responds', async () => {
+    vi.stubGlobal('Worker', SilentWorker);
     await expect(
-      computeAutoSyncOffset('blob:http://localhost/reference', 'blob:http://localhost/target'),
-    ).rejects.toThrow('Correlation failed');
+      computeAutoSyncOffset('blob:ref', 'blob:tar', { workerTimeoutMs: 5 }),
+    ).rejects.toThrow('timed out after 5 ms');
+    expect(workerTerminations).toBe(1);
+
+    const controller = new AbortController();
+    const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(workerTerminations).toBe(2);
+  });
+
+  it('rejects promptly and closes decoder contexts when decoding is aborted', async () => {
+    let decoderCloses = 0;
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData(): Promise<AudioBuffer> {
+          return new Promise(() => {});
+        }
+        async close() {
+          decoderCloses++;
+        }
+      },
+    );
+    const controller = new AbortController();
+    const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(decoderCloses).toBe(2);
   });
 });
 
 describe('crossCorrelate', () => {
-  const SR = 8000;
+  it('recovers positive and negative offsets to the nearest 20 ms frame', () => {
+    const reference = createPatternSignal(400);
+    const delay = 37 * AUTO_SYNC_FRAME_SIZE;
 
-  it('finds the correct lag when the target is a delayed copy of the reference', () => {
-    const len = SR; // 1 second
-    const delay = 400; // samples
-    const reference = new Float32Array(len);
-    const target = new Float32Array(len);
-    for (let i = 0; i < len; i++) {
-      const v = Math.sin(2 * Math.PI * (50 * (i / SR) + 30 * (i / SR) ** 2));
-      reference[i] = v;
-      target[i] = i >= delay ? reference[i - delay] : 0;
+    const delayed = crossCorrelate(reference, delaySignal(reference, delay), delay * 2);
+    const advanced = crossCorrelate(reference, advanceSignal(reference, delay), delay * 2);
+
+    expect(Math.abs(delayed.lagSamples + delay)).toBeLessThanOrEqual(AUTO_SYNC_FRAME_SIZE);
+    expect(Math.abs(advanced.lagSamples - delay)).toBeLessThanOrEqual(AUTO_SYNC_FRAME_SIZE);
+    expect(delayed.confidence).toBeGreaterThan(0.9);
+    expect(advanced.confidence).toBeGreaterThan(0.9);
+  });
+
+  it('is invariant to target amplitude scaling and DC offset', () => {
+    const reference = createPatternSignal(300);
+    const delay = 29 * AUTO_SYNC_FRAME_SIZE;
+    const baseline = crossCorrelate(reference, delaySignal(reference, delay), delay * 2);
+    const transformed = crossCorrelate(
+      reference,
+      delaySignal(reference, delay, 0.23, 0.4),
+      delay * 2,
+    );
+
+    expect(transformed.lagSamples).toBe(baseline.lagSamples);
+    expect(transformed.confidence).toBeCloseTo(baseline.confidence, 5);
+  });
+
+  it('normalizes unequal lengths over their actual overlap', () => {
+    const reference = createPatternSignal(500);
+    const excerptStart = 145 * AUTO_SYNC_FRAME_SIZE;
+    const target = reference.slice(excerptStart, excerptStart + 180 * AUTO_SYNC_FRAME_SIZE);
+
+    const result = crossCorrelate(reference, target, 200 * AUTO_SYNC_FRAME_SIZE);
+
+    expect(result.lagSamples).toBe(excerptStart);
+    expect(result.confidence).toBeCloseTo(1, 5);
+  });
+
+  it('returns zero confidence for silence, DC-only audio, and near-silence', () => {
+    const active = createPatternSignal(100);
+    const silent = new Float32Array(active.length);
+    const dcOnly = new Float32Array(active.length).fill(0.4);
+    const nearSilent = Float32Array.from(active, (sample) => sample * 1e-7);
+
+    expect(crossCorrelate(silent, active, AUTO_SYNC_FRAME_SIZE)).toEqual({
+      lagSamples: 0,
+      confidence: 0,
+    });
+    expect(crossCorrelate(dcOnly, active, AUTO_SYNC_FRAME_SIZE)).toEqual({
+      lagSamples: 0,
+      confidence: 0,
+    });
+    expect(crossCorrelate(nearSilent, active, AUTO_SYNC_FRAME_SIZE)).toEqual({
+      lagSamples: 0,
+      confidence: 0,
+    });
+  });
+
+  it('reports zero confidence for an ambiguous constant tone', () => {
+    const tone = new Float32Array(SAMPLE_RATE * 2);
+    for (let i = 0; i < tone.length; i++) {
+      tone[i] = Math.sin((2 * Math.PI * 440 * i) / SAMPLE_RATE);
     }
+    const delayed = delaySignal(tone, AUTO_SYNC_FRAME_SIZE);
 
-    const { lagSamples, confidence } = crossCorrelate(reference, target, SR);
-
-    // The reference leads the target by `delay` samples, which corresponds to a
-    // best lag of -delay under this convention (offsetSeconds = -lag / rate > 0).
-    expect(lagSamples).toBe(-delay);
-    expect(confidence).toBeGreaterThan(0);
-    expect(confidence).toBeLessThanOrEqual(1);
+    expect(crossCorrelate(tone, delayed, SAMPLE_RATE).confidence).toBeLessThan(0.15);
   });
 
-  it('returns lag 0 and full confidence for identical signals', () => {
-    const len = 2000;
-    const signal = new Float32Array(len);
-    for (let i = 0; i < len; i++) {
-      signal[i] = Math.sin(i * 0.13);
-    }
+  it('never returns a quantized lag beyond a sub-frame requested bound', () => {
+    const reference = createPatternSignal(100);
+    const target = delaySignal(reference, AUTO_SYNC_FRAME_SIZE);
 
-    const { lagSamples, confidence } = crossCorrelate(signal, signal.slice(), 200);
-
-    expect(lagSamples).toBe(0);
-    expect(confidence).toBeCloseTo(1, 5);
+    expect(crossCorrelate(reference, target, AUTO_SYNC_FRAME_SIZE - 1).lagSamples).toBe(0);
   });
 
-  it('returns zero confidence when a signal has no energy', () => {
-    const silent = new Float32Array(1000);
-    const active = new Float32Array(1000).fill(0.5);
+  it('keeps maximum-duration work within the explicit operation budget', () => {
+    const dimensions = getCorrelationDimensions(
+      AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
+      AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
+      AUTO_SYNC_MAX_LAG_SAMPLES,
+    );
 
-    expect(crossCorrelate(silent, active, 100)).toEqual({ lagSamples: 0, confidence: 0 });
-    expect(crossCorrelate(active, silent, 100)).toEqual({ lagSamples: 0, confidence: 0 });
+    expect(dimensions.referenceEnvelopeSamples).toBe(15_000);
+    expect(dimensions.maxLagEnvelopeSamples).toBe(500);
+    expect(dimensions.candidateLags).toBe(1_001);
+    expect(dimensions.maximumCorrelationTerms).toBe(AUTO_SYNC_MAX_CORRELATION_TERMS);
+    expect(() =>
+      getCorrelationDimensions(
+        AUTO_SYNC_MAX_ANALYSIS_SAMPLES + 1,
+        AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
+        AUTO_SYNC_MAX_LAG_SAMPLES,
+      ),
+    ).toThrow('5-minute');
   });
 
-  it('never searches beyond the requested maximum lag', () => {
-    const reference = new Float32Array(500).fill(1);
-    const target = new Float32Array(500).fill(1);
-
-    const maxLag = 10;
-    const { lagSamples } = crossCorrelate(reference, target, maxLag);
-
-    expect(Math.abs(lagSamples)).toBeLessThanOrEqual(maxLag);
+  it('validates worker payload type, arrays, lengths, and lag bounds', () => {
+    const signal = createPatternSignal(50);
+    expect(
+      parseCorrelationRequest({
+        type: 'correlate',
+        reference: signal,
+        target: signal,
+        maxLagSamples: AUTO_SYNC_FRAME_SIZE,
+      }),
+    ).toMatchObject({ type: 'correlate' });
+    expect(() => parseCorrelationRequest({ type: 'unknown' })).toThrow(
+      'Unsupported auto-sync worker message type',
+    );
+    expect(() =>
+      parseCorrelationRequest({
+        type: 'correlate',
+        reference: [],
+        target: signal,
+        maxLagSamples: 0,
+      }),
+    ).toThrow('Float32Array');
+    expect(() =>
+      parseCorrelationRequest({
+        type: 'correlate',
+        reference: createPatternSignal(49),
+        target: signal,
+        maxLagSamples: 0,
+      }),
+    ).toThrow('at least 1 second');
+    expect(() =>
+      parseCorrelationRequest({
+        type: 'correlate',
+        reference: signal,
+        target: signal,
+        maxLagSamples: AUTO_SYNC_MAX_LAG_SAMPLES + 1,
+      }),
+    ).toThrow('cannot exceed 10 seconds');
   });
 });
