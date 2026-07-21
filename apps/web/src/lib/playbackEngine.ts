@@ -423,6 +423,7 @@ export class PlaybackEngine {
     tracks: TimelineTrack[],
     projectDuration = this.state.projectDuration,
   ): Promise<void> {
+    const operationGeneration = this.operationGeneration;
     const previousTracks = new Map(this.currentTracks.map((track) => [track.id, track]));
     const nextTracks = new Map(tracks.map((track) => [track.id, track]));
     const mixChanges = tracks.filter((track) => {
@@ -452,6 +453,7 @@ export class PlaybackEngine {
       if (this.activeNodes.has(track.id)) {
         this.updateTrackVolume(track.id, this.currentTracks);
       }
+    }
 
     const currentPosition = this.getCurrentPlaybackPosition();
     const missingTracks = [...addedTracks, ...structuralChanges, ...mixChanges].filter(
@@ -479,39 +481,23 @@ export class PlaybackEngine {
       );
     }
 
-      const hasPendingRestart =
-        this.state.isStarting || this.loopRestartGeneration === operationGeneration;
-      if (
-        hasPendingRestart &&
-        (structuralChanges.length > 0 || removedTrackIds.length > 0 || missingTracks.length > 0)
-      ) {
-        restartingPlayback = true;
-        await this.play(
-          this.currentTracks,
-          currentPosition,
-          projectDuration,
-          this.state.loopEnabled,
-        );
-        return;
-      }
-
-      if (missingTracks.length > 0) {
-        await this.scheduleMissingTracks(missingTracks);
-      }
-    } catch (error) {
-      if (restartingPlayback) throw error;
-      if (
-        !this.isCurrentOperation(operationGeneration) ||
-        (!this.state.isPlaying && !this.state.isStarting)
-      ) {
-        return;
-      }
-
-      this.failInternalPlayback(
-        operationGeneration,
-        this.toPlaybackError(error, 'SCHEDULE_FAILED', 'Unable to synchronize audio playback.'),
+    const hasPendingRestart =
+      this.state.isStarting || this.loopRestartGeneration === operationGeneration;
+    if (
+      hasPendingRestart &&
+      (structuralChanges.length > 0 || removedTracks.length > 0 || missingTracks.length > 0)
+    ) {
+      await this.play(
+        this.currentTracks,
+        currentPosition,
+        projectDuration,
+        this.state.loopEnabled,
       );
+      return;
     }
+
+    if (missingTracks.length === 0) return;
+    await this.scheduleMissingTracks(missingTracks);
   }
 
   private async scheduleMissingTracks(tracks: TimelineTrack[]) {
@@ -538,7 +524,10 @@ export class PlaybackEngine {
           buffer: await this.loadBuffer(track.sourceUrl),
         })),
       );
-      if (!this.isCurrentOperation(operationGeneration) || !this.state.isPlaying) {
+      if (
+        !this.isCurrentOperation(operationGeneration) ||
+        !this.state.isPlaying
+      ) {
         return;
       }
 
@@ -567,12 +556,16 @@ export class PlaybackEngine {
           !currentTrack ||
           currentTrack.sourceUrl !== track.sourceUrl ||
           currentTrack.muted ||
-          currentTrack.sourceUrl !== track.sourceUrl ||
           this.activeNodes.has(track.id)
         ) {
           continue;
         }
-        this.scheduleTrack(ctx, { track: currentTrack, buffer }, currentPosition, anchorTime);
+        this.scheduleTrack(
+          ctx,
+          { track: currentTrack, buffer },
+          currentPosition,
+          anchorTime,
+        );
       }
 
       if (activeFailures.length === 1) {
@@ -621,6 +614,15 @@ export class PlaybackEngine {
     );
   }
 
+  private isTrackSourceCurrent(track: TimelineTrack, generation: number) {
+    const currentTrack = this.currentTracks.find((candidate) => candidate.id === track.id);
+    return (
+      this.isCurrentOperation(generation) &&
+      currentTrack?.sourceUrl === track.sourceUrl &&
+      !currentTrack.muted
+    );
+  }
+
   updateTrackVolume(trackId: string, tracks: TimelineTrack[]) {
     const track = tracks.find((candidate) => candidate.id === trackId);
     if (!track) return;
@@ -638,7 +640,7 @@ export class PlaybackEngine {
     }
   }
 
-  private getCurrentPlaybackPosition(projectDuration = this.state.projectDuration) {
+  private getCurrentPlaybackPosition() {
     if (
       !this.state.isPlaying ||
       !this.audioContext ||
@@ -650,7 +652,7 @@ export class PlaybackEngine {
     const elapsed = this.audioContext.currentTime - this.startContextTime;
     return Math.min(
       this.startPlayheadPosition + Math.max(elapsed, 0),
-      projectDuration,
+      this.state.projectDuration,
     );
   }
 
