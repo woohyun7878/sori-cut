@@ -220,14 +220,21 @@ function PreviewWorkspace() {
     const player = videoRef.current;
     if (!player) return;
 
-    const wasEnded = player.ended;
-    if (Math.abs(player.currentTime - playheadPosition) > 0.35) {
-      player.currentTime = Math.min(playheadPosition, player.duration || playheadPosition);
+    const mediaDuration = Number.isFinite(player.duration)
+      ? player.duration
+      : (video?.duration ?? playheadPosition);
+    const nextTime = Math.min(playheadPosition, mediaDuration);
+    if (Math.abs(player.currentTime - nextTime) <= 0.35) {
+      return;
     }
-    if (wasEnded && isPlaying && playheadPosition < 0.35) {
+
+    const shouldResumeFromEnd = player.ended && isPlaying && nextTime < mediaDuration;
+    syncingVideoRef.current = true;
+    player.currentTime = nextTime;
+    if (shouldResumeFromEnd) {
       void player.play().catch(() => setIsPlaying(false));
     }
-  }, [isPlaying, playheadPosition, setIsPlaying]);
+  }, [isPlaying, playheadPosition, setIsPlaying, video?.duration]);
 
   useEffect(() => {
     const player = videoRef.current;
@@ -294,7 +301,13 @@ function PreviewWorkspace() {
               onPause={(event) => {
                 if (!event.currentTarget.ended) setIsPlaying(false);
               }}
-              onSeeked={(event) => setPlayheadPosition(event.currentTarget.currentTime)}
+              onSeeked={(event) => {
+                if (syncingVideoRef.current) {
+                  syncingVideoRef.current = false;
+                  return;
+                }
+                setPlayheadPosition(event.currentTarget.currentTime);
+              }}
             />
           ) : (
             <div className="studio-preview-empty">

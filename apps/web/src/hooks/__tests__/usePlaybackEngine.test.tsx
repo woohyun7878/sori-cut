@@ -189,6 +189,12 @@ describe('usePlaybackEngine', () => {
     render(<Harness />);
     const engine = playbackMocks.instances[0];
     await waitFor(() => expect(engine.play).toHaveBeenCalledTimes(1));
+    expect(engine.syncTracks).not.toHaveBeenCalled();
+
+    act(() => {
+      useProjectStore.getState().updateTrack('track-1', { name: 'Renamed' });
+    });
+    expect(engine.syncTracks).not.toHaveBeenCalled();
 
     act(() => {
       useProjectStore.setState({ tracks: [{ ...track, volume: 0.25 }] });

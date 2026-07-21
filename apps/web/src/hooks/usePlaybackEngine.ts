@@ -69,8 +69,12 @@ export function usePlaybackEngine() {
   const videoRef = useRef(video);
   const trackMixRef = useRef(snapshotTrackMix(tracks));
 
-  useEffect(() => { playheadRef.current = playheadPosition; }, [playheadPosition]);
-  useEffect(() => { videoRef.current = video; }, [video]);
+  useEffect(() => {
+    playheadRef.current = playheadPosition;
+  }, [playheadPosition]);
+  useEffect(() => {
+    videoRef.current = video;
+  }, [video]);
 
   const getEngine = useCallback(() => {
     if (!engineRef.current) {
@@ -172,17 +176,6 @@ export function usePlaybackEngine() {
       .seek(tracksRef.current, playheadPosition, duration, loopEnabledRef.current)
       .catch(handlePlaybackError);
   }, [playheadPosition, getEngine, handlePlaybackError]);
-
-  useEffect(() => {
-    const nextMix = snapshotTrackMix(tracks);
-    const mixChanged = hasMeaningfulTrackMixChange(trackMixRef.current, nextMix);
-    trackMixRef.current = nextMix;
-    if (!mixChanged) return;
-
-    const engine = getEngine();
-    const duration = calculateProjectDuration(tracks, videoRef.current);
-    void engine.updateTracks(tracks, duration).catch(handlePlaybackError);
-  }, [tracks, getEngine, handlePlaybackError]);
 
   // Preload buffers when tracks change
   useEffect(() => {
