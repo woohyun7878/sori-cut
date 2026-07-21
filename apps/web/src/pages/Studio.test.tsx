@@ -606,38 +606,45 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
-  it('does not start non-ended video when the project target is beyond its duration', () => {
-    storeState.video = {
-      id: 'video-1',
-      name: 'preview.mp4',
-      blob: new Blob(),
-      url: 'blob:preview',
-      duration: 2,
-      width: 1080,
-      height: 1920,
-    };
-    storeState.playheadPosition = 5;
-    const view = render(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
-    const player = document.querySelector('video') as HTMLVideoElement;
-    Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
-    Object.defineProperty(player, 'ended', { configurable: true, value: false });
-    player.currentTime = 2;
-    vi.clearAllMocks();
+  it.each([
+    { target: 2, expectedPlayCalls: 0 },
+    { target: 5, expectedPlayCalls: 0 },
+    { target: 1.995, expectedPlayCalls: 1 },
+  ])(
+    'handles non-ended video at project target $target without crossing its duration',
+    ({ target, expectedPlayCalls }) => {
+      storeState.video = {
+        id: 'video-1',
+        name: 'preview.mp4',
+        blob: new Blob(),
+        url: 'blob:preview',
+        duration: 2,
+        width: 1080,
+        height: 1920,
+      };
+      storeState.playheadPosition = target;
+      const view = render(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      const player = document.querySelector('video') as HTMLVideoElement;
+      Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
+      Object.defineProperty(player, 'ended', { configurable: true, value: false });
+      player.currentTime = Math.min(target, 2);
+      vi.clearAllMocks();
 
-    storeState.isPlaying = true;
-    view.rerender(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
+      storeState.isPlaying = true;
+      view.rerender(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
 
-    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
-    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
-  });
+      expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(expectedPlayCalls);
+      expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([{ newDuration: 3 }, { newDuration: 2 }])(
     'resynchronizes a replacement with duration $newDuration and ignores the old seeked event',
