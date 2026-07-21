@@ -343,6 +343,50 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
+  it('clears a queued target when the newest target returns to the in-flight seek', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 3,
+      width: 1080,
+      height: 1920,
+    };
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
+    let currentTime = 0;
+    const assignments: number[] = [];
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (value: number) => {
+        currentTime = value;
+        assignments.push(value);
+      },
+    });
+    vi.clearAllMocks();
+
+    for (const target of [1, 1.5, 1]) {
+      storeState.playheadPosition = target;
+      view.rerender(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+    }
+
+    expect(assignments).toEqual([1]);
+    fireEvent.seeked(player);
+    expect(assignments).toEqual([1]);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
   it('lets a user seek override a pending programmatic seek and ignores its stale event', () => {
     storeState.video = {
       id: 'video-1',
@@ -379,6 +423,98 @@ describe('Studio shell', () => {
     player.currentTime = 1.5;
     fireEvent.seeked(player);
     expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an ended shorter video stopped when project playback resumes beyond it', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 2,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.playheadPosition = 5;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(player, 'duration', { configurable: true, value: 2 });
+    Object.defineProperty(player, 'ended', { configurable: true, value: true });
+    player.currentTime = 2;
+    vi.mocked(HTMLMediaElement.prototype.play).mockImplementation(() => {
+      player.currentTime = 0;
+      fireEvent.seeked(player);
+      return Promise.resolve();
+    });
+    vi.clearAllMocks();
+
+    storeState.isPlaying = true;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+    expect(player.currentTime).toBe(2);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+  });
+
+  it('resynchronizes a same-duration video replacement and ignores the old seeked event', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'old-preview.mp4',
+      blob: new Blob(),
+      url: 'blob:old-preview',
+      duration: 3,
+      width: 1080,
+      height: 1920,
+    };
+    storeState.isPlaying = true;
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const oldPlayer = document.querySelector('video') as HTMLVideoElement;
+    Object.defineProperty(oldPlayer, 'duration', { configurable: true, value: 3 });
+    oldPlayer.currentTime = 0;
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1.5;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(oldPlayer.currentTime).toBe(1.5);
+
+    storeState.video = {
+      ...storeState.video,
+      id: 'video-2',
+      name: 'new-preview.mp4',
+      url: 'blob:new-preview',
+    };
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const newPlayer = document.querySelector('video') as HTMLVideoElement;
+
+    expect(newPlayer).not.toBe(oldPlayer);
+    expect(newPlayer.currentTime).toBe(1.5);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    fireEvent.seeked(oldPlayer);
+    expect(newPlayer.currentTime).toBe(1.5);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+
+    fireEvent.seeked(newPlayer);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DropZone } from '../components/DropZone';
 import { ProjectManager } from '../components/ProjectManager';
@@ -207,7 +207,10 @@ function SyncSummary() {
 
 function PreviewWorkspace() {
   const video = useProjectStore((state) => state.video);
+  const videoIdentity = video ? `${video.id}:${video.url}` : null;
   const videoRef = useRef<HTMLVideoElement>(null);
+  const activeVideoIdentityRef = useRef(videoIdentity);
+  const previousVideoIdentityRef = useRef(videoIdentity);
   const staleVideoSeekTargetRef = useRef<number | null>(null);
   const pendingVideoSeekRef = useRef<{
     target: number;
@@ -224,9 +227,7 @@ function PreviewWorkspace() {
     (player: HTMLVideoElement, target: number) => {
       const pending = pendingVideoSeekRef.current;
       if (pending) {
-        if (Math.abs(pending.target - target) > 0.01) {
-          pending.queuedTarget = target;
-        }
+        pending.queuedTarget = Math.abs(pending.target - target) > 0.01 ? target : null;
         return;
       }
       if (Math.abs(player.currentTime - target) <= 0.01) return;
@@ -236,6 +237,15 @@ function PreviewWorkspace() {
     },
     [],
   );
+
+  useLayoutEffect(() => {
+    activeVideoIdentityRef.current = videoIdentity;
+    if (previousVideoIdentityRef.current === videoIdentity) return;
+
+    previousVideoIdentityRef.current = videoIdentity;
+    pendingVideoSeekRef.current = null;
+    staleVideoSeekTargetRef.current = null;
+  }, [videoIdentity]);
 
   useEffect(() => {
     const player = videoRef.current;
@@ -252,7 +262,7 @@ function PreviewWorkspace() {
       return;
     }
 
-    if (Math.abs(player.currentTime - target) > 0.35) {
+    if (pendingVideoSeekRef.current || Math.abs(player.currentTime - target) > 0.35) {
       seekVideoProgrammatically(player, target);
     }
   }, [
@@ -261,6 +271,7 @@ function PreviewWorkspace() {
     seekVideoProgrammatically,
     setIsPlaying,
     video?.duration,
+    videoIdentity,
   ]);
 
   useEffect(() => {
@@ -270,11 +281,12 @@ function PreviewWorkspace() {
     }
 
     if (isPlaying) {
+      if (player.ended) return;
       void player.play().catch(() => setIsPlaying(false));
     } else {
       player.pause();
     }
-  }, [isPlaying, setIsPlaying]);
+  }, [isPlaying, setIsPlaying, videoIdentity]);
 
   return (
     <section className="studio-preview" aria-label="Preview workspace">
@@ -319,6 +331,7 @@ function PreviewWorkspace() {
         <div className="studio-device-frame" style={{ transform: `scale(${previewZoom})` }}>
           {video ? (
             <video
+              key={videoIdentity}
               ref={videoRef}
               className="h-full w-full bg-black object-contain"
               src={video.url}
@@ -329,6 +342,8 @@ function PreviewWorkspace() {
                 if (!event.currentTarget.ended) setIsPlaying(false);
               }}
               onSeeked={(event) => {
+                if (activeVideoIdentityRef.current !== videoIdentity) return;
+
                 const player = event.currentTarget;
                 const pending = pendingVideoSeekRef.current;
                 if (pending && Math.abs(player.currentTime - pending.target) <= 0.05) {
