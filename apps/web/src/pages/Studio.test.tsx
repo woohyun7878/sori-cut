@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Studio } from './Studio';
@@ -387,7 +387,7 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
-  it('lets a user seek override a pending programmatic seek and ignores its stale event', () => {
+  it('ignores a retired programmatic event without swallowing a fresh user seek at its target', () => {
     storeState.video = {
       id: 'video-1',
       name: 'preview.mp4',
@@ -416,13 +416,25 @@ describe('Studio shell', () => {
     expect(player.currentTime).toBe(1.5);
 
     player.currentTime = 0.5;
+    fireEvent.seeking(player);
     fireEvent.seeked(player);
     expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(1);
     expect(storeState.setPlayheadPosition).toHaveBeenCalledWith(0.5);
 
+    player.currentTime = 0.75;
+    fireEvent.seeking(player);
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(2);
+    expect(storeState.setPlayheadPosition).toHaveBeenLastCalledWith(0.75);
+
     player.currentTime = 1.5;
     fireEvent.seeked(player);
-    expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(1);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(2);
+
+    fireEvent.seeking(player);
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(3);
+    expect(storeState.setPlayheadPosition).toHaveBeenLastCalledWith(1.5);
   });
 
   it('leaves an ended shorter video stopped when project playback resumes beyond it', () => {
@@ -464,7 +476,64 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
-  it('resynchronizes a same-duration video replacement and ignores the old seeked event', () => {
+  it.each([{ newDuration: 3 }, { newDuration: 2 }])(
+    'resynchronizes a replacement with duration $newDuration and ignores the old seeked event',
+    ({ newDuration }) => {
+      storeState.video = {
+        id: 'video-1',
+        name: 'old-preview.mp4',
+        blob: new Blob(),
+        url: 'blob:old-preview',
+        duration: 3,
+        width: 1080,
+        height: 1920,
+      };
+      storeState.isPlaying = true;
+      const view = render(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      const oldPlayer = document.querySelector('video') as HTMLVideoElement;
+      Object.defineProperty(oldPlayer, 'duration', { configurable: true, value: 3 });
+      oldPlayer.currentTime = 0;
+      vi.clearAllMocks();
+
+      storeState.playheadPosition = 1.5;
+      view.rerender(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      expect(oldPlayer.currentTime).toBe(1.5);
+
+      storeState.video = {
+        ...storeState.video,
+        id: 'video-2',
+        name: 'new-preview.mp4',
+        url: 'blob:new-preview',
+        duration: newDuration,
+      };
+      view.rerender(
+        <MemoryRouter>
+          <Studio />
+        </MemoryRouter>,
+      );
+      const newPlayer = document.querySelector('video') as HTMLVideoElement;
+
+      expect(newPlayer).not.toBe(oldPlayer);
+      expect(newPlayer.currentTime).toBe(1.5);
+      expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+      fireEvent.seeked(oldPlayer);
+      expect(newPlayer.currentTime).toBe(1.5);
+      expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+
+      fireEvent.seeked(newPlayer);
+      expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+    },
+  );
+
+  it('ignores a play rejection from the replaced video source', async () => {
     storeState.video = {
       id: 'video-1',
       name: 'old-preview.mp4',
@@ -475,23 +544,18 @@ describe('Studio shell', () => {
       height: 1920,
     };
     storeState.isPlaying = true;
+    let rejectOldPlay: (reason?: unknown) => void = () => undefined;
+    vi.mocked(HTMLMediaElement.prototype.play).mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectOldPlay = reject;
+        }),
+    );
     const view = render(
       <MemoryRouter>
         <Studio />
       </MemoryRouter>,
     );
-    const oldPlayer = document.querySelector('video') as HTMLVideoElement;
-    Object.defineProperty(oldPlayer, 'duration', { configurable: true, value: 3 });
-    oldPlayer.currentTime = 0;
-    vi.clearAllMocks();
-
-    storeState.playheadPosition = 1.5;
-    view.rerender(
-      <MemoryRouter>
-        <Studio />
-      </MemoryRouter>,
-    );
-    expect(oldPlayer.currentTime).toBe(1.5);
 
     storeState.video = {
       ...storeState.video,
@@ -504,17 +568,14 @@ describe('Studio shell', () => {
         <Studio />
       </MemoryRouter>,
     );
-    const newPlayer = document.querySelector('video') as HTMLVideoElement;
+    vi.clearAllMocks();
 
-    expect(newPlayer).not.toBe(oldPlayer);
-    expect(newPlayer.currentTime).toBe(1.5);
-    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
-    fireEvent.seeked(oldPlayer);
-    expect(newPlayer.currentTime).toBe(1.5);
-    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+    await act(async () => {
+      rejectOldPlay(new Error('Old source was replaced'));
+      await Promise.resolve();
+    });
 
-    fireEvent.seeked(newPlayer);
-    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+    expect(storeState.setIsPlaying).not.toHaveBeenCalled();
   });
 
   it.each([
