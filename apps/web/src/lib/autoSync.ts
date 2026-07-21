@@ -213,34 +213,227 @@ function inspectWaveMemory(buffer: ArrayBuffer): {
   let sampleRate = 0;
   let channels = 0;
   let byteRate = 0;
+  let blockAlign = 0;
+  let bitsPerSample = 0;
+  let formatTag = 0;
   let dataBytes = 0;
+  let formatChunkCount = 0;
+  let dataChunkCount = 0;
+  const riffEnd = view.getUint32(4, true) + 8;
+  if (riffEnd !== buffer.byteLength) {
+    return null;
+  }
   let offset = 12;
-  while (offset + 8 <= buffer.byteLength) {
+  while (offset + 8 <= riffEnd) {
     const chunkType = readFourCc(view, offset);
     const chunkBytes = view.getUint32(offset + 4, true);
     const chunkDataOffset = offset + 8;
-    if (chunkType === 'fmt ' && chunkDataOffset + 16 <= buffer.byteLength) {
+    const chunkEnd = chunkDataOffset + chunkBytes;
+    const paddedChunkEnd = chunkEnd + (chunkBytes % 2);
+    if (!Number.isSafeInteger(paddedChunkEnd) || paddedChunkEnd > riffEnd) {
+      return null;
+    }
+    if (chunkType === 'fmt ') {
+      formatChunkCount++;
+      if (formatChunkCount > 1 || chunkBytes < 16) {
+        return null;
+      }
+      formatTag = view.getUint16(chunkDataOffset, true);
       channels = view.getUint16(chunkDataOffset + 2, true);
       sampleRate = view.getUint32(chunkDataOffset + 4, true);
       byteRate = view.getUint32(chunkDataOffset + 8, true);
+      blockAlign = view.getUint16(chunkDataOffset + 12, true);
+      bitsPerSample = view.getUint16(chunkDataOffset + 14, true);
     } else if (chunkType === 'data') {
+      dataChunkCount++;
+      if (dataChunkCount > 1 || formatChunkCount !== 1) {
+        return null;
+      }
       dataBytes = chunkBytes;
     }
-    const nextOffset = chunkDataOffset + chunkBytes + (chunkBytes % 2);
-    if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) {
-      break;
-    }
-    offset = nextOffset;
+    offset = paddedChunkEnd;
   }
 
-  if (sampleRate <= 0 || channels <= 0 || byteRate <= 0 || dataBytes <= 0) {
+  const expectedBlockAlign = channels * (bitsPerSample / 8);
+  const supportedSampleWidth =
+    (formatTag === 1 && [8, 16, 24, 32].includes(bitsPerSample)) ||
+    (formatTag === 3 && [32, 64].includes(bitsPerSample));
+  if (
+    (formatTag !== 1 && formatTag !== 3) ||
+    formatChunkCount !== 1 ||
+    dataChunkCount !== 1 ||
+    offset !== riffEnd ||
+    !supportedSampleWidth ||
+    sampleRate <= 0 ||
+    channels <= 0 ||
+    bitsPerSample <= 0 ||
+    bitsPerSample % 8 !== 0 ||
+    blockAlign !== expectedBlockAlign ||
+    byteRate !== sampleRate * blockAlign ||
+    dataBytes <= 0 ||
+    dataBytes % blockAlign !== 0
+  ) {
     return null;
   }
-  const duration = dataBytes / byteRate;
+  const frameCount = dataBytes / blockAlign;
+  const duration = frameCount / sampleRate;
+  const decodedSampleRate = Math.max(sampleRate, AUTO_SYNC_ANALYSIS_SAMPLE_RATE);
+  const decodedFrameCount = Math.ceil(duration * decodedSampleRate);
   return {
     duration,
-    decodedBytes: Math.ceil(duration * sampleRate * channels * Float32Array.BYTES_PER_ELEMENT),
+    decodedBytes: decodedFrameCount * channels * Float32Array.BYTES_PER_ELEMENT,
   };
+}
+
+export interface EncodedAudioMemory {
+  format: 'wav' | 'mp3';
+  duration: number;
+  decodedBytes: number;
+}
+
+function inspectMpegAudio(buffer: ArrayBuffer): EncodedAudioMemory | null {
+  const bytes = new Uint8Array(buffer);
+  let offset = 0;
+  if (bytes.length >= 10 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    const majorVersion = bytes[3];
+    const revision = bytes[4];
+    const flags = bytes[5];
+    const allowedFlags = majorVersion === 3 ? 0xe0 : majorVersion === 4 ? 0xf0 : 0;
+    if (
+      allowedFlags === 0 ||
+      revision === 0xff ||
+      (flags & ~allowedFlags) !== 0 ||
+      (flags & 0x40) !== 0 ||
+      (majorVersion !== 4 && (flags & 0x10) !== 0)
+    ) {
+      return null;
+    }
+    if ([bytes[6], bytes[7], bytes[8], bytes[9]].some((value) => (value & 0x80) !== 0)) {
+      return null;
+    }
+    const tagBytes =
+      ((bytes[6] & 0x7f) << 21) |
+      ((bytes[7] & 0x7f) << 14) |
+      ((bytes[8] & 0x7f) << 7) |
+      (bytes[9] & 0x7f);
+    const footerBytes = (bytes[5] & 0x10) !== 0 ? 10 : 0;
+    const footerOffset = 10 + tagBytes;
+    offset = footerOffset + footerBytes;
+    if (offset > bytes.length) {
+      return null;
+    }
+    if (
+      footerBytes > 0 &&
+      (bytes[footerOffset] !== 0x33 ||
+        bytes[footerOffset + 1] !== 0x44 ||
+        bytes[footerOffset + 2] !== 0x49 ||
+        bytes[footerOffset + 3] !== majorVersion ||
+        bytes[footerOffset + 4] !== revision ||
+        bytes[footerOffset + 5] !== flags ||
+        ![6, 7, 8, 9].every((index) => bytes[footerOffset + index] === bytes[index]))
+    ) {
+      return null;
+    }
+  }
+
+  const sampleRates = [44_100, 48_000, 32_000];
+  const layerThreeBitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+  const parseFrame = (
+    frameOffset: number,
+  ): { channels: number; frameBytes: number; sampleRate: number } | null => {
+    if (
+      frameOffset + 4 > bytes.length ||
+      bytes[frameOffset] !== 0xff ||
+      (bytes[frameOffset + 1] & 0xe0) !== 0xe0
+    ) {
+      return null;
+    }
+    const version = (bytes[frameOffset + 1] >> 3) & 0x03;
+    const layer = (bytes[frameOffset + 1] >> 1) & 0x03;
+    const bitrateIndex = (bytes[frameOffset + 2] >> 4) & 0x0f;
+    const sampleRateIndex = (bytes[frameOffset + 2] >> 2) & 0x03;
+    if (
+      version !== 3 ||
+      layer !== 1 ||
+      bitrateIndex === 0 ||
+      bitrateIndex === 0x0f ||
+      sampleRateIndex === 3 ||
+      (bytes[frameOffset + 3] & 0x03) === 0x02
+    ) {
+      return null;
+    }
+    const sampleRate = sampleRates[sampleRateIndex];
+    const bitrate = layerThreeBitrates[bitrateIndex];
+    const padding = (bytes[frameOffset + 2] >> 1) & 0x01;
+    const frameBytes = Math.floor((144_000 * bitrate) / sampleRate) + padding;
+    if (frameBytes <= 4 || frameOffset + frameBytes > bytes.length) {
+      return null;
+    }
+    return {
+      channels: bytes[frameOffset + 3] >> 6 === 3 ? 1 : 2,
+      frameBytes,
+      sampleRate,
+    };
+  };
+
+  let channels = 0;
+  let frameCount = 0;
+  let sampleRate = 0;
+  while (offset < bytes.length) {
+    if (
+      bytes.length - offset === 128 &&
+      bytes[offset] === 0x54 &&
+      bytes[offset + 1] === 0x41 &&
+      bytes[offset + 2] === 0x47
+    ) {
+      offset = bytes.length;
+      break;
+    }
+    const frame = parseFrame(offset);
+    if (
+      !frame ||
+      (frameCount > 0 && (frame.sampleRate !== sampleRate || frame.channels !== channels))
+    ) {
+      return null;
+    }
+    sampleRate = frame.sampleRate;
+    channels = frame.channels;
+    frameCount++;
+    offset += frame.frameBytes;
+  }
+  if (frameCount < 2 || offset !== bytes.length) {
+    return null;
+  }
+  const sampleFrames = frameCount * 1152;
+  return {
+    format: 'mp3',
+    duration: sampleFrames / sampleRate,
+    decodedBytes: sampleFrames * channels * Float32Array.BYTES_PER_ELEMENT,
+  };
+}
+
+export function inspectEncodedAudioMemory(
+  buffer: ArrayBuffer,
+  _metadataDuration: number,
+): EncodedAudioMemory {
+  const bytes = new Uint8Array(buffer);
+  const wave = inspectWaveMemory(buffer);
+  if (wave) {
+    return { format: 'wav', ...wave };
+  }
+  if (
+    bytes.length >= 12 &&
+    readFourCc(new DataView(buffer), 0) === 'RIFF' &&
+    readFourCc(new DataView(buffer), 8) === 'WAVE'
+  ) {
+    throw new Error('Auto-sync could not safely inspect WAV metadata');
+  }
+
+  const mp3 = inspectMpegAudio(buffer);
+  if (mp3) {
+    return mp3;
+  }
+  throw new Error('Auto-sync cannot safely inspect this audio format; use PCM/float WAV or MP3');
 }
 
 function raceWithAbort<T>(
@@ -342,15 +535,16 @@ async function decodeToMono(
     declaredBytes,
   );
   throwIfAborted(signal);
+  const encodedBytes = arrayBuffer.byteLength;
 
-  const waveMemory = inspectWaveMemory(arrayBuffer);
-  if (waveMemory?.duration && waveMemory.duration > AUTO_SYNC_MAX_DURATION_SECONDS) {
+  const encodedMemory = inspectEncodedAudioMemory(arrayBuffer, metadataDuration);
+  if (encodedMemory.duration > AUTO_SYNC_MAX_DURATION_SECONDS) {
     throw new Error(
       `${label} audio is too long for auto-sync; the limit is ` +
         `${AUTO_SYNC_MAX_DURATION_SECONDS / 60} minutes`,
     );
   }
-  if (waveMemory?.decodedBytes && waveMemory.decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT) {
+  if (encodedMemory.decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT) {
     throw new Error(
       `${label} audio exceeds the 128 MB decoded-audio memory limit; ` +
         'use a compressed mono or stereo source',
@@ -431,7 +625,7 @@ async function decodeToMono(
 
   return {
     samples: samples.slice(),
-    encodedBytes: arrayBuffer.byteLength,
+    encodedBytes,
   };
 }
 

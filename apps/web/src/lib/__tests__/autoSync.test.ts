@@ -4,6 +4,7 @@ import {
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   computeAutoSyncOffset,
   getUnknownLengthPayloadLimit,
+  inspectEncodedAudioMemory,
   readResponseBuffer,
 } from '../autoSync';
 import {
@@ -18,8 +19,9 @@ import {
 } from '../autoSyncCore';
 
 const SAMPLE_RATE = AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
-const REFERENCE_BYTES = 100;
-const TARGET_BYTES = 200;
+const MP3_FRAME_BYTES = 417;
+const REFERENCE_BYTES = MP3_FRAME_BYTES * 2;
+const TARGET_BYTES = MP3_FRAME_BYTES * 3;
 const MEBIBYTE = 1024 * 1024;
 
 function frameAmplitude(frame: number): number {
@@ -99,8 +101,9 @@ function createWaveHeader(options: {
   sampleRate: number;
   bitsPerSample: number;
   dataBytes: number;
+  formatTag?: 1 | 3;
 }): ArrayBuffer {
-  const buffer = new ArrayBuffer(44);
+  const buffer = new ArrayBuffer(44 + options.dataBytes);
   const view = new DataView(buffer);
   const writeText = (offset: number, text: string) => {
     for (let i = 0; i < text.length; i++) {
@@ -114,7 +117,7 @@ function createWaveHeader(options: {
   writeText(8, 'WAVE');
   writeText(12, 'fmt ');
   view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
+  view.setUint16(20, options.formatTag ?? 1, true);
   view.setUint16(22, options.channels, true);
   view.setUint32(24, options.sampleRate, true);
   view.setUint32(28, byteRate, true);
@@ -123,6 +126,110 @@ function createWaveHeader(options: {
   writeText(36, 'data');
   view.setUint32(40, options.dataBytes, true);
   return buffer;
+}
+
+function createMp3Buffer(byteLength: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(byteLength);
+  const bytes = new Uint8Array(buffer);
+  for (let offset = 0; offset + MP3_FRAME_BYTES <= byteLength; offset += MP3_FRAME_BYTES) {
+    bytes.set([0xff, 0xfb, 0x90, 0x64], offset);
+  }
+  return buffer;
+}
+
+function createId3Mp3Buffer(version: 3 | 4 = 4, footer = false): ArrayBuffer {
+  const audioOffset = footer ? 20 : 10;
+  const bytes = new Uint8Array(audioOffset + MP3_FRAME_BYTES * 2);
+  const flags = footer ? 0x10 : 0;
+  bytes.set([0x49, 0x44, 0x33, version, 0x00, flags, 0, 0, 0, 0]);
+  if (footer) {
+    bytes.set([0x33, 0x44, 0x49, version, 0x00, flags, 0, 0, 0, 0], 10);
+  }
+  bytes.set([0xff, 0xfb, 0x90, 0x64], audioOffset);
+  bytes.set([0xff, 0xfb, 0x90, 0x64], audioOffset + MP3_FRAME_BYTES);
+  return bytes.buffer;
+}
+
+function createDuplicateFormatWave(): ArrayBuffer {
+  const source = new Uint8Array(
+    createWaveHeader({
+      channels: 1,
+      sampleRate: 8_000,
+      bitsPerSample: 8,
+      dataBytes: 100,
+    }),
+  );
+  const bytes = new Uint8Array(source.length + 24);
+  bytes.set(source.subarray(0, 36), 0);
+  bytes.set(source.subarray(12, 36), 36);
+  bytes.set(source.subarray(36), 60);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(4, bytes.length - 8, true);
+  view.setUint32(52, 32_000, true);
+  view.setUint16(56, 4, true);
+  view.setUint16(58, 32, true);
+  return bytes.buffer;
+}
+
+function createDuplicateDataWave(): ArrayBuffer {
+  const source = new Uint8Array(
+    createWaveHeader({
+      channels: 1,
+      sampleRate: 8_000,
+      bitsPerSample: 8,
+      dataBytes: 100,
+    }),
+  );
+  const bytes = new Uint8Array(source.length + 8);
+  bytes.set(source);
+  bytes.set([0x64, 0x61, 0x74, 0x61], source.length);
+  new DataView(bytes.buffer).setUint32(4, bytes.length - 8, true);
+  return bytes.buffer;
+}
+
+function createDataBeforeFormatWave(): ArrayBuffer {
+  const bytes = new Uint8Array(144);
+  const view = new DataView(bytes.buffer);
+  const writeText = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      bytes[offset + i] = text.charCodeAt(i);
+    }
+  };
+  writeText(0, 'RIFF');
+  view.setUint32(4, bytes.length - 8, true);
+  writeText(8, 'WAVE');
+  writeText(12, 'data');
+  view.setUint32(16, 100, true);
+  writeText(120, 'fmt ');
+  view.setUint32(124, 16, true);
+  view.setUint16(128, 1, true);
+  view.setUint16(130, 1, true);
+  view.setUint32(132, 8_000, true);
+  view.setUint32(136, 8_000, true);
+  view.setUint16(140, 1, true);
+  view.setUint16(142, 8, true);
+  return bytes.buffer;
+}
+
+function createAdtsBuffer(): ArrayBuffer {
+  return Uint8Array.from([0xff, 0xf1, 0x0c, 0x80, 0, 0, 0]).buffer;
+}
+
+function createOggBuffer(codec: 'opus' | 'vorbis', channels = 2): ArrayBuffer {
+  const bytes = new Uint8Array(64);
+  bytes.set([0x4f, 0x67, 0x67, 0x53], 0);
+  bytes[26] = 1;
+  bytes[27] = 32;
+  const packetOffset = 28;
+  if (codec === 'opus') {
+    bytes.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64], packetOffset);
+    bytes[packetOffset + 9] = channels;
+  } else {
+    bytes.set([0x01, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73], packetOffset);
+    bytes[packetOffset + 11] = channels;
+    new DataView(bytes.buffer).setUint32(packetOffset + 12, 48_000, true);
+  }
+  return bytes.buffer;
 }
 
 function createStreamResponse(options: {
@@ -308,7 +415,7 @@ beforeEach(() => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
+        arrayBuffer: async () => createMp3Buffer(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
       };
     }),
   );
@@ -356,6 +463,118 @@ describe('readResponseBuffer', () => {
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+describe('inspectEncodedAudioMemory', () => {
+  it.each([
+    ['mp3', createMp3Buffer(REFERENCE_BYTES)],
+    ['mp3', createId3Mp3Buffer()],
+    ['mp3', createId3Mp3Buffer(3)],
+    ['mp3', createId3Mp3Buffer(4, true)],
+    [
+      'wav',
+      createWaveHeader({
+        channels: 2,
+        sampleRate: 48_000,
+        bitsPerSample: 16,
+        dataBytes: 48_000,
+      }),
+    ],
+    [
+      'wav',
+      createWaveHeader({
+        channels: 2,
+        sampleRate: 48_000,
+        bitsPerSample: 32,
+        dataBytes: 96_000,
+        formatTag: 3,
+      }),
+    ],
+  ] as const)('safely estimates valid %s browser audio', (format, buffer) => {
+    const result = inspectEncodedAudioMemory(buffer, 5);
+
+    expect(result.format).toBe(format);
+    expect(result.decodedBytes).toBeGreaterThan(0);
+    expect(result.decodedBytes).toBeLessThan(AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT);
+  });
+
+  it('accounts for WAV upsampling by the analysis decoder', () => {
+    const buffer = createWaveHeader({
+      channels: 1,
+      sampleRate: 4_000,
+      bitsPerSample: 16,
+      dataBytes: 8_000,
+    });
+
+    expect(inspectEncodedAudioMemory(buffer, 1).decodedBytes).toBe(
+      8_000 * Float32Array.BYTES_PER_ELEMENT,
+    );
+  });
+
+  it('rejects uninspectable formats', () => {
+    const malformedWave = createWaveHeader({
+      channels: 2,
+      sampleRate: 48_000,
+      bitsPerSample: 16,
+      dataBytes: 100,
+    }).slice(0, 44);
+    const outsideRiff = createWaveHeader({
+      channels: 2,
+      sampleRate: 48_000,
+      bitsPerSample: 16,
+      dataBytes: 100,
+    });
+    new DataView(outsideRiff).setUint32(4, 4, true);
+    const invalidFloat = createWaveHeader({
+      channels: 2,
+      sampleRate: 48_000,
+      bitsPerSample: 8,
+      dataBytes: 100,
+      formatTag: 3,
+    });
+    const missingOddPadding = createWaveHeader({
+      channels: 1,
+      sampleRate: 8_000,
+      bitsPerSample: 8,
+      dataBytes: 1,
+    });
+    const embeddedMp3 = new Uint8Array(1000);
+    embeddedMp3.set([0x4f, 0x67, 0x67, 0x53]);
+    embeddedMp3.set([0xff, 0xfb, 0x90, 0x64], 100);
+    embeddedMp3.set([0xff, 0xfb, 0x90, 0x64], 517);
+    const malformedId3 = new Uint8Array(1100);
+    malformedId3.set([0x49, 0x44, 0x33, 0xff, 0xff, 0x00, 0, 0, 0, 0]);
+    malformedId3.set([0xff, 0xfb, 0x90, 0x64], 10);
+    malformedId3.set([0xff, 0xfb, 0x90, 0x64], 427);
+    const extendedId3 = new Uint8Array(createId3Mp3Buffer());
+    extendedId3[5] = 0x40;
+    const badFooter = new Uint8Array(createId3Mp3Buffer(4, true));
+    badFooter[10] = 0;
+    const reservedEmphasis = new Uint8Array(createMp3Buffer(REFERENCE_BYTES));
+    reservedEmphasis[3] = 0x66;
+    reservedEmphasis[MP3_FRAME_BYTES + 3] = 0x66;
+    for (const buffer of [
+      new ArrayBuffer(100),
+      createMp3Buffer(100),
+      createAdtsBuffer(),
+      createOggBuffer('opus'),
+      malformedWave,
+      outsideRiff,
+      invalidFloat,
+      missingOddPadding,
+      embeddedMp3.buffer,
+      malformedId3.buffer,
+      extendedId3.buffer,
+      badFooter.buffer,
+      reservedEmphasis.buffer,
+      createDuplicateFormatWave(),
+      createDuplicateDataWave(),
+      createDataBeforeFormatWave(),
+      createMp3Buffer(MP3_FRAME_BYTES * 2 + 1),
+    ]) {
+      expect(() => inspectEncodedAudioMemory(buffer, 5)).toThrow(/safely inspect/);
+    }
   });
 });
 
@@ -422,7 +641,7 @@ describe('computeAutoSyncOffset', () => {
         ok: true,
         status: 200,
         headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(REFERENCE_BYTES),
+        arrayBuffer: async () => createMp3Buffer(REFERENCE_BYTES),
       })),
     );
     vi.stubGlobal(
@@ -577,10 +796,27 @@ describe('computeAutoSyncOffset', () => {
   it('rejects before decoding a second input that exceeds the aggregate encoded budget', async () => {
     const firstBytes = 40 * MEBIBYTE;
     const secondBytes = 25 * MEBIBYTE;
-    const firstArrayBuffer = vi.fn(async () => new ArrayBuffer(firstBytes));
-    const secondArrayBuffer = vi.fn(async () => new ArrayBuffer(secondBytes));
+    const firstArrayBuffer = vi.fn(async () =>
+      createWaveHeader({
+        channels: 1,
+        sampleRate: 96_000,
+        bitsPerSample: 16,
+        dataBytes: firstBytes - 44,
+      }),
+    );
+    const secondArrayBuffer = vi.fn(async () => createMp3Buffer(secondBytes));
     const cancelSecond = vi.fn(async () => {});
     let request = 0;
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
+          structuredClone(data, { transfer: [data] });
+          return createMockMonoBuffer(decodedReference);
+        }
+        async close() {}
+      },
+    );
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -661,6 +897,82 @@ describe('computeAutoSyncOffset', () => {
 
     await expect(computeAutoSyncOffset('blob:pcm', 'blob:target')).rejects.toThrow(
       '128 MB decoded-audio memory limit',
+    );
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('rejects overlong MP3 from its complete frame chain before decoding', async () => {
+    const decodeAudioData = vi.fn();
+    const overlongFrameCount = Math.floor((300 * 44_100) / 1152) + 1;
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => createMp3Buffer(overlongFrameCount * MP3_FRAME_BYTES),
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:mp3', 'blob:target')).rejects.toThrow(
+      'the limit is 5 minutes',
+    );
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('rejects uninspectable non-WAV audio before decoding', async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => createOggBuffer('opus', 255),
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:surround', 'blob:target')).rejects.toThrow(
+      'cannot safely inspect this audio format',
+    );
+    expect(decodeAudioData).not.toHaveBeenCalled();
+  });
+
+  it('rejects uninspectable formats before decoding', async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+        async close() {}
+      },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => new ArrayBuffer(100),
+      })),
+    );
+
+    await expect(computeAutoSyncOffset('blob:unknown', 'blob:target')).rejects.toThrow(
+      'cannot safely inspect this audio format',
     );
     expect(decodeAudioData).not.toHaveBeenCalled();
   });
