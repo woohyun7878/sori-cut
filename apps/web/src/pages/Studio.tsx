@@ -331,20 +331,26 @@ function PreviewWorkspace() {
               onSeeked={(event) => {
                 const player = event.currentTarget;
                 const pending = pendingVideoSeekRef.current;
-                if (pending && Math.abs(player.currentTime - pending.target) <= 0.05) {
-                  const queuedTarget = pending.queuedTarget;
-                  pendingVideoSeekRef.current = null;
-                  staleVideoSeekTargetRef.current = null;
-                  if (
-                    queuedTarget !== null &&
-                    Math.abs(player.currentTime - queuedTarget) > 0.01
-                  ) {
-                    seekVideoProgrammatically(player, queuedTarget);
-                  }
-                  return;
-                }
-
                 if (pending) {
+                  const completedQueuedTarget =
+                    pending.queuedTarget !== null &&
+                    Math.abs(player.currentTime - pending.queuedTarget) <= 0.05;
+                  if (
+                    completedQueuedTarget ||
+                    Math.abs(player.currentTime - pending.target) <= 0.05
+                  ) {
+                    const queuedTarget = completedQueuedTarget ? null : pending.queuedTarget;
+                    pendingVideoSeekRef.current = null;
+                    staleVideoSeekTargetRef.current = null;
+                    if (
+                      queuedTarget !== null &&
+                      Math.abs(player.currentTime - queuedTarget) > 0.01
+                    ) {
+                      seekVideoProgrammatically(player, queuedTarget);
+                    }
+                    return;
+                  }
+
                   staleVideoSeekTargetRef.current = pending.target;
                   pendingVideoSeekRef.current = null;
                   setPlayheadPosition(player.currentTime);

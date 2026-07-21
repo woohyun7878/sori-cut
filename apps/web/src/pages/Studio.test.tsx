@@ -360,6 +360,58 @@ describe('Studio shell', () => {
     expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
   });
 
+  it('retires a superseded target when a seek completes at the queued target', () => {
+    storeState.video = {
+      id: 'video-1',
+      name: 'preview.mp4',
+      blob: new Blob(),
+      url: 'blob:preview',
+      duration: 3,
+      width: 1080,
+      height: 1920,
+    };
+    const view = render(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    const player = document.querySelector('video') as HTMLVideoElement;
+    let mediaTime = 0;
+    const setCurrentTime = vi.fn((value: number) => {
+      mediaTime = value;
+    });
+    Object.defineProperty(player, 'currentTime', {
+      configurable: true,
+      get: () => mediaTime,
+      set: setCurrentTime,
+    });
+    Object.defineProperty(player, 'duration', { configurable: true, value: 3 });
+    vi.clearAllMocks();
+
+    storeState.playheadPosition = 1;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    storeState.playheadPosition = 2;
+    view.rerender(
+      <MemoryRouter>
+        <Studio />
+      </MemoryRouter>,
+    );
+    expect(setCurrentTime).toHaveBeenCalledTimes(1);
+
+    mediaTime = 2;
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).not.toHaveBeenCalled();
+
+    mediaTime = 1;
+    fireEvent.seeked(player);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledTimes(1);
+    expect(storeState.setPlayheadPosition).toHaveBeenCalledWith(1);
+  });
+
   it('lets a user seek override a pending programmatic seek and ignores its stale event', () => {
     storeState.video = {
       id: 'video-1',
