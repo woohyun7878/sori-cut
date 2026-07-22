@@ -203,12 +203,14 @@ import {
   computeAutoSyncOffset,
   getUnknownLengthPayloadLimit,
   readResponseBuffer,
+  validateAutoSyncOggFraming,
 } from '../autoSync';
 import {
   AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
   AUTO_SYNC_FRAME_SIZE,
   AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
   AUTO_SYNC_MAX_CORRELATION_TERMS,
+  AUTO_SYNC_MAX_DURATION_SECONDS,
   AUTO_SYNC_MAX_LAG_SAMPLES,
   crossCorrelate,
   getCorrelationDimensions,
@@ -287,6 +289,48 @@ function setDecodedSignal(
   trackIndex = 0,
 ): void {
   mediaMock.sampleSets.set(`${encodedBytes}:${trackIndex}`, [{ channels, sampleRate }]);
+}
+
+function concatenateBytes(...chunks: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+
+function createOggPage(options: {
+  body?: Uint8Array;
+  headerType: number;
+  lacing?: number[];
+  sequence: number;
+  serial: number;
+  version?: number;
+}): Uint8Array {
+  const body = options.body ?? Uint8Array.of(options.sequence);
+  const lacing: number[] = options.lacing ? [...options.lacing] : [];
+  if (!options.lacing) {
+    let remaining = body.byteLength;
+    while (remaining >= 255) {
+      lacing.push(255);
+      remaining -= 255;
+    }
+    lacing.push(remaining);
+  }
+
+  const page = new Uint8Array(27 + lacing.length + body.byteLength);
+  page.set([0x4f, 0x67, 0x67, 0x53]);
+  page[4] = options.version ?? 0;
+  page[5] = options.headerType;
+  const view = new DataView(page.buffer);
+  view.setUint32(14, options.serial, true);
+  view.setUint32(18, options.sequence, true);
+  page[26] = lacing.length;
+  page.set(lacing, 27);
+  page.set(body, 27 + lacing.length);
+  return page;
 }
 
 function isTransferableArrayBuffer(buffer: ArrayBufferLike): buffer is ArrayBuffer {
@@ -777,6 +821,153 @@ describe('readResponseBuffer', () => {
   });
 });
 
+describe('validateAutoSyncOggFraming', () => {
+  it('accepts a valid single logical stream', () => {
+    const ogg = concatenateBytes(
+      createOggPage({ headerType: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ headerType: 0x00, sequence: 1, serial: 11 }),
+      createOggPage({ headerType: 0x04, sequence: 2, serial: 11 }),
+    );
+
+    expect(() => validateAutoSyncOggFraming(ogg.buffer, 'reference')).not.toThrow();
+  });
+
+  it('allows initially multiplexed streams and preserves Mediabunny primary selection', async () => {
+    const ogg = concatenateBytes(
+      createOggPage({ headerType: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ headerType: 0x02, sequence: 0, serial: 22 }),
+      createOggPage({ headerType: 0x04, sequence: 1, serial: 11 }),
+      createOggPage({ headerType: 0x04, sequence: 1, serial: 22 }),
+    );
+    Object.assign(mediaMock.metadata, { primaryTrackIndex: 1, trackCount: 2 });
+    mediaMock.sampleSets.set(`${ogg.byteLength}:1`, [
+      { channels: [decodedReference], sampleRate: SAMPLE_RATE },
+    ]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        createStreamResponse({
+          chunks: [ogg],
+          contentLength: ogg.byteLength,
+        }),
+      ),
+    );
+
+    await computeAutoSyncOffset('blob:reference', 'blob:target');
+
+    expect(mediaMock.selectedTrackIndexes).toEqual([1, 1]);
+  });
+
+  it('rejects a sequential chained logical stream before decoding', async () => {
+    const ogg = concatenateBytes(
+      createOggPage({ headerType: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ headerType: 0x04, sequence: 1, serial: 11 }),
+      createOggPage({ headerType: 0x02, sequence: 0, serial: 22 }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        createStreamResponse({
+          chunks: [ogg],
+          contentLength: ogg.byteLength,
+        }),
+      ),
+    );
+
+    await expect(computeAutoSyncOffset('blob:reference', 'blob:target')).rejects.toMatchObject({
+      code: 'unsupported-chained-ogg',
+      message: expect.stringContaining('chained Ogg logical streams'),
+    });
+    expect(mediaMock.inputs).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      'truncated body',
+      () => {
+        const page = createOggPage({
+          body: Uint8Array.of(1, 2, 3),
+          headerType: 0x02,
+          sequence: 0,
+          serial: 11,
+        });
+        return page.slice(0, -1);
+      },
+    ],
+    [
+      'invalid version',
+      () => createOggPage({ headerType: 0x02, sequence: 0, serial: 11, version: 1 }),
+    ],
+    [
+      'broken sequence',
+      () =>
+        concatenateBytes(
+          createOggPage({ headerType: 0x02, sequence: 0, serial: 11 }),
+          createOggPage({ headerType: 0x04, sequence: 2, serial: 11 }),
+        ),
+    ],
+    [
+      'corrupt later capture',
+      () =>
+        concatenateBytes(
+          createOggPage({ headerType: 0x02, sequence: 0, serial: 11 }),
+          Uint8Array.of(0x4f, 0x67, 0x67, 0x00),
+        ),
+    ],
+    [
+      'unfinished logical stream',
+      () => createOggPage({ headerType: 0x02, sequence: 0, serial: 11 }),
+    ],
+    [
+      'empty continued page',
+      () =>
+        concatenateBytes(
+          createOggPage({
+            body: new Uint8Array(255),
+            headerType: 0x02,
+            lacing: [255],
+            sequence: 0,
+            serial: 11,
+          }),
+          createOggPage({
+            body: new Uint8Array(0),
+            headerType: 0x05,
+            lacing: [],
+            sequence: 1,
+            serial: 11,
+          }),
+        ),
+    ],
+    [
+      'too many initial logical streams',
+      () =>
+        concatenateBytes(
+          ...Array.from({ length: 17 }, (_, index) =>
+            createOggPage({
+              headerType: 0x02,
+              sequence: 0,
+              serial: index + 1,
+            }),
+          ),
+        ),
+    ],
+  ])('rejects %s framing before decode', (_name, createBytes) => {
+    expect(() => validateAutoSyncOggFraming(createBytes().buffer, 'reference')).toThrow(
+      expect.objectContaining({ code: 'malformed-media' }),
+    );
+  });
+
+  it('does not treat OggS bytes inside a page payload as another page', () => {
+    const payload = Uint8Array.of(1, 0x4f, 0x67, 0x67, 0x53, 2);
+    const ogg = concatenateBytes(
+      createOggPage({ body: payload, headerType: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ headerType: 0x04, sequence: 1, serial: 11 }),
+    );
+
+    expect(() => validateAutoSyncOggFraming(ogg.buffer)).not.toThrow();
+  });
+});
+
 describe('incremental Mediabunny decoding', () => {
   it.each([
     ['MP4 video', 'MP4'],
@@ -813,7 +1004,7 @@ describe('incremental Mediabunny decoding', () => {
     expect(mediaMock.selectedTrackIndexes).toEqual([1, 1]);
   });
 
-  it('downmixes and linearly resamples across AudioSample boundaries', async () => {
+  it('keeps adjacent fractional-timestamp samples continuous while resampling', async () => {
     const sourceRate = 12_000;
     const left = Float32Array.from({ length: sourceRate }, (_, index) => index / sourceRate);
     const right = Float32Array.from({ length: sourceRate }, (_, index) => index / sourceRate / 2);
@@ -827,7 +1018,7 @@ describe('incremental Mediabunny decoding', () => {
       {
         channels: [left.subarray(split), right.subarray(split)],
         sampleRate: sourceRate,
-        timestamp: split / sourceRate,
+        timestamp: (split + 0.1) / sourceRate,
       },
     ];
     mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, samples);
@@ -843,20 +1034,132 @@ describe('incremental Mediabunny decoding', () => {
     expect(mediaMock.samplesClosed).toEqual([0, 1, 0, 1]);
   });
 
-  it('accepts chained Ogg samples without requiring proof that the chain ends', async () => {
-    Object.assign(mediaMock.metadata, { format: 'Ogg' });
-    const first = decodedReference.subarray(0, decodedReference.length / 2);
-    const second = decodedReference.subarray(decodedReference.length / 2);
+  it('trims negative pre-roll before placing decoded PCM', async () => {
+    const samples = [
+      {
+        channels: [
+          Float32Array.from({ length: SAMPLE_RATE + SAMPLE_RATE / 2 }, (_, index) =>
+            index < SAMPLE_RATE / 2 ? 1 : 0.25,
+          ),
+        ],
+        sampleRate: SAMPLE_RATE,
+        timestamp: -0.5,
+      },
+    ];
+    mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, samples);
+    mediaMock.sampleSets.set(`${TARGET_BYTES}:0`, samples);
+
+    await computeAutoSyncOffset('blob:reference', 'blob:target');
+
+    const output = workerInputs[0]!.reference;
+    expect(output).toHaveLength(SAMPLE_RATE);
+    expect(output.every((sample) => sample === 0.25)).toBe(true);
+  });
+
+  it('inserts silence for a positive one-second presentation gap', async () => {
+    const samples = [
+      {
+        channels: [new Float32Array(SAMPLE_RATE).fill(1)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 0,
+      },
+      {
+        channels: [new Float32Array(SAMPLE_RATE).fill(2)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 2,
+      },
+    ];
+    mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, samples);
+    mediaMock.sampleSets.set(`${TARGET_BYTES}:0`, samples);
+
+    await computeAutoSyncOffset('blob:reference', 'blob:target');
+
+    const output = workerInputs[0]!.reference;
+    expect(output).toHaveLength(SAMPLE_RATE * 3);
+    expect(output.subarray(0, SAMPLE_RATE).every((sample) => sample === 1)).toBe(true);
+    expect(output.subarray(SAMPLE_RATE, SAMPLE_RATE * 2).every((sample) => sample === 0)).toBe(
+      true,
+    );
+    expect(output.subarray(SAMPLE_RATE * 2).every((sample) => sample === 2)).toBe(true);
+  });
+
+  it('trims overlapping leading frames instead of duplicating them', async () => {
+    const samples = [
+      {
+        channels: [new Float32Array(SAMPLE_RATE).fill(1)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 0,
+      },
+      {
+        channels: [new Float32Array(SAMPLE_RATE).fill(2)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 0.5,
+      },
+    ];
+    mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, samples);
+    mediaMock.sampleSets.set(`${TARGET_BYTES}:0`, samples);
+
+    await computeAutoSyncOffset('blob:reference', 'blob:target');
+
+    const output = workerInputs[0]!.reference;
+    expect(output).toHaveLength(SAMPLE_RATE + SAMPLE_RATE / 2);
+    expect(output.subarray(0, SAMPLE_RATE).every((sample) => sample === 1)).toBe(true);
+    expect(output.subarray(SAMPLE_RATE).every((sample) => sample === 2)).toBe(true);
+  });
+
+  it('rejects a timestamp gap that would bypass the maximum timeline duration', async () => {
+    const sample = {
+      channels: [new Float32Array(SAMPLE_RATE)],
+      sampleRate: SAMPLE_RATE,
+      timestamp: AUTO_SYNC_MAX_DURATION_SECONDS,
+    };
+    mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, [sample]);
+
+    await expect(computeAutoSyncOffset('blob:reference', 'blob:target')).rejects.toMatchObject({
+      code: 'invalid-metadata',
+      message: expect.stringContaining('too long'),
+    });
+    expect(mediaMock.copyCalls).toBe(0);
+    expect(mediaMock.samplesClosed).toEqual([0]);
+  });
+
+  it('rejects non-monotonic timestamps and sample-rate changes', async () => {
     mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, [
-      { channels: [first], sampleRate: SAMPLE_RATE, timestamp: 0 },
-      { channels: [second], sampleRate: SAMPLE_RATE, timestamp: first.length / SAMPLE_RATE },
+      {
+        channels: [new Float32Array(SAMPLE_RATE)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 0.5,
+      },
+      {
+        channels: [new Float32Array(SAMPLE_RATE)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 0.25,
+      },
     ]);
 
-    await expect(computeAutoSyncOffset('blob:reference', 'blob:target')).resolves.toEqual({
-      confidence: expect.any(Number),
-      offsetSeconds: expect.any(Number),
+    await expect(computeAutoSyncOffset('blob:reference', 'blob:target')).rejects.toMatchObject({
+      code: 'invalid-metadata',
+      message: expect.stringContaining('non-monotonic'),
     });
-    expect(mediaMock.samplesClosed).toEqual([0, 1, 0]);
+
+    mediaMock.samplesClosed.length = 0;
+    mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, [
+      {
+        channels: [new Float32Array(SAMPLE_RATE)],
+        sampleRate: SAMPLE_RATE,
+        timestamp: 0,
+      },
+      {
+        channels: [new Float32Array(SAMPLE_RATE * 2)],
+        sampleRate: SAMPLE_RATE * 2,
+        timestamp: 1,
+      },
+    ]);
+
+    await expect(computeAutoSyncOffset('blob:reference', 'blob:target')).rejects.toMatchObject({
+      code: 'invalid-metadata',
+      message: expect.stringContaining('changed sample rate'),
+    });
   });
 
   it('rejects cumulative decoded bytes before copying the sample that crosses the budget', async () => {
@@ -868,7 +1171,7 @@ describe('incremental Mediabunny decoding', () => {
       { channels: [first], sampleRate: SAMPLE_RATE },
       {
         channels: [Float32Array.of(0)],
-        duration: remainingFrames / SAMPLE_RATE,
+        duration: (remainingFrames + 1) / SAMPLE_RATE,
         numberOfFrames: remainingFrames + 1,
         sampleRate: SAMPLE_RATE,
         timestamp: 1,
@@ -961,7 +1264,9 @@ describe('incremental Mediabunny decoding', () => {
     ['channels', { numberOfChannels: 0 }],
     ['frames', { numberOfFrames: 0 }],
     ['timestamp', { timestamp: Number.POSITIVE_INFINITY }],
+    ['unplaceable timestamp', { timestamp: 0.5 / SAMPLE_RATE }],
     ['duration', { duration: Number.NaN }],
+    ['inconsistent duration', { duration: 40_001 / SAMPLE_RATE }],
   ])('rejects malformed AudioSample %s metadata and closes it', async (_name, override) => {
     mediaMock.sampleSets.set(`${REFERENCE_BYTES}:0`, [
       {

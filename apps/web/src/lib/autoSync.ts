@@ -46,6 +46,14 @@ export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
 const DECODE_COPY_CHUNK_FRAMES = 16_384;
 const DECODE_YIELD_INTERVAL_CHUNKS = 16;
+const OGG_FIXED_HEADER_BYTES = 27;
+const OGG_CAPTURE_PATTERN = [0x4f, 0x67, 0x67, 0x53] as const;
+const OGG_HEADER_FLAG_MASK = 0x07;
+const OGG_CONTINUED_PACKET = 0x01;
+const OGG_BEGINNING_OF_STREAM = 0x02;
+const OGG_END_OF_STREAM = 0x04;
+const OGG_MAX_INITIAL_LOGICAL_STREAMS = 16;
+const FRAME_ROUNDING_TOLERANCE = 0.25;
 
 export interface AutoSyncResult {
   /** Signed target placement: positive delays it; negative advances its source in-point. */
@@ -167,6 +175,131 @@ function malformedMediaError(label: string, cause: unknown): AutoSyncMediaError 
   );
 }
 
+function malformedOggError(label: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'malformed-media',
+    `${label} Ogg framing is malformed or truncated`,
+  );
+}
+
+function unsupportedChainedOggError(label: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'unsupported-chained-ogg',
+    `${label} uses chained Ogg logical streams, which auto-sync does not support; ` +
+      'convert it to a single Ogg stream or another supported audio format',
+  );
+}
+
+export function validateAutoSyncOggFraming(buffer: ArrayBuffer, label = 'input'): void {
+  const bytes = new Uint8Array(buffer);
+  if (
+    bytes.byteLength < OGG_CAPTURE_PATTERN.length ||
+    OGG_CAPTURE_PATTERN.some((byte, index) => bytes[index] !== byte)
+  ) {
+    return;
+  }
+
+  const view = new DataView(buffer);
+  const streams = new Map<
+    number,
+    { ended: boolean; lastSequence: number; packetContinues: boolean }
+  >();
+  let initialBosPhase = true;
+  let offset = 0;
+
+  while (offset < bytes.byteLength) {
+    if (bytes.byteLength - offset < OGG_FIXED_HEADER_BYTES) {
+      throw malformedOggError(label);
+    }
+    for (let index = 0; index < OGG_CAPTURE_PATTERN.length; index++) {
+      if (bytes[offset + index] !== OGG_CAPTURE_PATTERN[index]) {
+        throw malformedOggError(label);
+      }
+    }
+
+    const version = bytes[offset + 4];
+    const headerType = bytes[offset + 5]!;
+    if (version !== 0 || (headerType & ~OGG_HEADER_FLAG_MASK) !== 0) {
+      throw malformedOggError(label);
+    }
+
+    const segmentCount = bytes[offset + 26]!;
+    const lacingOffset = offset + OGG_FIXED_HEADER_BYTES;
+    if (segmentCount > bytes.byteLength - lacingOffset) {
+      throw malformedOggError(label);
+    }
+    let bodyBytes = 0;
+    for (let index = 0; index < segmentCount; index++) {
+      bodyBytes += bytes[lacingOffset + index]!;
+    }
+    const bodyOffset = lacingOffset + segmentCount;
+    if (bodyBytes > bytes.byteLength - bodyOffset) {
+      throw malformedOggError(label);
+    }
+
+    const serial = view.getUint32(offset + 14, true);
+    const sequence = view.getUint32(offset + 18, true);
+    const isBos = (headerType & OGG_BEGINNING_OF_STREAM) !== 0;
+    const isEos = (headerType & OGG_END_OF_STREAM) !== 0;
+    const isContinued = (headerType & OGG_CONTINUED_PACKET) !== 0;
+    const stream = streams.get(serial);
+    const packetContinues = segmentCount > 0 && bytes[lacingOffset + segmentCount - 1] === 255;
+
+    if (!stream) {
+      if (!isBos || isContinued || sequence !== 0) {
+        throw malformedOggError(label);
+      }
+      if (!initialBosPhase) {
+        throw unsupportedChainedOggError(label);
+      }
+      if (streams.size >= OGG_MAX_INITIAL_LOGICAL_STREAMS) {
+        throw new AutoSyncMediaError(
+          'malformed-media',
+          `${label} Ogg input contains too many initial logical streams`,
+        );
+      }
+      if (isEos && packetContinues) {
+        throw malformedOggError(label);
+      }
+      streams.set(serial, {
+        ended: isEos,
+        lastSequence: sequence,
+        packetContinues,
+      });
+    } else {
+      if (isBos) {
+        if (stream.ended) {
+          throw unsupportedChainedOggError(label);
+        }
+        throw malformedOggError(label);
+      }
+      if (
+        stream.ended ||
+        sequence !== (stream.lastSequence + 1) >>> 0 ||
+        isContinued !== stream.packetContinues ||
+        (isContinued && segmentCount === 0) ||
+        (isEos && packetContinues)
+      ) {
+        throw malformedOggError(label);
+      }
+      stream.lastSequence = sequence;
+      stream.ended = isEos;
+      stream.packetContinues = packetContinues;
+    }
+
+    if (!isBos || isEos) {
+      initialBosPhase = false;
+    }
+    offset = bodyOffset + bodyBytes;
+  }
+
+  for (const stream of streams.values()) {
+    if (!stream.ended || stream.packetContinues) {
+      throw malformedOggError(label);
+    }
+  }
+}
+
 function isAbortError(error: unknown): error is DOMException {
   return error instanceof DOMException && error.name === 'AbortError';
 }
@@ -190,6 +323,19 @@ function checkedDecodedSampleBytes(sample: AudioSample, label: string): number {
     );
   }
 
+  const durationFrames = sample.duration * sample.sampleRate;
+  const roundedDurationFrames = Math.round(durationFrames);
+  if (
+    !Number.isSafeInteger(roundedDurationFrames) ||
+    Math.abs(durationFrames - roundedDurationFrames) > FRAME_ROUNDING_TOLERANCE ||
+    roundedDurationFrames !== sample.numberOfFrames
+  ) {
+    throw new AutoSyncMediaError(
+      'invalid-metadata',
+      `${label} media decoder returned inconsistent audio sample duration`,
+    );
+  }
+
   if (
     numberOfFrames > Number.MAX_SAFE_INTEGER / numberOfChannels ||
     numberOfFrames * numberOfChannels > Number.MAX_SAFE_INTEGER / Float32Array.BYTES_PER_ELEMENT
@@ -199,6 +345,21 @@ function checkedDecodedSampleBytes(sample: AudioSample, label: string): number {
   return numberOfFrames * numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
 }
 
+function timestampToSourceFrame(sample: AudioSample, label: string): number {
+  const sourceFrame = sample.timestamp * sample.sampleRate;
+  const roundedSourceFrame = Math.round(sourceFrame);
+  if (
+    !Number.isSafeInteger(roundedSourceFrame) ||
+    Math.abs(sourceFrame - roundedSourceFrame) > FRAME_ROUNDING_TOLERANCE
+  ) {
+    throw new AutoSyncMediaError(
+      'invalid-metadata',
+      `${label} media decoder returned an audio timestamp that cannot be placed on its sample timeline`,
+    );
+  }
+  return roundedSourceFrame;
+}
+
 class StreamingLinearResampler {
   private output: Float32Array | undefined;
   private outputFrames = 0;
@@ -206,7 +367,11 @@ class StreamingLinearResampler {
   private sourceFrames = 0;
   private sourceRate: number | undefined;
 
-  push(samples: Float32Array, sampleRate: number, label: string): void {
+  get timelineFrames(): number {
+    return this.sourceFrames;
+  }
+
+  setSourceRate(sampleRate: number, label: string): void {
     if (this.sourceRate === undefined) {
       this.sourceRate = sampleRate;
     } else if (sampleRate !== this.sourceRate) {
@@ -215,7 +380,36 @@ class StreamingLinearResampler {
         `${label} media decoder changed sample rate between audio samples`,
       );
     }
+  }
 
+  assertTimelineEnd(endFrame: number, label: string): void {
+    if (
+      this.sourceRate === undefined ||
+      !Number.isSafeInteger(endFrame) ||
+      endFrame < this.sourceFrames
+    ) {
+      throw new AutoSyncMediaError(
+        'invalid-metadata',
+        `${label} media decoder returned an invalid or non-monotonic audio timeline`,
+      );
+    }
+    const outputFrames = Math.ceil((endFrame * AUTO_SYNC_ANALYSIS_SAMPLE_RATE) / this.sourceRate);
+    if (!Number.isSafeInteger(outputFrames) || outputFrames > AUTO_SYNC_MAX_ANALYSIS_SAMPLES) {
+      throw durationLimitError(label, false);
+    }
+  }
+
+  pushSilence(frameCount: number, label: string): void {
+    this.pushConstant(frameCount, 0, label);
+  }
+
+  push(samples: Float32Array, label: string): void {
+    if (this.sourceRate === undefined) {
+      throw new AutoSyncMediaError(
+        'invalid-metadata',
+        `${label} media decoder returned PCM before a sample rate was established`,
+      );
+    }
     for (const sample of samples) {
       if (!Number.isFinite(sample)) {
         throw new AutoSyncMediaError(
@@ -223,6 +417,7 @@ class StreamingLinearResampler {
           `${label} media decoder returned a non-finite PCM sample`,
         );
       }
+
       if (this.sourceFrames === 0) {
         this.write(sample, label);
         this.previousSample = sample;
@@ -240,6 +435,48 @@ class StreamingLinearResampler {
       this.previousSample = sample;
       this.sourceFrames++;
     }
+  }
+
+  private pushConstant(frameCount: number, sample: number, label: string): void {
+    if (
+      this.sourceRate === undefined ||
+      !Number.isSafeInteger(frameCount) ||
+      frameCount < 0 ||
+      frameCount > Number.MAX_SAFE_INTEGER - this.sourceFrames
+    ) {
+      throw new AutoSyncMediaError(
+        'invalid-metadata',
+        `${label} media decoder returned an invalid audio gap`,
+      );
+    }
+    if (frameCount === 0) {
+      return;
+    }
+
+    if (this.sourceFrames === 0) {
+      this.write(sample, label);
+      this.previousSample = sample;
+      this.sourceFrames = 1;
+      frameCount--;
+    }
+    if (frameCount === 0) {
+      return;
+    }
+
+    const firstSourceIndex = this.sourceFrames;
+    const finalSourceIndex = firstSourceIndex + frameCount - 1;
+    let sourcePosition = (this.outputFrames * this.sourceRate) / AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
+    while (sourcePosition <= finalSourceIndex) {
+      if (sourcePosition <= firstSourceIndex) {
+        const fraction = sourcePosition - (firstSourceIndex - 1);
+        this.write(this.previousSample + (sample - this.previousSample) * fraction, label);
+      } else {
+        this.write(sample, label);
+      }
+      sourcePosition = (this.outputFrames * this.sourceRate) / AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
+    }
+    this.previousSample = sample;
+    this.sourceFrames += frameCount;
   }
 
   finish(label: string): Float32Array {
@@ -374,6 +611,7 @@ async function decodePrimaryTrackToMono(
   label: string,
   signal: AbortSignal | undefined,
 ): Promise<Float32Array> {
+  validateAutoSyncOggFraming(encodedBuffer, label);
   const input = new Input({
     source: new BufferSource(encodedBuffer),
     formats: AUTO_SYNC_INPUT_FORMATS,
@@ -390,6 +628,7 @@ async function decodePrimaryTrackToMono(
     let planarScratch = new Float32Array(0);
     let monoScratch = new Float32Array(0);
     let chunksSinceYield = 0;
+    let previousSampleStartFrame: number | undefined;
 
     while (true) {
       throwIfAborted(signal);
@@ -414,16 +653,45 @@ async function decodePrimaryTrackToMono(
         }
         decodedBytes += sampleBytes;
 
+        resampler.setSourceRate(sample.sampleRate, label);
+        const sampleStartFrame = timestampToSourceFrame(sample, label);
+        if (previousSampleStartFrame !== undefined && sampleStartFrame < previousSampleStartFrame) {
+          throw new AutoSyncMediaError(
+            'invalid-metadata',
+            `${label} media decoder returned non-monotonic audio sample timestamps`,
+          );
+        }
+        previousSampleStartFrame = sampleStartFrame;
+
+        const sampleEndFrame = sampleStartFrame + sample.numberOfFrames;
+        if (!Number.isSafeInteger(sampleEndFrame)) {
+          throw new AutoSyncMediaError(
+            'invalid-metadata',
+            `${label} media decoder returned an audio sample outside the safe timeline range`,
+          );
+        }
+        const frameOffset = Math.max(
+          0,
+          -sampleStartFrame,
+          resampler.timelineFrames - sampleStartFrame,
+        );
+        const remainingFrames = sample.numberOfFrames - frameOffset;
+        if (remainingFrames <= 0) {
+          continue;
+        }
+        const effectiveStartFrame = sampleStartFrame + frameOffset;
+        const gapFrames = effectiveStartFrame - resampler.timelineFrames;
+        const effectiveEndFrame = effectiveStartFrame + remainingFrames;
+        resampler.assertTimelineEnd(effectiveEndFrame, label);
+        resampler.pushSilence(gapFrames, label);
+
         for (
-          let frameOffset = 0;
-          frameOffset < sample.numberOfFrames;
-          frameOffset += DECODE_COPY_CHUNK_FRAMES
+          let copyOffset = frameOffset;
+          copyOffset < sample.numberOfFrames;
+          copyOffset += DECODE_COPY_CHUNK_FRAMES
         ) {
           throwIfAborted(signal);
-          const frameCount = Math.min(
-            DECODE_COPY_CHUNK_FRAMES,
-            sample.numberOfFrames - frameOffset,
-          );
+          const frameCount = Math.min(DECODE_COPY_CHUNK_FRAMES, sample.numberOfFrames - copyOffset);
           if (planarScratch.length < frameCount) {
             planarScratch = new Float32Array(frameCount);
             monoScratch = new Float32Array(frameCount);
@@ -435,7 +703,7 @@ async function decodePrimaryTrackToMono(
             sample.copyTo(planarScratch.subarray(0, frameCount), {
               planeIndex: channel,
               format: 'f32-planar',
-              frameOffset,
+              frameOffset: copyOffset,
               frameCount,
             });
             for (let frame = 0; frame < frameCount; frame++) {
@@ -445,7 +713,7 @@ async function decodePrimaryTrackToMono(
           for (let frame = 0; frame < frameCount; frame++) {
             monoScratch[frame] /= sample.numberOfChannels;
           }
-          resampler.push(monoScratch.subarray(0, frameCount), sample.sampleRate, label);
+          resampler.push(monoScratch.subarray(0, frameCount), label);
 
           chunksSinceYield++;
           if (chunksSinceYield >= DECODE_YIELD_INTERVAL_CHUNKS) {
