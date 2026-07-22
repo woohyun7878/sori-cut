@@ -66,8 +66,8 @@ Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
 (Opus or Vorbis), FLAC, MP3, and WAV inputs. After the bounded download,
 Mediabunny selects the container's primary audio track and decodes it as
 incremental `AudioSample` resources. Video tracks do not disqualify a
-container. Ogg uses primary-track semantics; later chained logical streams are
-not implicitly concatenated.
+container. Ogg uses the primary audio track; chained Ogg logical streams are
+rejected before decoding.
 
 Each emitted sample is validated and charged to the 128 MiB cumulative decoded
 work budget before its data is copied. Samples are downmixed and linearly

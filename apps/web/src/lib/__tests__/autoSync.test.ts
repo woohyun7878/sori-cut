@@ -177,6 +177,7 @@ vi.mock('mediabunny', () => {
 
 import {
   AUTO_SYNC_BYOB_CHUNK_BYTES,
+  DECODE_YIELD_FRAME_INTERVAL,
   AUTO_SYNC_INPUT_FORMATS,
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
@@ -292,6 +293,63 @@ function createMockAudioSample(
     sampleRate,
     timestamp,
   };
+}
+
+interface OggPageOptions {
+  body?: readonly number[];
+  flags: number;
+  lacing?: readonly number[];
+  sequence: number;
+  serial: number;
+  version?: number;
+}
+
+function createOggPage({
+  body = [],
+  flags,
+  lacing,
+  sequence,
+  serial,
+  version = 0,
+}: OggPageOptions): Uint8Array {
+  const lacingValues: number[] = lacing ? [...lacing] : [];
+  if (!lacing) {
+    let remaining = body.length;
+    while (remaining >= 255) {
+      lacingValues.push(255);
+      remaining -= 255;
+    }
+    lacingValues.push(remaining);
+  }
+  if (
+    lacingValues.length > 255 ||
+    lacingValues.some((value) => !Number.isInteger(value) || value < 0 || value > 255) ||
+    lacingValues.reduce((sum, value) => sum + value, 0) !== body.length
+  ) {
+    throw new Error('Test Ogg page body is too large');
+  }
+
+  const page = new Uint8Array(27 + lacingValues.length + body.length);
+  page.set([0x4f, 0x67, 0x67, 0x53, version, flags]);
+  const view = new DataView(page.buffer);
+  view.setUint32(14, serial, true);
+  view.setUint32(18, sequence, true);
+  page[26] = lacingValues.length;
+  page.set(lacingValues, 27);
+  page.set(body, 27 + lacingValues.length);
+  return page;
+}
+
+function createOggBuffer(...pages: Uint8Array[]): ArrayBuffer {
+  const output = new Uint8Array(
+    pages.reduce((totalBytes, page) => totalBytes + page.byteLength, 0),
+  );
+  let offset = 0;
+  for (const page of pages) {
+    output.set(page, offset);
+    offset += page.byteLength;
+  }
+  return output.buffer;
 }
 
 function isTransferableArrayBuffer(buffer: ArrayBufferLike): buffer is ArrayBuffer {
@@ -828,6 +886,295 @@ describe('decodeEncodedAudioToMono', () => {
     expect(mediaMock.selectedTrackIndexes).toEqual([1]);
   });
 
+  it('accepts a normal single-stream Ogg without treating payload OggS bytes as pages', async () => {
+    const sample = createMockAudioSample([Float32Array.of(1, 2, 3)]);
+    mediaMock.sampleFactory = () => [sample];
+    const buffer = createOggBuffer(
+      createOggPage({ body: [1, 2], flags: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({
+        body: [0, 0x4f, 0x67, 0x67, 0x53, 3],
+        flags: 0x04,
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toEqual(
+      Float32Array.of(1, 2, 3),
+    );
+    expect(mediaMock.inputs).toHaveLength(1);
+    expect(mediaMock.selectedTrackIndexes).toEqual([0]);
+  });
+
+  it('allows initial multiplexed Ogg logical streams before media pages', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const buffer = createOggBuffer(
+      createOggPage({ body: [1], flags: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ body: [2], flags: 0x02, sequence: 0, serial: 22 }),
+      createOggPage({ body: [3], flags: 0x04, sequence: 1, serial: 11 }),
+      createOggPage({ body: [4], flags: 0x04, sequence: 1, serial: 22 }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+    expect(mediaMock.inputs).toHaveLength(1);
+    expect(mediaMock.selectedTrackIndexes).toEqual([0]);
+  });
+
+  it('rejects a continued EOS page after a complete BOS packet', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({ body: [1], flags: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ body: [2], flags: 0x05, sequence: 1, serial: 11 }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('continuation flag'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it('rejects a missing continuation flag after an unfinished packet', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({ body: [2], flags: 0x04, sequence: 1, serial: 11 }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('continuation flag'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it('accepts a continued page that completes an unfinished packet', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({
+        body: [2],
+        flags: 0x05,
+        lacing: [1],
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+  });
+
+  it('accepts an unfinished packet continued across multiple pages', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const unfinishedBody = new Array(255).fill(1);
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: unfinishedBody,
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({
+        body: unfinishedBody,
+        flags: 0x01,
+        lacing: [255],
+        sequence: 1,
+        serial: 11,
+      }),
+      createOggPage({
+        body: [2],
+        flags: 0x05,
+        lacing: [1],
+        sequence: 2,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+  });
+
+  it('rejects an EOS page whose final packet remains unfinished', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x06,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('EOS page ends with an unfinished packet'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it('tracks packet continuation independently across interleaved streams', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({ body: [2], flags: 0x02, sequence: 0, serial: 22 }),
+      createOggPage({ body: [3], flags: 0x04, sequence: 1, serial: 22 }),
+      createOggPage({
+        body: [4],
+        flags: 0x05,
+        lacing: [1],
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+  });
+
+  it('rejects an empty page that claims to continue an unfinished packet', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({
+        flags: 0x01,
+        lacing: [],
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('no packet segments'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a sequential stream after EOS',
+      createOggBuffer(
+        createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
+        createOggPage({ flags: 0x04, sequence: 1, serial: 11 }),
+        createOggPage({ flags: 0x06, sequence: 0, serial: 22 }),
+      ),
+    ],
+    [
+      'a new BOS stream after media begins',
+      createOggBuffer(
+        createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
+        createOggPage({ flags: 0, sequence: 1, serial: 11 }),
+        createOggPage({ flags: 0x06, sequence: 0, serial: 22 }),
+      ),
+    ],
+  ])('rejects unsupported chained Ogg for %s before decoder input', async (_name, buffer) => {
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'unsupported-chained-ogg',
+      message: expect.stringContaining('unsupported chained Ogg'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+    expect(mediaMock.selectedTrackIndexes).toEqual([]);
+  });
+
+  it.each([
+    [
+      'version',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11, version: 1 }),
+      ),
+    ],
+    [
+      'flags',
+      createOggBuffer(createOggPage({ flags: 0x0e, sequence: 0, serial: 11 })),
+    ],
+    [
+      'continued BOS flags',
+      createOggBuffer(createOggPage({ flags: 0x03, sequence: 0, serial: 11 })),
+    ],
+    [
+      'sequence regression',
+      createOggBuffer(
+        createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
+        createOggPage({ flags: 0, sequence: 1, serial: 11 }),
+        createOggPage({ flags: 0x04, sequence: 0, serial: 11 }),
+      ),
+    ],
+    [
+      'truncated header',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11 }).slice(0, 10),
+      ),
+    ],
+    [
+      'truncated lacing table',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11 }).slice(0, 27),
+      ),
+    ],
+    [
+      'truncated body',
+      createOggBuffer(
+        createOggPage({
+          body: [1, 2, 3],
+          flags: 0x06,
+          sequence: 0,
+          serial: 11,
+        }).slice(0, -1),
+      ),
+    ],
+    [
+      'logical stream bound',
+      createOggBuffer(
+        ...Array.from({ length: 257 }, (_, serial) =>
+          createOggPage({ flags: 0x02, sequence: 0, serial }),
+        ),
+      ),
+    ],
+  ])('rejects malformed Ogg %s before decoder input', async (_name, buffer) => {
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('malformed or truncated Ogg framing'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+    expect(mediaMock.selectedTrackIndexes).toEqual([]);
+  });
+
   it('preserves linear resampling across incremental sample boundaries', async () => {
     const samples = [
       createMockAudioSample(
@@ -972,6 +1319,89 @@ describe('decodeEncodedAudioToMono', () => {
     expect(activeSample.close).toHaveBeenCalledOnce();
     expect(prefetchedSample.close).toHaveBeenCalledOnce();
     expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('yields by cumulative processed source frames instead of once per sample', async () => {
+    const framesPerSample = 1_024;
+    const samples = Array.from({ length: 100 }, (_, index) =>
+      createMockAudioSample(
+        [new Float32Array(framesPerSample)],
+        SAMPLE_RATE,
+        (index * framesPerSample) / SAMPLE_RATE,
+      ));
+    mediaMock.sampleFactory = () => samples;
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    await decodeEncodedAudioToMono(new ArrayBuffer(8), 'reference');
+    const yieldCount = timerSpy.mock.calls.length;
+    timerSpy.mockRestore();
+
+    expect(yieldCount).toBe(6);
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('performs bounded immediate yields for one sample spanning multiple intervals', async () => {
+    const frameCount = DECODE_YIELD_FRAME_INTERVAL * 2 + 1_024;
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([new Float32Array(frameCount)]),
+    ];
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    await decodeEncodedAudioToMono(new ArrayBuffer(8), 'reference');
+    const yieldCount = timerSpy.mock.calls.length;
+    timerSpy.mockRestore();
+
+    expect(yieldCount).toBe(2);
+  });
+
+  it('detects abort synchronously between samples', async () => {
+    const controller = new AbortController();
+    const first = createMockAudioSample([new Float32Array(1_024)]);
+    const second = createMockAudioSample(
+      [new Float32Array(1_024)],
+      SAMPLE_RATE,
+      1_024 / SAMPLE_RATE,
+    );
+    first.close.mockImplementation(() => controller.abort());
+    mediaMock.sampleFactory = () => [first, second];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(8), 'reference', controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(first.copyTo).toHaveBeenCalled();
+    expect(second.copyTo).not.toHaveBeenCalled();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(second.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('detects abort at a cumulative frame yield', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const sample = createMockAudioSample([
+      new Float32Array(DECODE_YIELD_FRAME_INTERVAL),
+    ]);
+    mediaMock.sampleFactory = () => [sample];
+    const pending = decodeEncodedAudioToMono(
+      new ArrayBuffer(8),
+      'reference',
+      controller.signal,
+    );
+    const abortExpectation = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    for (let turn = 0; turn < 10 && vi.getTimerCount() === 0; turn++) {
+      await Promise.resolve();
+    }
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    await vi.runOnlyPendingTimersAsync();
+
+    await abortExpectation;
+    expect(sample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+    vi.useRealTimers();
   });
 });
 
