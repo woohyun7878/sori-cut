@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { computeAutoSyncOffset } from '../lib/autoSync';
+import { AUTO_SYNC_MAX_LAG_SECONDS, computeAutoSyncOffset } from '../lib/autoSync';
+import { createSyncTrackUpdate } from '../lib/syncAlignment';
 import { useProjectStore } from '../store/useProjectStore';
 
 /** Below this normalized confidence, the auto-sync offset is likely unreliable. */
 const LOW_CONFIDENCE_THRESHOLD = 0.1;
 
 function offsetToPercent(offset: number) {
-  return 50 + (offset / 5) * 38;
+  return 50 + (offset / AUTO_SYNC_MAX_LAG_SECONDS) * 38;
 }
 
 export function SyncControls() {
@@ -14,7 +15,13 @@ export function SyncControls() {
   const tracks = useProjectStore((state) => state.tracks);
   const updateTrack = useProjectStore((state) => state.updateTrack);
   const syncTracks = useMemo(() => tracks.filter((track) => track.type !== 'video'), [tracks]);
+  const tracksRef = useRef(tracks);
+  const videoRef = useRef(video);
+  tracksRef.current = tracks;
+  videoRef.current = video;
   const [selectedTrackId, setSelectedTrackId] = useState('');
+  const selectedTrackIdRef = useRef(selectedTrackId);
+  selectedTrackIdRef.current = selectedTrackId;
   const [offset, setOffset] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -35,7 +42,7 @@ export function SyncControls() {
 
   useEffect(() => {
     if (selectedTrack) {
-      setOffset(selectedTrack.startOffset);
+      setOffset(selectedTrack.syncOffset ?? selectedTrack.startOffset);
     }
   }, [selectedTrack]);
 
@@ -80,25 +87,20 @@ export function SyncControls() {
 
     try {
       setMessage('Preview playing...');
+      const previewUpdate = createSyncTrackUpdate(selectedTrack, offset);
+      previewAudio.currentTime = previewUpdate.sourceStartOffset;
 
-      if (offset >= 0) {
+      if (previewUpdate.startOffset > 0) {
         await previewVideo.play();
         timers.push(
           window.setTimeout(() => {
             void previewAudio.play().catch(() => {
               setMessage('Browser blocked autoplay.');
             });
-          }, offset * 1000),
+          }, previewUpdate.startOffset * 1000),
         );
       } else {
-        await previewAudio.play();
-        timers.push(
-          window.setTimeout(() => {
-            void previewVideo.play().catch(() => {
-              setMessage('Browser blocked autoplay.');
-            });
-          }, Math.abs(offset) * 1000),
-        );
+        await Promise.all([previewVideo.play(), previewAudio.play()]);
       }
     } catch (caughtError) {
       setMessage(
@@ -138,7 +140,8 @@ export function SyncControls() {
 
         {!syncTracks.length ? (
           <p className="rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-sm text-gray-400">
-            No audio tracks yet. Add an audio, stem, or recording track to sync it against your video.
+            No audio tracks yet. Add an audio, stem, or recording track to sync it against your
+            video.
           </p>
         ) : null}
 
@@ -146,8 +149,8 @@ export function SyncControls() {
           Offset slider ({offset.toFixed(2)}s)
           <input
             className="mt-2 h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-800 accent-brand-500"
-            max={5}
-            min={-5}
+            max={AUTO_SYNC_MAX_LAG_SECONDS}
+            min={-AUTO_SYNC_MAX_LAG_SECONDS}
             step={0.01}
             type="range"
             value={offset}
@@ -159,8 +162,8 @@ export function SyncControls() {
           Precise offset
           <input
             className="mt-2 w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-3 text-white outline-none transition focus:border-brand-500"
-            max={5}
-            min={-5}
+            max={AUTO_SYNC_MAX_LAG_SECONDS}
+            min={-AUTO_SYNC_MAX_LAG_SECONDS}
             step={0.01}
             type="number"
             value={offset}
@@ -173,13 +176,17 @@ export function SyncControls() {
           <div className="relative h-20 overflow-hidden rounded-xl bg-gray-950" aria-hidden="true">
             <div className="absolute inset-y-0 left-1/2 w-px bg-gray-700" />
             <div className="absolute left-[20%] top-5 h-4 w-[55%] rounded-full bg-blue-500/80">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Video</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">
+                Video
+              </span>
             </div>
             <div
               className="absolute top-11 h-4 w-[55%] rounded-full bg-brand-500/80 transition-all"
               style={{ left: `${offsetToPercent(offset)}%`, transform: 'translateX(-50%)' }}
             >
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">Audio</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-white">
+                Audio
+              </span>
             </div>
           </div>
         </div>
@@ -218,7 +225,19 @@ export function SyncControls() {
 
               try {
                 const result = await computeAutoSyncOffset(referenceUrl, selectedTrack.sourceUrl);
-                const computedOffset = Math.max(-5, Math.min(5, result.offsetSeconds));
+                const currentTrack =
+                  tracksRef.current.find((track) => track.id === selectedTrack.id) ?? null;
+                if (
+                  !currentTrack ||
+                  currentTrack.sourceUrl !== selectedTrack.sourceUrl ||
+                  videoRef.current?.url !== referenceUrl ||
+                  selectedTrackIdRef.current !== selectedTrack.id
+                ) {
+                  throw new Error(
+                    'The reference or target changed during auto-sync; run it again.',
+                  );
+                }
+                const computedOffset = result.offsetSeconds;
                 const confidencePercent = Math.round(result.confidence * 100);
 
                 // Surface the suggested offset on the slider so the user can review/preview it.
@@ -230,7 +249,7 @@ export function SyncControls() {
                     `⚠️ Auto sync confidence is low (${confidencePercent}%). The suggested ${computedOffset.toFixed(2)}s offset may be inaccurate — preview and adjust it manually before applying.`,
                   );
                 } else {
-                  updateTrack(selectedTrack.id, { startOffset: Math.max(0, computedOffset) });
+                  updateTrack(currentTrack.id, createSyncTrackUpdate(currentTrack, computedOffset));
                   setMessage(
                     `Auto sync done: ${computedOffset.toFixed(2)}s offset (${confidencePercent}% confidence)`,
                   );
@@ -257,8 +276,14 @@ export function SyncControls() {
                 return;
               }
 
-              updateTrack(selectedTrack.id, { startOffset: Math.max(0, offset) });
-              setMessage('Offset applied to timeline.');
+              try {
+                updateTrack(selectedTrack.id, createSyncTrackUpdate(selectedTrack, offset));
+                setMessage('Offset applied to timeline.');
+              } catch (error) {
+                setMessage(
+                  error instanceof Error ? error.message : 'Could not apply the sync offset.',
+                );
+              }
             }}
           >
             Apply Offset
