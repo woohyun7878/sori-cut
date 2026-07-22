@@ -1207,7 +1207,59 @@ describe('decodeEncodedAudioToMono', () => {
     const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
 
     expect([...result]).toEqual([3, 4]);
+    expect(sample.copyTo).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      expect.objectContaining({ frameOffset: 2, frameCount: 2 }),
+    );
     expect(sample.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['entirely before zero', -4 / SAMPLE_RATE],
+    ['ending exactly at zero', -2 / SAMPLE_RATE],
+  ])('discards a valid sample %s before validating its presented start', async (_name, timestamp) => {
+    const preroll = createMockAudioSample(
+      [Float32Array.of(1, 2)],
+      SAMPLE_RATE,
+      timestamp,
+    );
+    const presented = createMockAudioSample(
+      [Float32Array.of(3, 4)],
+      SAMPLE_RATE,
+      0,
+    );
+    mediaMock.sampleFactory = () => [preroll, presented];
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([3, 4]);
+    expect(preroll.copyTo).not.toHaveBeenCalled();
+    expect(preroll.close).toHaveBeenCalledOnce();
+    expect(presented.close).toHaveBeenCalledOnce();
+    expect(mediaMock.activeIterators).toBe(0);
+  });
+
+  it('charges discarded pre-zero samples against the decoded-byte budget', async () => {
+    const preroll = createMockAudioSample(
+      [Float32Array.of(1, 2)],
+      SAMPLE_RATE,
+      -4 / SAMPLE_RATE,
+    );
+    const presented = createMockAudioSample(
+      [Float32Array.of(3)],
+      SAMPLE_RATE,
+      0,
+    );
+    mediaMock.sampleFactory = () => [preroll, presented];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference', undefined, 8),
+    ).rejects.toMatchObject({ code: 'decoded-limit' });
+    expect(preroll.copyTo).not.toHaveBeenCalled();
+    expect(preroll.close).toHaveBeenCalledOnce();
+    expect(presented.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+    expect(mediaMock.activeIterators).toBe(0);
   });
 
   it('preserves timestamp gaps with silence and trims overlapping frames', async () => {
