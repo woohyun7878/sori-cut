@@ -574,10 +574,26 @@ describe('readResponseBuffer', () => {
       contentLength: declared,
     });
 
-    const buffer = await readResponseBuffer(response, 3, 'too large', undefined, declared);
+    const buffer = await readResponseBuffer(response, 3, 'too large', undefined, declared, 8);
 
     expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3]);
     expect(buffer).not.toBe(owner.buffer);
+  });
+
+  it.each([
+    ['declared', 3],
+    ['unknown', undefined],
+  ])('rejects a sliced %s reader view whose retained owner exceeds the peak', async (_name, declared) => {
+    const owner = Uint8Array.of(99, 99, 1, 2, 3, 99, 99);
+    const response = createStreamResponse({
+      chunks: [owner.subarray(2, 5)],
+      contentLength: declared,
+    });
+
+    await expect(
+      readResponseBuffer(response, 3, 'bounded owner', undefined, declared, 6),
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
+    expect(response.reader.cancel).toHaveBeenCalled();
   });
 
   it('handles detached BYOB requests and returned views with different owners and offsets', async () => {

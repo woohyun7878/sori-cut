@@ -207,6 +207,17 @@ async function readDeclaredByob(
           'Audio response did not match its Content-Length',
         );
       }
+
+      const previousOwnerBytes =
+        result.value.buffer === scratch.buffer ? 0 : scratch.buffer.byteLength;
+      const returnedOwnerBytes = result.value.buffer.byteLength;
+      const availableOwnerBytes = peakBudgetBytes - retainedBytes - declaredBytes;
+      if (
+        previousOwnerBytes > availableOwnerBytes ||
+        returnedOwnerBytes > availableOwnerBytes - previousOwnerBytes
+      ) {
+        throw new AutoSyncMediaError('encoded-limit', limitMessage);
+      }
       destination.set(result.value, totalBytes);
       totalBytes += result.value.byteLength;
 
@@ -318,6 +329,7 @@ export async function readResponseBuffer(
       }
 
       const chunkBytes = result.value.byteLength;
+      const ownerBytes = result.value.buffer.byteLength;
       if (totalBytes > Number.MAX_SAFE_INTEGER - chunkBytes) {
         cancelReaderBestEffort(reader);
         throw new AutoSyncMediaError('encoded-limit', limitMessage);
@@ -339,7 +351,18 @@ export async function readResponseBuffer(
         declaredBytes !== undefined &&
         (
           declaredBytes > peakBudgetBytes - retainedBytes ||
-          chunkBytes > peakBudgetBytes - retainedBytes - declaredBytes
+          ownerBytes > peakBudgetBytes - retainedBytes - declaredBytes
+        )
+      ) {
+        cancelReaderBestEffort(reader);
+        throw new AutoSyncMediaError('encoded-limit', limitMessage);
+      }
+      if (
+        declaredBytes === undefined &&
+        (
+          totalBytes > peakBudgetBytes - retainedBytes ||
+          ownerBytes > peakBudgetBytes - retainedBytes - totalBytes ||
+          chunkBytes > peakBudgetBytes - retainedBytes - totalBytes - ownerBytes
         )
       ) {
         cancelReaderBestEffort(reader);
@@ -351,7 +374,7 @@ export async function readResponseBuffer(
       if (destination !== null) {
         destination.set(result.value, totalBytes);
       } else {
-        chunks.push(result.value);
+        chunks.push(Uint8Array.from(result.value));
       }
       totalBytes = nextTotal;
     }
