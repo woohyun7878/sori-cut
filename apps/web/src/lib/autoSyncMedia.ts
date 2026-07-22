@@ -461,6 +461,7 @@ function closeSampleBestEffort(sample: AudioSample): void {
 interface OggLogicalStreamState {
   ended: boolean;
   nextSequenceNumber: number;
+  unfinishedPacket: boolean;
 }
 
 function malformedOggError(label: string, detail: string): AutoSyncMediaError {
@@ -531,11 +532,17 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
     if (bodyLength > bytes.byteLength - bodyOffset) {
       throw malformedOggError(label, 'truncated page body');
     }
+    const pageEndsWithUnfinishedPacket =
+      pageSegments > 0 && bytes[lacingOffset + pageSegments - 1] === 255;
 
     const serialNumber = view.getUint32(offset + 14, true);
     const sequenceNumber = view.getUint32(offset + 18, true);
     const beginsStream = (headerFlags & OGG_BEGINNING_OF_STREAM_FLAG) !== 0;
     const endsStream = (headerFlags & OGG_END_OF_STREAM_FLAG) !== 0;
+    const continuesPacket = (headerFlags & OGG_CONTINUED_PACKET_FLAG) !== 0;
+    if (endsStream && pageEndsWithUnfinishedPacket) {
+      throw malformedOggError(label, 'EOS page ends with an unfinished packet');
+    }
     const stream = streams.get(serialNumber);
 
     if (stream === undefined) {
@@ -557,6 +564,7 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
       streams.set(serialNumber, {
         ended: endsStream,
         nextSequenceNumber: 1,
+        unfinishedPacket: pageEndsWithUnfinishedPacket,
       });
     } else {
       if (beginsStream || stream.ended) {
@@ -565,8 +573,15 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
       if (sequenceNumber !== stream.nextSequenceNumber) {
         throw malformedOggError(label, 'logical stream page sequence regressed or skipped');
       }
+      if (continuesPacket !== stream.unfinishedPacket) {
+        throw malformedOggError(label, 'page continuation flag does not match prior lacing');
+      }
+      if (continuesPacket && pageSegments === 0) {
+        throw malformedOggError(label, 'continued page has no packet segments');
+      }
       stream.nextSequenceNumber = (sequenceNumber + 1) >>> 0;
       stream.ended = endsStream;
+      stream.unfinishedPacket = pageEndsWithUnfinishedPacket;
     }
 
     if (!beginsStream) {
