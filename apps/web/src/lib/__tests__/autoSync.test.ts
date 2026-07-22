@@ -1,10 +1,190 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+interface MockAudioSample {
+  close: ReturnType<typeof vi.fn>;
+  copyTo: ReturnType<typeof vi.fn>;
+  duration: number;
+  numberOfChannels: number;
+  numberOfFrames: number;
+  sampleRate: number;
+  timestamp: number;
+}
+
+const mediaMock = vi.hoisted(() => ({
+  activeIterators: 0,
+  inputs: [] as Array<{ formats: unknown[]; source: { buffer: ArrayBuffer } }>,
+  iteratorReturns: 0,
+  iteratorReturnError: null as Error | null,
+  iterators: [] as Array<{
+    next: ReturnType<typeof vi.fn>;
+    return: ReturnType<typeof vi.fn>;
+  }>,
+  maximumActiveIterators: 0,
+  sampleFactory: null as null | ((buffer: ArrayBuffer) => MockAudioSample[]),
+  selectedTrackIndexes: [] as number[],
+  metadata: {
+    canDecode: true,
+    channels: 1,
+    codec: 'mp3' as string | null,
+    format: 'MP3',
+    malformedAt: null as 'format' | 'decode' | null,
+    hasVideo: false,
+    primaryTrackIndex: 0,
+    readable: true,
+    sampleRate: 8_000,
+    track: true,
+    tracks: null as
+      | Array<{
+         canDecode?: boolean;
+         channels: number;
+         codec: string | null;
+         sampleRate: number;
+       }>
+      | null,
+  },
+}));
+
+vi.mock('mediabunny', () => {
+  class BufferSource {
+    constructor(readonly buffer: ArrayBuffer) {}
+  }
+  class Input {
+    private readonly metadata = { ...mediaMock.metadata };
+    private readonly tracks = (
+      this.metadata.track ? (this.metadata.tracks ?? [this.metadata]) : []
+    ).map((metadata, index) => this.createTrack(metadata, index));
+
+    constructor(readonly options: { formats: unknown[]; source: BufferSource }) {
+      mediaMock.inputs.push(options);
+    }
+
+    async canRead() {
+      if (this.metadata.malformedAt === 'format') {
+        throw new Error('broken container');
+      }
+      return this.metadata.readable;
+    }
+
+    async getFormat() {
+      return { name: this.metadata.format };
+    }
+
+    async getAudioTracks() {
+      return this.tracks;
+    }
+
+    async getPrimaryAudioTrack() {
+      if (!this.metadata.track || this.metadata.primaryTrackIndex < 0) {
+        return null;
+      }
+      return (
+        this.tracks[this.metadata.primaryTrackIndex] ??
+        this.createTrack(this.metadata, this.metadata.primaryTrackIndex)
+      );
+    }
+
+    async getVideoTracks() {
+      return this.metadata.hasVideo ? [{}] : [];
+    }
+
+    private createTrack(metadata: {
+      canDecode?: boolean;
+      channels: number;
+      codec: string | null;
+      sampleRate: number;
+    }, index: number) {
+      return {
+        canDecode: async () => metadata.canDecode ?? this.metadata.canDecode,
+        index,
+        source: this.options.source,
+      };
+    }
+
+    dispose() {}
+  }
+
+  class AudioSampleSink {
+    constructor(private readonly track: { index: number; source: BufferSource }) {
+      mediaMock.selectedTrackIndexes.push(track.index);
+    }
+
+    samples() {
+      const samples = mediaMock.sampleFactory?.(this.track.source.buffer) ?? [];
+      let index = 0;
+      let active = false;
+      const finish = () => {
+        if (active) {
+          active = false;
+          mediaMock.activeIterators--;
+        }
+      };
+      const iterator = {
+        next: vi.fn(async () => {
+          if (!active) {
+            active = true;
+            mediaMock.activeIterators++;
+            mediaMock.maximumActiveIterators = Math.max(
+              mediaMock.maximumActiveIterators,
+              mediaMock.activeIterators,
+            );
+          }
+          if (mediaMock.metadata.malformedAt === 'decode') {
+            finish();
+            throw new Error('primary decode failure');
+          }
+          if (index >= samples.length) {
+            finish();
+            return { done: true as const, value: undefined };
+          }
+          return { done: false as const, value: samples[index++] };
+        }),
+        return: vi.fn(async () => {
+          mediaMock.iteratorReturns++;
+          finish();
+          while (index < samples.length) {
+            samples[index++].close();
+          }
+          if (mediaMock.iteratorReturnError) {
+            throw mediaMock.iteratorReturnError;
+          }
+          return { done: true as const, value: undefined };
+        }),
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+      mediaMock.iterators.push(iterator);
+      return iterator;
+    }
+  }
+
+  const format = (name: string) => ({ name });
+  return {
+    ADTS: format('ADTS'),
+    AudioSampleSink,
+    BufferSource,
+    FLAC: format('FLAC'),
+    Input,
+    MATROSKA: format('Matroska'),
+    MP3: format('MP3'),
+    MP4: format('MP4'),
+    OGG: format('Ogg'),
+    QTFF: format('QuickTime'),
+    WAVE: format('WAVE'),
+    WEBM: format('WebM'),
+  };
+});
+
 import {
+  AUTO_SYNC_BYOB_CHUNK_BYTES,
+  DECODE_YIELD_FRAME_INTERVAL,
+  AUTO_SYNC_INPUT_FORMATS,
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
-  AUTO_SYNC_MAX_STREAMING_PEAK_BYTES,
+  AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+  AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
   computeAutoSyncOffset,
+  decodeEncodedAudioToMono,
   getUnknownLengthPayloadLimit,
-  inspectEncodedAudioMemory,
   readResponseBuffer,
 } from '../autoSync';
 import {
@@ -19,10 +199,9 @@ import {
 } from '../autoSyncCore';
 
 const SAMPLE_RATE = AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
-const MP3_FRAME_BYTES = 417;
-const REFERENCE_BYTES = MP3_FRAME_BYTES * 2;
-const TARGET_BYTES = MP3_FRAME_BYTES * 3;
 const MEBIBYTE = 1024 * 1024;
+const REFERENCE_BYTES = 2;
+const TARGET_BYTES = 3;
 
 function frameAmplitude(frame: number): number {
   let hash = frame + 1;
@@ -84,197 +263,127 @@ function advanceSignal(source: Float32Array, advanceSamples: number): Float32Arr
   return target;
 }
 
-function createMockMonoBuffer(data: Float32Array): AudioBuffer {
+function createMockAudioSample(
+  channelData: Float32Array[],
+  sampleRate = SAMPLE_RATE,
+  timestamp = 0,
+): MockAudioSample {
+  const numberOfFrames = channelData[0]?.length ?? 0;
   return {
-    numberOfChannels: 1,
-    length: data.length,
-    sampleRate: SAMPLE_RATE,
-    duration: data.length / SAMPLE_RATE,
-    getChannelData: () => data,
-    copyFromChannel: vi.fn(),
-    copyToChannel: vi.fn(),
-  } as unknown as AudioBuffer;
-}
-
-function createWaveHeader(options: {
-  channels: number;
-  sampleRate: number;
-  bitsPerSample: number;
-  dataBytes: number;
-  formatTag?: 1 | 3;
-}): ArrayBuffer {
-  const buffer = new ArrayBuffer(44 + options.dataBytes);
-  const view = new DataView(buffer);
-  const writeText = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i++) {
-      view.setUint8(offset + i, text.charCodeAt(i));
-    }
+    close: vi.fn(),
+    copyTo: vi.fn(
+      (
+        destination: Float32Array,
+        options: {
+          frameCount?: number;
+          frameOffset?: number;
+          planeIndex: number;
+        },
+      ) => {
+        const frameOffset = options.frameOffset ?? 0;
+        const frameCount = options.frameCount ?? numberOfFrames - frameOffset;
+        destination.set(
+          channelData[options.planeIndex].subarray(frameOffset, frameOffset + frameCount),
+        );
+      },
+    ),
+    duration: numberOfFrames / sampleRate,
+    numberOfChannels: channelData.length,
+    numberOfFrames,
+    sampleRate,
+    timestamp,
   };
-  const blockAlign = (options.channels * options.bitsPerSample) / 8;
-  const byteRate = options.sampleRate * blockAlign;
-  writeText(0, 'RIFF');
-  view.setUint32(4, 36 + options.dataBytes, true);
-  writeText(8, 'WAVE');
-  writeText(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, options.formatTag ?? 1, true);
-  view.setUint16(22, options.channels, true);
-  view.setUint32(24, options.sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, options.bitsPerSample, true);
-  writeText(36, 'data');
-  view.setUint32(40, options.dataBytes, true);
-  return buffer;
 }
 
-function createExtendedFormatWave(formatBytes: 17 | 18, extensionSize = 0): ArrayBuffer {
-  const source = new Uint8Array(
-    createWaveHeader({
-      channels: 1,
-      sampleRate: 8_000,
-      bitsPerSample: 16,
-      dataBytes: 100,
-    }),
-  );
-  const extensionStorageBytes = formatBytes - 16 + (formatBytes % 2);
-  const bytes = new Uint8Array(source.length + extensionStorageBytes);
-  bytes.set(source.subarray(0, 36));
-  bytes.set(source.subarray(36), 36 + extensionStorageBytes);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(4, bytes.length - 8, true);
-  view.setUint32(16, formatBytes, true);
-  if (formatBytes === 18) {
-    view.setUint16(36, extensionSize, true);
-  }
-  return bytes.buffer;
+interface OggPageOptions {
+  body?: readonly number[];
+  flags: number;
+  lacing?: readonly number[];
+  sequence: number;
+  serial: number;
+  version?: number;
 }
 
-function createMp3Buffer(byteLength: number): ArrayBuffer {
-  const buffer = new ArrayBuffer(byteLength);
-  const bytes = new Uint8Array(buffer);
-  for (let offset = 0; offset + MP3_FRAME_BYTES <= byteLength; offset += MP3_FRAME_BYTES) {
-    bytes.set([0xff, 0xfb, 0x90, 0x64], offset);
-  }
-  return buffer;
-}
-
-function createId3Mp3Buffer(version: 3 | 4 = 4, footer = false): ArrayBuffer {
-  const audioOffset = footer ? 20 : 10;
-  const bytes = new Uint8Array(audioOffset + MP3_FRAME_BYTES * 2);
-  const flags = footer ? 0x10 : 0;
-  bytes.set([0x49, 0x44, 0x33, version, 0x00, flags, 0, 0, 0, 0]);
-  if (footer) {
-    bytes.set([0x33, 0x44, 0x49, version, 0x00, flags, 0, 0, 0, 0], 10);
-  }
-  bytes.set([0xff, 0xfb, 0x90, 0x64], audioOffset);
-  bytes.set([0xff, 0xfb, 0x90, 0x64], audioOffset + MP3_FRAME_BYTES);
-  return bytes.buffer;
-}
-
-function createDuplicateFormatWave(): ArrayBuffer {
-  const source = new Uint8Array(
-    createWaveHeader({
-      channels: 1,
-      sampleRate: 8_000,
-      bitsPerSample: 8,
-      dataBytes: 100,
-    }),
-  );
-  const bytes = new Uint8Array(source.length + 24);
-  bytes.set(source.subarray(0, 36), 0);
-  bytes.set(source.subarray(12, 36), 36);
-  bytes.set(source.subarray(36), 60);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(4, bytes.length - 8, true);
-  view.setUint32(52, 32_000, true);
-  view.setUint16(56, 4, true);
-  view.setUint16(58, 32, true);
-  return bytes.buffer;
-}
-
-function createDuplicateDataWave(): ArrayBuffer {
-  const source = new Uint8Array(
-    createWaveHeader({
-      channels: 1,
-      sampleRate: 8_000,
-      bitsPerSample: 8,
-      dataBytes: 100,
-    }),
-  );
-  const bytes = new Uint8Array(source.length + 8);
-  bytes.set(source);
-  bytes.set([0x64, 0x61, 0x74, 0x61], source.length);
-  new DataView(bytes.buffer).setUint32(4, bytes.length - 8, true);
-  return bytes.buffer;
-}
-
-function createDataBeforeFormatWave(): ArrayBuffer {
-  const bytes = new Uint8Array(144);
-  const view = new DataView(bytes.buffer);
-  const writeText = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i++) {
-      bytes[offset + i] = text.charCodeAt(i);
+function createOggPage({
+  body = [],
+  flags,
+  lacing,
+  sequence,
+  serial,
+  version = 0,
+}: OggPageOptions): Uint8Array {
+  const lacingValues: number[] = lacing ? [...lacing] : [];
+  if (!lacing) {
+    let remaining = body.length;
+    while (remaining >= 255) {
+      lacingValues.push(255);
+      remaining -= 255;
     }
+    lacingValues.push(remaining);
+  }
+  if (
+    lacingValues.length > 255 ||
+    lacingValues.some((value) => !Number.isInteger(value) || value < 0 || value > 255) ||
+    lacingValues.reduce((sum, value) => sum + value, 0) !== body.length
+  ) {
+    throw new Error('Test Ogg page body is too large');
+  }
+
+  const page = new Uint8Array(27 + lacingValues.length + body.length);
+  page.set([0x4f, 0x67, 0x67, 0x53, version, flags]);
+  const view = new DataView(page.buffer);
+  view.setUint32(14, serial, true);
+  view.setUint32(18, sequence, true);
+  page[26] = lacingValues.length;
+  page.set(lacingValues, 27);
+  page.set(body, 27 + lacingValues.length);
+  return page;
+}
+
+function createOggBuffer(...pages: Uint8Array[]): ArrayBuffer {
+  const output = new Uint8Array(
+    pages.reduce((totalBytes, page) => totalBytes + page.byteLength, 0),
+  );
+  let offset = 0;
+  for (const page of pages) {
+    output.set(page, offset);
+    offset += page.byteLength;
+  }
+  return output.buffer;
+}
+
+function isTransferableArrayBuffer(buffer: ArrayBufferLike): buffer is ArrayBuffer {
+  return Object.prototype.toString.call(buffer) === '[object ArrayBuffer]';
+}
+
+interface StreamResponse extends Response {
+  arrayBuffer: ReturnType<typeof vi.fn>;
+  bodyCancel: ReturnType<typeof vi.fn>;
+  byobReader: {
+    cancel: ReturnType<typeof vi.fn>;
+    read: ReturnType<typeof vi.fn>;
+    releaseLock: ReturnType<typeof vi.fn>;
   };
-  writeText(0, 'RIFF');
-  view.setUint32(4, bytes.length - 8, true);
-  writeText(8, 'WAVE');
-  writeText(12, 'data');
-  view.setUint32(16, 100, true);
-  writeText(120, 'fmt ');
-  view.setUint32(124, 16, true);
-  view.setUint16(128, 1, true);
-  view.setUint16(130, 1, true);
-  view.setUint32(132, 8_000, true);
-  view.setUint32(136, 8_000, true);
-  view.setUint16(140, 1, true);
-  view.setUint16(142, 8, true);
-  return bytes.buffer;
-}
-
-function createAdtsBuffer(): ArrayBuffer {
-  return Uint8Array.from([0xff, 0xf1, 0x0c, 0x80, 0, 0, 0]).buffer;
-}
-
-function createOggBuffer(codec: 'opus' | 'vorbis', channels = 2): ArrayBuffer {
-  const bytes = new Uint8Array(64);
-  bytes.set([0x4f, 0x67, 0x67, 0x53], 0);
-  bytes[26] = 1;
-  bytes[27] = 32;
-  const packetOffset = 28;
-  if (codec === 'opus') {
-    bytes.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64], packetOffset);
-    bytes[packetOffset + 9] = channels;
-  } else {
-    bytes.set([0x01, 0x76, 0x6f, 0x72, 0x62, 0x69, 0x73], packetOffset);
-    bytes[packetOffset + 11] = channels;
-    new DataView(bytes.buffer).setUint32(packetOffset + 12, 48_000, true);
-  }
-  return bytes.buffer;
-}
-
-function createCommonUnsupportedBuffer(format: 'flac' | 'm4a' | 'webm'): ArrayBuffer {
-  const bytes = new Uint8Array(32);
-  if (format === 'flac') {
-    bytes.set([0x66, 0x4c, 0x61, 0x43]);
-  } else if (format === 'm4a') {
-    bytes.set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20]);
-  } else {
-    bytes.set([0x1a, 0x45, 0xdf, 0xa3]);
-  }
-  return bytes.buffer;
+  reader: {
+    cancel: ReturnType<typeof vi.fn>;
+    read: ReturnType<typeof vi.fn>;
+    releaseLock: ReturnType<typeof vi.fn>;
+  };
 }
 
 function createStreamResponse(options: {
+  body?: boolean;
+  byobOwnership?: 'invalid' | 'valid';
   chunks?: Uint8Array[];
-  cancel?: () => Promise<void>;
+  contentLength?: number;
   pendingRead?: boolean;
-  supportsByob?: boolean;
   byobReadSizes?: number[];
-}): Response {
+  readerCancel?: () => Promise<void>;
+  status?: number;
+  supportsByob?: boolean;
+}): StreamResponse {
   const chunks = [...(options.chunks ?? [])];
-  const defaultReader = {
+  const reader = {
     read: vi.fn(() =>
       options.pendingRead
         ? new Promise<ReadableStreamReadResult<Uint8Array>>(() => {})
@@ -284,54 +393,89 @@ function createStreamResponse(options: {
               : { done: true as const, value: undefined },
           ),
     ),
-    cancel: vi.fn(options.cancel ?? (async () => {})),
+    cancel: vi.fn(options.readerCancel ?? (async () => {})),
     releaseLock: vi.fn(),
   };
   const byobReader = {
-    read: vi.fn((view: Uint8Array) => {
+    read: vi.fn((view: ArrayBufferView) => {
       options.byobReadSizes?.push(view.byteLength);
-      if (options.pendingRead) {
-        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+      if (chunks.length === 0) {
+        if (isTransferableArrayBuffer(view.buffer)) {
+          structuredClone(view.buffer, { transfer: [view.buffer] });
+        }
+        return Promise.resolve({
+          done: true as const,
+          value: undefined,
+        });
       }
-      const chunk = chunks[0];
-      if (!chunk) {
-        return Promise.resolve({ done: true as const, value: new Uint8Array() });
-      }
-      const copiedBytes = Math.min(view.byteLength, chunk.byteLength);
-      view.set(chunk.subarray(0, copiedBytes));
-      if (copiedBytes === chunk.byteLength) {
+
+      const source = chunks[0];
+      const bytesRead = Math.min(source.byteLength, view.byteLength);
+      const requestOffset = view.byteOffset;
+      new Uint8Array(view.buffer, view.byteOffset, bytesRead).set(
+        source.subarray(0, bytesRead),
+      );
+      if (bytesRead === source.byteLength) {
         chunks.shift();
       } else {
-        chunks[0] = chunk.subarray(copiedBytes);
+        chunks[0] = source.subarray(bytesRead);
+      }
+      if (!isTransferableArrayBuffer(view.buffer)) {
+        throw new TypeError('Expected an ArrayBuffer-backed BYOB request');
+      }
+      const returnedOwner = structuredClone(view.buffer, {
+        transfer: [view.buffer],
+      });
+      if (options.byobOwnership === 'invalid') {
+        return Promise.resolve({
+          done: false as const,
+          value: new Uint8Array(returnedOwner.slice(requestOffset, requestOffset + bytesRead)),
+        });
       }
       return Promise.resolve({
         done: false as const,
-        value: view.subarray(0, copiedBytes),
+        value: new Uint8Array(returnedOwner, requestOffset, bytesRead),
       });
     }),
-    cancel: vi.fn(options.cancel ?? (async () => {})),
+    cancel: vi.fn(options.readerCancel ?? (async () => {})),
     releaseLock: vi.fn(),
   };
+  const bodyCancel = vi.fn(async () => {});
+  const status = options.status ?? 200;
   return {
-    body: {
-      getReader: (readerOptions?: { mode?: string }) => {
-        if (readerOptions?.mode === 'byob') {
-          if (!options.supportsByob) {
-            throw new TypeError('BYOB is not supported');
-          }
-          return byobReader;
-        }
-        return defaultReader;
-      },
-      cancel: vi.fn(options.cancel ?? (async () => {})),
-    },
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(
+      options.contentLength === undefined
+        ? undefined
+        : { 'content-length': String(options.contentLength) },
+    ),
+    body:
+      options.body === false
+        ? null
+        : ({
+            cancel: bodyCancel,
+            getReader: (readerOptions?: { mode?: string }) => {
+              if (readerOptions?.mode === 'byob') {
+                if (!options.supportsByob) {
+                  throw new TypeError('BYOB is not supported');
+                }
+                return byobReader;
+              }
+              return reader;
+            },
+          } as unknown as ReadableStream<Uint8Array>),
     arrayBuffer: vi.fn(),
-  } as unknown as Response;
+    bodyCancel,
+    byobReader,
+    reader,
+  } as unknown as StreamResponse;
 }
 
 let decodedReference: Float32Array;
 let decodedTarget: Float32Array;
 let fetchedUrls: string[];
+let workerCreations: number;
 let workerTerminations: number;
 
 class MockAutoSyncWorker {
@@ -339,6 +483,10 @@ class MockAutoSyncWorker {
   onerror: ((event: ErrorEvent) => void) | null = null;
   onmessageerror: ((event: MessageEvent) => void) | null = null;
   protected terminated = false;
+
+  constructor() {
+    workerCreations++;
+  }
 
   postMessage(value: unknown) {
     if (this.terminated) {
@@ -400,413 +548,1007 @@ class SilentWorker extends MockAutoSyncWorker {
 beforeEach(() => {
   vi.useRealTimers();
   fetchedUrls = [];
+  workerCreations = 0;
   workerTerminations = 0;
+  mediaMock.activeIterators = 0;
+  mediaMock.inputs.length = 0;
+  mediaMock.iteratorReturns = 0;
+  mediaMock.iteratorReturnError = null;
+  mediaMock.iterators.length = 0;
+  mediaMock.maximumActiveIterators = 0;
+  mediaMock.selectedTrackIndexes.length = 0;
+  Object.assign(mediaMock.metadata, {
+    canDecode: true,
+    channels: 1,
+    codec: 'mp3',
+    format: 'MP3',
+    malformedAt: null,
+    hasVideo: false,
+    primaryTrackIndex: 0,
+    readable: true,
+    sampleRate: SAMPLE_RATE,
+    track: true,
+    tracks: null,
+  });
   decodedReference = createAsymmetricPulseSignal(250);
   decodedTarget = delaySignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
+  mediaMock.sampleFactory = (buffer) => [
+    createMockAudioSample([
+      buffer.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
+    ]),
+  ];
 
   vi.stubGlobal('Worker', MockAutoSyncWorker);
-  vi.stubGlobal(
-    'AudioContext',
-    class {
-      async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
-        return createMockMonoBuffer(
-          data.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
-        );
-      }
-      async close() {}
-    },
-  );
-  vi.stubGlobal(
-    'OfflineAudioContext',
-    class {
-      private readonly length: number;
-      private connectedBuffer: AudioBuffer | null = null;
-
-      constructor(_channels: number, length: number, _sampleRate: number) {
-        this.length = length;
-      }
-
-      createBufferSource() {
-        const connectBuffer = (buffer: AudioBuffer | null) => {
-          this.connectedBuffer = buffer;
-        };
-        return {
-          value: null as AudioBuffer | null,
-          set buffer(buffer: AudioBuffer | null) {
-            this.value = buffer;
-            connectBuffer(buffer);
-          },
-          get buffer() {
-            return this.value;
-          },
-          connect: vi.fn(),
-          start: vi.fn(),
-        };
-      }
-
-      get destination() {
-        return {};
-      }
-
-      async startRendering(): Promise<AudioBuffer> {
-        const source = this.connectedBuffer?.getChannelData(0) ?? new Float32Array();
-        return createMockMonoBuffer(source.slice(0, this.length));
-      }
-    },
-  );
+  vi.stubGlobal('AudioContext', vi.fn(() => {
+    throw new Error('Web Audio must not be constructed');
+  }));
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       fetchedUrls.push(url);
       const isTarget = url.includes('target') || url === 'blob:tar';
-      return {
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => createMp3Buffer(isTarget ? TARGET_BYTES : REFERENCE_BYTES),
-      };
+      const bytes = new Uint8Array(isTarget ? TARGET_BYTES : REFERENCE_BYTES);
+      return createStreamResponse({
+        chunks: [bytes],
+        contentLength: bytes.byteLength,
+      });
     }),
   );
 });
 
 describe('readResponseBuffer', () => {
-  it('uses bounded BYOB reads at the exact declared Content-Length boundary', async () => {
+  it('accepts one 48 MiB declared chunk within the 96 MiB encoded peak', async () => {
+    const chunk = new Uint8Array(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT);
+    const response = createStreamResponse({
+      chunks: [chunk],
+      contentLength: chunk.byteLength,
+    });
+
+    await expect(
+      readResponseBuffer(
+        response,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+        'too large',
+        undefined,
+        chunk.byteLength,
+      ),
+    ).resolves.toHaveProperty('byteLength', chunk.byteLength);
+    expect(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT).toBe(48 * MEBIBYTE);
+    expect(AUTO_SYNC_MAX_ENCODED_PEAK_BYTES).toBe(96 * MEBIBYTE);
+  });
+
+  it('caps declared BYOB scratch reads at 64 KiB', async () => {
     const byobReadSizes: number[] = [];
+    const payload = new Uint8Array(AUTO_SYNC_BYOB_CHUNK_BYTES + 10);
     const response = createStreamResponse({
-      chunks: [Uint8Array.of(1, 2), Uint8Array.of(3, 4)],
-      supportsByob: true,
       byobReadSizes,
-    });
-
-    const buffer = await readResponseBuffer(response, 4, 'too large', undefined, 4, 8);
-
-    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3, 4]);
-    expect(Math.max(...byobReadSizes)).toBeLessThanOrEqual(4);
-    expect(response.arrayBuffer).not.toHaveBeenCalled();
-  });
-
-  it('reads a native byte stream without retaining its incoming chunk', async () => {
-    const body = new ReadableStream({
-      type: 'bytes',
-      start(controller: ReadableByteStreamController) {
-        controller.enqueue(Uint8Array.of(1, 2, 3, 4));
-        controller.close();
-      },
-    });
-    const response = {
-      body,
-      arrayBuffer: vi.fn(),
-    } as unknown as Response;
-
-    const buffer = await readResponseBuffer(response, 4, 'too large', undefined, 4, 8);
-
-    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3, 4]);
-  });
-
-  it('bounds one-chunk BYOB input plus preallocation and retained analysis memory', async () => {
-    const byobReadSizes: number[] = [];
-    const response = createStreamResponse({
-      chunks: [Uint8Array.from({ length: 12 }, (_, index) => index)],
+      chunks: [payload],
+      contentLength: payload.byteLength,
       supportsByob: true,
-      byobReadSizes,
     });
 
-    const buffer = await readResponseBuffer(response, 12, 'too large', undefined, 12, 18, 4);
-
-    expect([...new Uint8Array(buffer)]).toEqual([...Array(12).keys()]);
-    expect(Math.max(...byobReadSizes)).toBe(2);
+    await expect(
+      readResponseBuffer(
+        response,
+        payload.byteLength,
+        'too large',
+        undefined,
+        payload.byteLength,
+      ),
+    ).resolves.toHaveProperty('byteLength', payload.byteLength);
+    expect(Math.max(...byobReadSizes)).toBe(AUTO_SYNC_BYOB_CHUNK_BYTES);
   });
 
-  it('rejects before reading when bounded BYOB streaming is unavailable', async () => {
-    const cancel = vi.fn(async () => {});
+  it('caps unknown-length payloads at 48 MiB and rejects larger input', async () => {
+    expect(getUnknownLengthPayloadLimit(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT)).toBe(
+      AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+    );
+    const accepted = createStreamResponse({
+      chunks: [new Uint8Array(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT)],
+    });
+    await expect(
+      readResponseBuffer(
+        accepted,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+        'too large',
+        undefined,
+      ),
+    ).resolves.toHaveProperty('byteLength', AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT);
+
+    const rejected = createStreamResponse({
+      chunks: [new Uint8Array(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT + 1)],
+    });
+    await expect(
+      readResponseBuffer(
+        rejected,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+        'too large',
+        undefined,
+      ),
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
+    expect(rejected.reader.cancel).toHaveBeenCalled();
+  });
+
+  it('rejects a duplicate incoming chunk before allocating a declared destination', async () => {
     const response = createStreamResponse({
-      chunks: [Uint8Array.from({ length: 8 })],
-      cancel,
+      chunks: [new Uint8Array(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT + 1)],
+      contentLength: AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+    });
+
+    await expect(
+      readResponseBuffer(
+        response,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+        'too large',
+        undefined,
+        AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
+      ),
+    ).rejects.toMatchObject({ code: 'content-length-mismatch' });
+    expect(response.reader.cancel).toHaveBeenCalled();
+  });
+
+  it('accounts retained analysis bytes before fallback destination allocation', async () => {
+    const response = createStreamResponse({
+      chunks: [new Uint8Array(8)],
+      contentLength: 8,
     });
 
     await expect(
       readResponseBuffer(response, 12, 'bounded peak', undefined, 8, 18, 4),
-    ).rejects.toThrow('bounded peak');
-    expect(cancel).toHaveBeenCalledOnce();
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
+    expect(response.reader.cancel).toHaveBeenCalled();
   });
 
-  it('reserves assembly headroom for unknown-length responses at exact boundaries', async () => {
-    expect(getUnknownLengthPayloadLimit(8)).toBe(3);
-    const accepted = createStreamResponse({
-      chunks: [Uint8Array.of(1, 2), Uint8Array.of(3)],
-      supportsByob: true,
+  it('rechecks retained peak admission for later fallback chunks', async () => {
+    const response = createStreamResponse({
+      chunks: [new Uint8Array(2), new Uint8Array(8)],
+      contentLength: 10,
     });
-    await expect(readResponseBuffer(accepted, 8, 'too large', undefined)).resolves.toHaveProperty(
-      'byteLength',
-      3,
-    );
 
-    const rejected = createStreamResponse({
-      chunks: [Uint8Array.of(1, 2, 3, 4)],
+    await expect(
+      readResponseBuffer(response, 12, 'bounded peak', undefined, 10, 20, 4),
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
+    expect(response.reader.cancel).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['declared', 3],
+    ['unknown', undefined],
+  ])('copies the returned %s reader view using its exact offset and ownership', async (_name, declared) => {
+    const owner = Uint8Array.of(99, 1, 2, 3, 99);
+    const response = createStreamResponse({
+      chunks: [owner.subarray(1, 4)],
+      contentLength: declared,
+    });
+
+    const buffer = await readResponseBuffer(response, 3, 'too large', undefined, declared, 8);
+
+    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3]);
+    expect(buffer).not.toBe(owner.buffer);
+  });
+
+  it.each([
+    ['declared', 3],
+    ['unknown', undefined],
+  ])('rejects a sliced %s reader view whose retained owner exceeds the peak', async (_name, declared) => {
+    const owner = Uint8Array.of(99, 99, 1, 2, 3, 99, 99);
+    const response = createStreamResponse({
+      chunks: [owner.subarray(2, 5)],
+      contentLength: declared,
+    });
+
+    await expect(
+      readResponseBuffer(response, 3, 'bounded owner', undefined, declared, 6),
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
+    expect(response.reader.cancel).toHaveBeenCalled();
+  });
+
+  it('handles detached BYOB requests and returned views with different owners and offsets', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1), Uint8Array.of(2, 3)],
+      contentLength: 3,
       supportsByob: true,
     });
-    await expect(readResponseBuffer(rejected, 8, 'too large', undefined)).rejects.toThrow(
-      'too large',
-    );
+
+    const buffer = await readResponseBuffer(response, 3, 'too large', undefined, 3);
+
+    expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3]);
+    expect(response.byobReader.read).toHaveBeenCalledTimes(3);
+    expect(response.byobReader.read.mock.results[0].value).toBeInstanceOf(Promise);
+    expect(response.reader.read).not.toHaveBeenCalled();
+  });
+
+  it('uses a BYOB sentinel read to cancel an overdeclared stream', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2, 3)],
+      contentLength: 2,
+      supportsByob: true,
+    });
+
+    await expect(readResponseBuffer(response, 3, 'too large', undefined, 2)).rejects.toMatchObject({
+      code: 'content-length-mismatch',
+    });
+    expect(response.byobReader.cancel).toHaveBeenCalled();
+    expect(response.reader.read).not.toHaveBeenCalled();
+  });
+
+  it('cancels a short BYOB stream that ends before Content-Length', async () => {
+    const response = createStreamResponse({
+      chunks: [Uint8Array.of(1, 2)],
+      contentLength: 3,
+      supportsByob: true,
+    });
+
+    await expect(readResponseBuffer(response, 3, 'too large', undefined, 3)).rejects.toMatchObject({
+      code: 'content-length-mismatch',
+    });
+    expect(response.byobReader.cancel).toHaveBeenCalled();
+  });
+
+  it('rejects incompatible BYOB buffer ownership before using the returned view', async () => {
+    const response = createStreamResponse({
+      byobOwnership: 'invalid',
+      chunks: [Uint8Array.of(1)],
+      contentLength: 3,
+      supportsByob: true,
+    });
+
+    await expect(readResponseBuffer(response, 3, 'too large', undefined, 3)).rejects.toMatchObject({
+      code: 'content-length-mismatch',
+      message: expect.stringContaining('buffer ownership'),
+    });
+    expect(response.byobReader.cancel).toHaveBeenCalled();
+  });
+
+  it('rejects a null response body instead of using arrayBuffer()', async () => {
+    const response = createStreamResponse({ body: false });
+
+    await expect(readResponseBuffer(response, 8, 'too large', undefined)).rejects.toMatchObject({
+      code: 'missing-response-body',
+    });
+    expect(response.arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['short', [Uint8Array.of(1, 2)], 3],
+    ['long', [Uint8Array.of(1, 2, 3)], 2],
+  ])('cancels a %s response that differs from Content-Length', async (_name, chunks, declared) => {
+    const response = createStreamResponse({ chunks, contentLength: declared });
+
+    await expect(
+      readResponseBuffer(response, 8, 'too large', undefined, declared),
+    ).rejects.toMatchObject({ code: 'content-length-mismatch' });
+    expect(response.reader.cancel).toHaveBeenCalled();
   });
 
   it('preserves AbortError when stream cancellation rejects', async () => {
-    const cancel = vi.fn(async () => {
-      throw new Error('cancel failed');
+    const response = createStreamResponse({
+      pendingRead: true,
+      readerCancel: async () => {
+        throw new Error('cancel failed');
+      },
     });
-    const response = createStreamResponse({ cancel, pendingRead: true, supportsByob: true });
     const controller = new AbortController();
     const pending = readResponseBuffer(response, 8, 'too large', controller.signal);
 
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(response.reader.cancel).toHaveBeenCalled();
   });
 });
 
-describe('inspectEncodedAudioMemory', () => {
+describe('decodeEncodedAudioToMono', () => {
   it.each([
-    ['mp3', createMp3Buffer(REFERENCE_BYTES)],
-    ['mp3', createId3Mp3Buffer()],
-    ['mp3', createId3Mp3Buffer(3)],
-    ['mp3', createId3Mp3Buffer(4, true)],
-    [
-      'wav',
-      createWaveHeader({
-        channels: 2,
-        sampleRate: 48_000,
-        bitsPerSample: 16,
-        dataBytes: 48_000,
-      }),
-    ],
-    [
-      'wav',
-      createWaveHeader({
-        channels: 2,
-        sampleRate: 48_000,
-        bitsPerSample: 32,
-        dataBytes: 96_000,
-        formatTag: 3,
-      }),
-    ],
-    ['wav', createExtendedFormatWave(18)],
-  ] as const)('safely estimates valid %s browser audio', (format, buffer) => {
-    const result = inspectEncodedAudioMemory(buffer);
+    ['MP4 video reference', 'MP4', 'aac'],
+    ['MOV video reference', 'QuickTime', 'aac'],
+    ['WebM video reference', 'WebM', 'opus'],
+    ['MP3 audio', 'MP3', 'mp3'],
+    ['M4A audio', 'MP4', 'aac'],
+    ['AAC audio', 'ADTS', 'aac'],
+    ['Ogg audio', 'Ogg', 'vorbis'],
+    ['FLAC audio', 'FLAC', 'flac'],
+    ['WAV audio', 'WAVE', 'pcm-s16'],
+  ])('incrementally decodes %s through the selected track', async (_name, format, codec) => {
+    Object.assign(mediaMock.metadata, {
+      codec,
+      format,
+    });
+    const sample = createMockAudioSample([
+      Float32Array.of(1, 0, -1),
+      Float32Array.of(-1, 1, 1),
+    ]);
+    mediaMock.sampleFactory = () => [sample];
 
-    expect(result.format).toBe(format);
-    expect(result.decodedBytes).toBeGreaterThan(0);
-    expect(result.decodedBytes).toBeLessThan(AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT);
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([0, 0.5, 0]);
+    expect(sample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.inputs.at(-1)?.formats).toEqual(AUTO_SYNC_INPUT_FORMATS);
   });
 
-  it('accounts for WAV upsampling by the analysis decoder', () => {
-    const buffer = createWaveHeader({
-      channels: 1,
-      sampleRate: 4_000,
-      bitsPerSample: 16,
-      dataBytes: 8_000,
+  it('uses the deterministic primary track without decoding unrelated tracks', async () => {
+    Object.assign(mediaMock.metadata, {
+      format: 'MP4',
+      hasVideo: true,
+      primaryTrackIndex: 1,
+      tracks: [
+        { channels: 1, codec: 'aac', sampleRate: 48_000 },
+        { channels: 2, codec: 'aac', sampleRate: 44_100 },
+      ],
     });
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
 
-    expect(inspectEncodedAudioMemory(buffer).decodedBytes).toBe(
-      8_000 * Float32Array.BYTES_PER_ELEMENT,
+    await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect(mediaMock.selectedTrackIndexes).toEqual([1]);
+  });
+
+  it('accepts a normal single-stream Ogg without treating payload OggS bytes as pages', async () => {
+    const sample = createMockAudioSample([Float32Array.of(1, 2, 3)]);
+    mediaMock.sampleFactory = () => [sample];
+    const buffer = createOggBuffer(
+      createOggPage({ body: [1, 2], flags: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({
+        body: [0, 0x4f, 0x67, 0x67, 0x53, 3],
+        flags: 0x04,
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toEqual(
+      Float32Array.of(1, 2, 3),
+    );
+    expect(mediaMock.inputs).toHaveLength(1);
+    expect(mediaMock.selectedTrackIndexes).toEqual([0]);
+  });
+
+  it('allows initial multiplexed Ogg logical streams before media pages', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const buffer = createOggBuffer(
+      createOggPage({ body: [1], flags: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ body: [2], flags: 0x02, sequence: 0, serial: 22 }),
+      createOggPage({ body: [3], flags: 0x04, sequence: 1, serial: 11 }),
+      createOggPage({ body: [4], flags: 0x04, sequence: 1, serial: 22 }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+    expect(mediaMock.inputs).toHaveLength(1);
+    expect(mediaMock.selectedTrackIndexes).toEqual([0]);
+  });
+
+  it('rejects a continued EOS page after a complete BOS packet', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({ body: [1], flags: 0x02, sequence: 0, serial: 11 }),
+      createOggPage({ body: [2], flags: 0x05, sequence: 1, serial: 11 }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('continuation flag'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it('rejects a missing continuation flag after an unfinished packet', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({ body: [2], flags: 0x04, sequence: 1, serial: 11 }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('continuation flag'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it('accepts a continued page that completes an unfinished packet', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({
+        body: [2],
+        flags: 0x05,
+        lacing: [1],
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
     );
   });
 
-  it('rejects uninspectable formats', () => {
-    const malformedWave = createWaveHeader({
-      channels: 2,
-      sampleRate: 48_000,
-      bitsPerSample: 16,
-      dataBytes: 100,
-    }).slice(0, 44);
-    const outsideRiff = createWaveHeader({
-      channels: 2,
-      sampleRate: 48_000,
-      bitsPerSample: 16,
-      dataBytes: 100,
+  it('accepts an unfinished packet continued across multiple pages', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const unfinishedBody = new Array(255).fill(1);
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: unfinishedBody,
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({
+        body: unfinishedBody,
+        flags: 0x01,
+        lacing: [255],
+        sequence: 1,
+        serial: 11,
+      }),
+      createOggPage({
+        body: [2],
+        flags: 0x05,
+        lacing: [1],
+        sequence: 2,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+  });
+
+  it('rejects an EOS page whose final packet remains unfinished', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x06,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('EOS page ends with an unfinished packet'),
     });
-    new DataView(outsideRiff).setUint32(4, 4, true);
-    const invalidFloat = createWaveHeader({
-      channels: 2,
-      sampleRate: 48_000,
-      bitsPerSample: 8,
-      dataBytes: 100,
-      formatTag: 3,
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it('tracks packet continuation independently across interleaved streams', async () => {
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
+    ];
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({ body: [2], flags: 0x02, sequence: 0, serial: 22 }),
+      createOggPage({ body: [3], flags: 0x04, sequence: 1, serial: 22 }),
+      createOggPage({
+        body: [4],
+        flags: 0x05,
+        lacing: [1],
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'reference')).resolves.toBeInstanceOf(
+      Float32Array,
+    );
+  });
+
+  it('rejects an empty page that claims to continue an unfinished packet', async () => {
+    const buffer = createOggBuffer(
+      createOggPage({
+        body: new Array(255).fill(1),
+        flags: 0x02,
+        lacing: [255],
+        sequence: 0,
+        serial: 11,
+      }),
+      createOggPage({
+        flags: 0x01,
+        lacing: [],
+        sequence: 1,
+        serial: 11,
+      }),
+    );
+
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('no packet segments'),
     });
-    const missingOddPadding = createWaveHeader({
-      channels: 1,
-      sampleRate: 8_000,
-      bitsPerSample: 8,
-      dataBytes: 1,
+    expect(mediaMock.inputs).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a sequential stream after EOS',
+      createOggBuffer(
+        createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
+        createOggPage({ flags: 0x04, sequence: 1, serial: 11 }),
+        createOggPage({ flags: 0x06, sequence: 0, serial: 22 }),
+      ),
+    ],
+    [
+      'a new BOS stream after media begins',
+      createOggBuffer(
+        createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
+        createOggPage({ flags: 0, sequence: 1, serial: 11 }),
+        createOggPage({ flags: 0x06, sequence: 0, serial: 22 }),
+      ),
+    ],
+  ])('rejects unsupported chained Ogg for %s before decoder input', async (_name, buffer) => {
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'unsupported-chained-ogg',
+      message: expect.stringContaining('unsupported chained Ogg'),
     });
-    const embeddedMp3 = new Uint8Array(1000);
-    embeddedMp3.set([0x4f, 0x67, 0x67, 0x53]);
-    embeddedMp3.set([0xff, 0xfb, 0x90, 0x64], 100);
-    embeddedMp3.set([0xff, 0xfb, 0x90, 0x64], 517);
-    const malformedId3 = new Uint8Array(1100);
-    malformedId3.set([0x49, 0x44, 0x33, 0xff, 0xff, 0x00, 0, 0, 0, 0]);
-    malformedId3.set([0xff, 0xfb, 0x90, 0x64], 10);
-    malformedId3.set([0xff, 0xfb, 0x90, 0x64], 427);
-    const extendedId3 = new Uint8Array(createId3Mp3Buffer());
-    extendedId3[5] = 0x40;
-    const badFooter = new Uint8Array(createId3Mp3Buffer(4, true));
-    badFooter[10] = 0;
-    const reservedEmphasis = new Uint8Array(createMp3Buffer(REFERENCE_BYTES));
-    reservedEmphasis[3] = 0x66;
-    reservedEmphasis[MP3_FRAME_BYTES + 3] = 0x66;
-    for (const buffer of [
-      new ArrayBuffer(100),
-      createMp3Buffer(100),
-      createAdtsBuffer(),
-      createOggBuffer('opus'),
-      createOggBuffer('vorbis'),
-      createCommonUnsupportedBuffer('flac'),
-      createCommonUnsupportedBuffer('m4a'),
-      createCommonUnsupportedBuffer('webm'),
-      malformedWave,
-      outsideRiff,
-      invalidFloat,
-      createExtendedFormatWave(17),
-      createExtendedFormatWave(18, 1),
-      missingOddPadding,
-      embeddedMp3.buffer,
-      malformedId3.buffer,
-      extendedId3.buffer,
-      badFooter.buffer,
-      reservedEmphasis.buffer,
-      createDuplicateFormatWave(),
-      createDuplicateDataWave(),
-      createDataBeforeFormatWave(),
-      createMp3Buffer(MP3_FRAME_BYTES * 2 + 1),
-    ]) {
-      expect(() => inspectEncodedAudioMemory(buffer)).toThrow(
-        /safely inspect WAV|supports only PCM\/float WAV and MPEG-1 Layer III MP3/,
-      );
+    expect(mediaMock.inputs).toEqual([]);
+    expect(mediaMock.selectedTrackIndexes).toEqual([]);
+  });
+
+  it.each([
+    [
+      'version',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11, version: 1 }),
+      ),
+    ],
+    [
+      'flags',
+      createOggBuffer(createOggPage({ flags: 0x0e, sequence: 0, serial: 11 })),
+    ],
+    [
+      'continued BOS flags',
+      createOggBuffer(createOggPage({ flags: 0x03, sequence: 0, serial: 11 })),
+    ],
+    [
+      'sequence regression',
+      createOggBuffer(
+        createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
+        createOggPage({ flags: 0, sequence: 1, serial: 11 }),
+        createOggPage({ flags: 0x04, sequence: 0, serial: 11 }),
+      ),
+    ],
+    [
+      'truncated header',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11 }).slice(0, 10),
+      ),
+    ],
+    [
+      'truncated lacing table',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11 }).slice(0, 27),
+      ),
+    ],
+    [
+      'truncated body',
+      createOggBuffer(
+        createOggPage({
+          body: [1, 2, 3],
+          flags: 0x06,
+          sequence: 0,
+          serial: 11,
+        }).slice(0, -1),
+      ),
+    ],
+    [
+      'logical stream bound',
+      createOggBuffer(
+        ...Array.from({ length: 257 }, (_, serial) =>
+          createOggPage({ flags: 0x02, sequence: 0, serial }),
+        ),
+      ),
+    ],
+  ])('rejects malformed Ogg %s before decoder input', async (_name, buffer) => {
+    await expect(decodeEncodedAudioToMono(buffer, 'target')).rejects.toMatchObject({
+      code: 'malformed-media',
+      message: expect.stringContaining('malformed or truncated Ogg framing'),
+    });
+    expect(mediaMock.inputs).toEqual([]);
+    expect(mediaMock.selectedTrackIndexes).toEqual([]);
+  });
+
+  it('preserves linear resampling across incremental sample boundaries', async () => {
+    const samples = [
+      createMockAudioSample(
+        [Float32Array.of(0, 1), Float32Array.of(2, 3)],
+        16_000,
+        0,
+      ),
+      createMockAudioSample(
+        [Float32Array.of(2, 3), Float32Array.of(4, 5)],
+        16_000,
+        2 / 16_000,
+      ),
+    ];
+    mediaMock.sampleFactory = () => samples;
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([1, 3]);
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('trims valid negative decoder preroll before producing analysis samples', async () => {
+    const sample = createMockAudioSample(
+      [Float32Array.of(1, 2, 3, 4)],
+      SAMPLE_RATE,
+      -2 / SAMPLE_RATE,
+    );
+    mediaMock.sampleFactory = () => [sample];
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([3, 4]);
+    expect(sample.copyTo).toHaveBeenCalledWith(
+      expect.any(Float32Array),
+      expect.objectContaining({ frameOffset: 2, frameCount: 2 }),
+    );
+    expect(sample.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['entirely before zero', -4 / SAMPLE_RATE],
+    ['ending exactly at zero', -2 / SAMPLE_RATE],
+  ])('discards a valid sample %s before validating its presented start', async (_name, timestamp) => {
+    const preroll = createMockAudioSample(
+      [Float32Array.of(1, 2)],
+      SAMPLE_RATE,
+      timestamp,
+    );
+    const presented = createMockAudioSample(
+      [Float32Array.of(3, 4)],
+      SAMPLE_RATE,
+      0,
+    );
+    mediaMock.sampleFactory = () => [preroll, presented];
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([3, 4]);
+    expect(preroll.copyTo).not.toHaveBeenCalled();
+    expect(preroll.close).toHaveBeenCalledOnce();
+    expect(presented.close).toHaveBeenCalledOnce();
+    expect(mediaMock.activeIterators).toBe(0);
+  });
+
+  it('charges discarded pre-zero samples against the decoded-byte budget', async () => {
+    const preroll = createMockAudioSample(
+      [Float32Array.of(1, 2)],
+      SAMPLE_RATE,
+      -4 / SAMPLE_RATE,
+    );
+    const presented = createMockAudioSample(
+      [Float32Array.of(3)],
+      SAMPLE_RATE,
+      0,
+    );
+    mediaMock.sampleFactory = () => [preroll, presented];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference', undefined, 8),
+    ).rejects.toMatchObject({ code: 'decoded-limit' });
+    expect(preroll.copyTo).not.toHaveBeenCalled();
+    expect(preroll.close).toHaveBeenCalledOnce();
+    expect(presented.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+    expect(mediaMock.activeIterators).toBe(0);
+  });
+
+  it('preserves timestamp gaps with silence and trims overlapping frames', async () => {
+    const samples = [
+      createMockAudioSample([Float32Array.of(1, 2)], SAMPLE_RATE, 0),
+      createMockAudioSample([Float32Array.of(3, 4)], SAMPLE_RATE, 4 / SAMPLE_RATE),
+      createMockAudioSample([Float32Array.of(5, 6, 7)], SAMPLE_RATE, 5 / SAMPLE_RATE),
+    ];
+    mediaMock.sampleFactory = () => samples;
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([1, 2, 0, 0, 3, 4, 6, 7]);
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('rejects incompatible midstream shapes and closes samples before returning the iterator', async () => {
+    const first = createMockAudioSample([Float32Array.of(1, 2)], 8_000, 0);
+    const second = createMockAudioSample([Float32Array.of(3, 4)], 16_000, 2 / 8_000);
+    mediaMock.sampleFactory = () => [first, second];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference'),
+    ).rejects.toMatchObject({ code: 'invalid-metadata' });
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(second.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('rejects ambiguous primary selection before constructing a decoder', async () => {
+    Object.assign(mediaMock.metadata, {
+      primaryTrackIndex: 99,
+      tracks: [{ channels: 2, codec: 'aac', sampleRate: 48_000 }],
+    });
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference'),
+    ).rejects.toMatchObject({ code: 'unproven-track-selection' });
+    expect(mediaMock.selectedTrackIndexes).toEqual([]);
+  });
+
+  it.each([
+    ['no-audio-track', { track: false }],
+    ['unknown-format', { readable: false }],
+    ['malformed-media', { malformedAt: 'format' }],
+    ['unknown-codec', { canDecode: false }],
+  ])('returns typed %s errors for unusable media', async (code, metadata) => {
+    Object.assign(mediaMock.metadata, metadata);
+
+    await expect(decodeEncodedAudioToMono(new ArrayBuffer(8), 'target')).rejects.toMatchObject({
+      code,
+      name: 'AutoSyncMediaError',
+    });
+  });
+
+  it.each([
+    ['sample rate', { sampleRate: 0 }],
+    ['channel count', { numberOfChannels: 0 }],
+    ['frame count', { numberOfFrames: 0 }],
+    ['timestamp', { timestamp: Number.NaN }],
+  ])('rejects invalid emitted %s and closes the sample', async (_name, shape) => {
+    const sample = Object.assign(
+      createMockAudioSample([Float32Array.of(1)]),
+      shape,
+    );
+    mediaMock.sampleFactory = () => [sample];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(8), 'target'),
+    ).rejects.toMatchObject({ code: 'invalid-metadata' });
+    expect(sample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('bounds cumulative decoded bytes from chained or extra output before copying more', async () => {
+    expect(AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT).toBe(128 * MEBIBYTE);
+    Object.assign(mediaMock.metadata, { format: 'Ogg' });
+    const samples = Array.from({ length: 5 }, (_, index) =>
+      createMockAudioSample(
+        [Float32Array.of(index)],
+        SAMPLE_RATE,
+        index / SAMPLE_RATE,
+      ));
+    mediaMock.sampleFactory = () => samples;
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(8), 'target', undefined, 16),
+    ).rejects.toMatchObject({ code: 'decoded-limit' });
+    expect(samples[0].copyTo).toHaveBeenCalled();
+    expect(samples[3].copyTo).toHaveBeenCalled();
+    expect(samples[4].copyTo).not.toHaveBeenCalled();
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('closes the active sample and returns the iterator on cooperative abort', async () => {
+    const activeSample = createMockAudioSample([new Float32Array(100_000)]);
+    const prefetchedSample = createMockAudioSample([Float32Array.of(1)]);
+    mediaMock.sampleFactory = () => [activeSample, prefetchedSample];
+    const controller = new AbortController();
+    const pending = decodeEncodedAudioToMono(
+      new ArrayBuffer(8),
+      'reference',
+      controller.signal,
+    );
+    setTimeout(() => controller.abort(), 0);
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(activeSample.close).toHaveBeenCalledOnce();
+    expect(prefetchedSample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('yields by cumulative processed source frames instead of once per sample', async () => {
+    const framesPerSample = 1_024;
+    const samples = Array.from({ length: 100 }, (_, index) =>
+      createMockAudioSample(
+        [new Float32Array(framesPerSample)],
+        SAMPLE_RATE,
+        (index * framesPerSample) / SAMPLE_RATE,
+      ));
+    mediaMock.sampleFactory = () => samples;
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    await decodeEncodedAudioToMono(new ArrayBuffer(8), 'reference');
+    const yieldCount = timerSpy.mock.calls.length;
+    timerSpy.mockRestore();
+
+    expect(yieldCount).toBe(6);
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('performs bounded immediate yields for one sample spanning multiple intervals', async () => {
+    const frameCount = DECODE_YIELD_FRAME_INTERVAL * 2 + 1_024;
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([new Float32Array(frameCount)]),
+    ];
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    await decodeEncodedAudioToMono(new ArrayBuffer(8), 'reference');
+    const yieldCount = timerSpy.mock.calls.length;
+    timerSpy.mockRestore();
+
+    expect(yieldCount).toBe(2);
+  });
+
+  it('detects abort synchronously between samples', async () => {
+    const controller = new AbortController();
+    const first = createMockAudioSample([new Float32Array(1_024)]);
+    const second = createMockAudioSample(
+      [new Float32Array(1_024)],
+      SAMPLE_RATE,
+      1_024 / SAMPLE_RATE,
+    );
+    first.close.mockImplementation(() => controller.abort());
+    mediaMock.sampleFactory = () => [first, second];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(8), 'reference', controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(first.copyTo).toHaveBeenCalled();
+    expect(second.copyTo).not.toHaveBeenCalled();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(second.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('detects abort at a cumulative frame yield', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const sample = createMockAudioSample([
+      new Float32Array(DECODE_YIELD_FRAME_INTERVAL),
+    ]);
+    mediaMock.sampleFactory = () => [sample];
+    const pending = decodeEncodedAudioToMono(
+      new ArrayBuffer(8),
+      'reference',
+      controller.signal,
+    );
+    const abortExpectation = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    for (let turn = 0; turn < 10 && vi.getTimerCount() === 0; turn++) {
+      await Promise.resolve();
     }
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    await vi.runOnlyPendingTimersAsync();
+
+    await abortExpectation;
+    expect(sample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+    vi.useRealTimers();
   });
 });
 
 describe('computeAutoSyncOffset', () => {
-  it('advances a delayed target within the documented 20 ms tolerance', async () => {
-    const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
+  it.each([
+    ['MP4', 'aac'],
+    ['QuickTime', 'aac'],
+    ['WebM', 'opus'],
+  ])('accepts a normal %s video reference with usable audio', async (format, codec) => {
+    Object.assign(mediaMock.metadata, {
+      codec,
+      format,
+      hasVideo: true,
+      tracks: [{ channels: 2, codec, sampleRate: SAMPLE_RATE }],
+    });
 
-    expect(result.offsetSeconds).toBeCloseTo(-0.5, 5);
-    expect(result.confidence).toBeGreaterThan(0.9);
-    expect(workerTerminations).toBe(1);
+    await expect(
+      computeAutoSyncOffset('blob:video-reference', 'blob:target'),
+    ).resolves.toMatchObject({
+      confidence: expect.any(Number),
+      offsetSeconds: expect.any(Number),
+    });
   });
 
-  it('delays an advanced target within the documented 20 ms tolerance', async () => {
+  it('preserves signed offsets in both directions', async () => {
+    const delayed = await computeAutoSyncOffset('blob:reference', 'blob:target');
+    expect(delayed.offsetSeconds).toBeCloseTo(-0.5, 5);
+    expect(delayed.confidence).toBeGreaterThan(0.9);
+
     decodedTarget = advanceSignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
-
-    const result = await computeAutoSyncOffset('blob:reference', 'blob:target');
-
-    expect(result.offsetSeconds).toBeCloseTo(0.5, 5);
-    expect(result.confidence).toBeGreaterThan(0.9);
+    const advanced = await computeAutoSyncOffset('blob:reference', 'blob:target');
+    expect(advanced.offsetSeconds).toBeCloseTo(0.5, 5);
+    expect(advanced.confidence).toBeGreaterThan(0.9);
   });
 
-  it('fetches and decodes audio sources sequentially', async () => {
-    let activeDecodes = 0;
-    let maximumActiveDecodes = 0;
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
-          activeDecodes++;
-          maximumActiveDecodes = Math.max(maximumActiveDecodes, activeDecodes);
-          await Promise.resolve();
-          activeDecodes--;
-          return createMockMonoBuffer(
-            data.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
-          );
-        }
-        async close() {}
-      },
-    );
-
+  it('fetches and decodes inputs sequentially after releasing encoded references', async () => {
     await computeAutoSyncOffset('blob:ref', 'blob:tar');
 
     expect(fetchedUrls).toEqual(['blob:ref', 'blob:tar']);
-    expect(maximumActiveDecodes).toBe(1);
+    expect(mediaMock.maximumActiveIterators).toBe(1);
   });
 
-  it('reports actionable fetch and duration-limit errors', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: false,
-        status: 404,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(0),
-      })),
-    );
-    await expect(computeAutoSyncOffset('bad', 'bad')).rejects.toThrow(
-      'Failed to fetch reference audio: HTTP 404',
-    );
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => createMp3Buffer(REFERENCE_BYTES),
-      })),
-    );
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(): Promise<AudioBuffer> {
-          return {
-            duration: 301,
-            length: 1,
-            sampleRate: SAMPLE_RATE,
-          } as AudioBuffer;
-        }
-        async close() {}
-      },
-    );
-
-    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
-      'the limit is 5 minutes',
-    );
-  });
-
-  it('cancels rejected and oversized responses without masking the primary error', async () => {
-    const cancelRejected = vi.fn(async () => {
-      throw new Error('cancel failed');
-    });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: false,
-        status: 503,
-        headers: new Headers(),
-        body: { cancel: cancelRejected },
-      })),
-    );
+  it('cancels non-OK and oversized declared responses without masking primary errors', async () => {
+    const rejected = createStreamResponse({ status: 503 });
+    vi.stubGlobal('fetch', vi.fn(async () => rejected));
     await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
       'Failed to fetch reference audio: HTTP 503',
     );
-    expect(cancelRejected).toHaveBeenCalledOnce();
+    expect(rejected.bodyCancel).toHaveBeenCalledOnce();
 
-    const cancelOversized = vi.fn(async () => {
-      throw new Error('cancel failed');
+    const oversized = createStreamResponse({
+      contentLength: AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT + 1,
     });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers({
-          'content-length': String(48 * MEBIBYTE + 1),
-        }),
-        body: { cancel: cancelOversized },
-      })),
-    );
-    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
-      '48 MB auto-sync encoded-file limit',
-    );
-    expect(cancelOversized).toHaveBeenCalledOnce();
+    vi.stubGlobal('fetch', vi.fn(async () => oversized));
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      code: 'encoded-limit',
+      message: expect.stringContaining('48 MiB auto-sync encoded-input limit'),
+    });
+    expect(oversized.bodyCancel).toHaveBeenCalledOnce();
+  });
+
+  it('never constructs Web Audio contexts', async () => {
+    const audioContext = vi.fn(() => {
+      throw new Error('Web Audio must not be constructed');
+    });
+    vi.stubGlobal('AudioContext', audioContext);
+
+    await computeAutoSyncOffset('blob:ref', 'blob:tar');
+
+    expect(audioContext).not.toHaveBeenCalled();
+  });
+
+  it('preserves decode and AbortError when iterator cleanup rejects', async () => {
+    Object.assign(mediaMock.metadata, { malformedAt: 'decode' });
+    mediaMock.iteratorReturnError = new Error('iterator cleanup failed');
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      code: 'malformed-media',
+      originalCause: expect.objectContaining({ message: 'primary decode failure' }),
+    });
+
+    Object.assign(mediaMock.metadata, { malformedAt: null });
+    mediaMock.iteratorReturnError = new Error('iterator cleanup failed');
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([new Float32Array(100_000)]),
+    ];
+    const controller = new AbortController();
+    const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(mediaMock.iteratorReturns).toBeGreaterThanOrEqual(2);
+    expect(fetchedUrls.at(-1)).toBe('blob:ref');
   });
 
   it('rejects malformed and explicit worker errors and always terminates', async () => {
@@ -834,322 +1576,10 @@ describe('computeAutoSyncOffset', () => {
     const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
       signal: controller.signal,
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => expect(workerCreations).toBe(2));
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(workerTerminations).toBe(2);
-  });
-
-  it('preserves AbortError when decoder context cleanup rejects', async () => {
-    let decoderCloses = 0;
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData(): Promise<AudioBuffer> {
-          return new Promise(() => {});
-        }
-        async close() {
-          decoderCloses++;
-          throw new Error('close failed');
-        }
-      },
-    );
-    const controller = new AbortController();
-    const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
-      signal: controller.signal,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    controller.abort();
-
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(decoderCloses).toBe(1);
-    expect(fetchedUrls).toEqual(['blob:ref']);
-  });
-
-  it('preserves an abort that arrives while decoder close is pending', async () => {
-    let markCloseStarted!: () => void;
-    let rejectClose!: (error: Error) => void;
-    const closeStarted = new Promise<void>((resolve) => {
-      markCloseStarted = resolve;
-    });
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(): Promise<AudioBuffer> {
-          return createMockMonoBuffer(decodedReference);
-        }
-        close(): Promise<void> {
-          markCloseStarted();
-          return new Promise((_, reject) => {
-            rejectClose = reject;
-          });
-        }
-      },
-    );
-    const controller = new AbortController();
-    const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
-      signal: controller.signal,
-    });
-    await closeStarted;
-
-    controller.abort();
-    rejectClose(new Error('close failed'));
-
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(fetchedUrls).toEqual(['blob:ref']);
-  });
-
-  it('releases the render source on abort without masking AbortError when cleanup throws', async () => {
-    let markRenderStarted!: () => void;
-    const renderStarted = new Promise<void>((resolve) => {
-      markRenderStarted = resolve;
-    });
-    const stop = vi.fn(() => {
-      throw new Error('stop failed');
-    });
-    const disconnect = vi.fn(() => {
-      throw new Error('disconnect failed');
-    });
-    let retainedBuffer: AudioBuffer | null = null;
-    vi.stubGlobal(
-      'OfflineAudioContext',
-      class {
-        createBufferSource() {
-          return {
-            set buffer(buffer: AudioBuffer | null) {
-              retainedBuffer = buffer;
-            },
-            get buffer() {
-              return retainedBuffer;
-            },
-            connect: vi.fn(),
-            start: vi.fn(),
-            stop,
-            disconnect,
-          };
-        }
-        get destination() {
-          return {};
-        }
-        startRendering(): Promise<AudioBuffer> {
-          markRenderStarted();
-          return new Promise(() => {});
-        }
-      },
-    );
-    const controller = new AbortController();
-    const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
-      signal: controller.signal,
-    });
-    await renderStarted;
-
-    controller.abort();
-
-    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(stop).toHaveBeenCalled();
-    expect(disconnect).toHaveBeenCalled();
-    expect(retainedBuffer).toBeNull();
-    expect(fetchedUrls).toEqual(['blob:ref']);
-  });
-
-  it('releases reference encoded storage and bounds the target default-reader peak', async () => {
-    const firstBytes = 40 * MEBIBYTE;
-    const secondBytes = 40 * MEBIBYTE;
-    const firstArrayBuffer = vi.fn(async () =>
-      createWaveHeader({
-        channels: 1,
-        sampleRate: 96_000,
-        bitsPerSample: 16,
-        dataBytes: firstBytes - 44,
-      }),
-    );
-    const secondArrayBuffer = vi.fn(async () => createMp3Buffer(secondBytes));
-    const cancelSecond = vi.fn(async () => {});
-    let request = 0;
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
-          structuredClone(data, { transfer: [data] });
-          return createMockMonoBuffer(decodedReference);
-        }
-        async close() {}
-      },
-    );
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        request++;
-        return request === 1
-          ? {
-              ok: true,
-              status: 200,
-              headers: new Headers({ 'content-length': String(firstBytes) }),
-              arrayBuffer: firstArrayBuffer,
-            }
-          : {
-              ok: true,
-              status: 200,
-              headers: new Headers({ 'content-length': String(secondBytes) }),
-              body: { cancel: cancelSecond },
-              arrayBuffer: secondArrayBuffer,
-            };
-      }),
-    );
-
-    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
-      '64 MB auto-sync streaming-memory limit',
-    );
-    expect(AUTO_SYNC_MAX_STREAMING_PEAK_BYTES).toBe(64 * MEBIBYTE);
-    expect(firstArrayBuffer).toHaveBeenCalledOnce();
-    expect(secondArrayBuffer).not.toHaveBeenCalled();
-    expect(cancelSecond).toHaveBeenCalledOnce();
-    expect(workerTerminations).toBe(0);
-  });
-
-  it('rejects pathological decoded audio before allocating an analysis render', async () => {
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(): Promise<AudioBuffer> {
-          return {
-            duration: 2,
-            length: AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT / 4 + 1,
-            numberOfChannels: 1,
-            sampleRate: SAMPLE_RATE,
-          } as AudioBuffer;
-        }
-        async close() {}
-      },
-    );
-
-    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
-      '128 MB decoded-audio memory limit',
-    );
-    expect(fetchedUrls).toEqual(['blob:ref']);
-  });
-
-  it('rejects pathological PCM from its header before decoding', async () => {
-    const decodeAudioData = vi.fn();
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData = decodeAudioData;
-        async close() {}
-      },
-    );
-    const wave = createWaveHeader({
-      channels: 8,
-      sampleRate: 192_000,
-      bitsPerSample: 8,
-      dataBytes: 40 * MEBIBYTE,
-    });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => wave,
-      })),
-    );
-
-    await expect(computeAutoSyncOffset('blob:pcm', 'blob:target')).rejects.toThrow(
-      '128 MB decoded-audio memory limit',
-    );
-    expect(decodeAudioData).not.toHaveBeenCalled();
-  });
-
-  it('rejects overlong MP3 from its complete frame chain before decoding', async () => {
-    const decodeAudioData = vi.fn();
-    const overlongFrameCount = Math.floor((300 * 44_100) / 1152) + 1;
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData = decodeAudioData;
-        async close() {}
-      },
-    );
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => createMp3Buffer(overlongFrameCount * MP3_FRAME_BYTES),
-      })),
-    );
-
-    await expect(computeAutoSyncOffset('blob:mp3', 'blob:target')).rejects.toThrow(
-      'the limit is 5 minutes',
-    );
-    expect(decodeAudioData).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['AAC', createAdtsBuffer()],
-    ['Ogg Opus', createOggBuffer('opus')],
-    ['FLAC', createCommonUnsupportedBuffer('flac')],
-    ['M4A', createCommonUnsupportedBuffer('m4a')],
-    ['WebM', createCommonUnsupportedBuffer('webm')],
-    [
-      'malformed WAV',
-      createWaveHeader({
-        channels: 2,
-        sampleRate: 48_000,
-        bitsPerSample: 16,
-        dataBytes: 100,
-      }).slice(0, 44),
-    ],
-  ])('rejects unsupported %s before decoding', async (_format, buffer) => {
-    const decodeAudioData = vi.fn();
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData = decodeAudioData;
-        async close() {}
-      },
-    );
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => buffer,
-      })),
-    );
-
-    await expect(computeAutoSyncOffset('blob:unsupported', 'blob:target')).rejects.toThrow(
-      'supports only PCM/float WAV and MPEG-1 Layer III MP3',
-    );
-    expect(decodeAudioData).not.toHaveBeenCalled();
-  });
-
-  it('rejects uninspectable formats before decoding', async () => {
-    const decodeAudioData = vi.fn();
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData = decodeAudioData;
-        async close() {}
-      },
-    );
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        arrayBuffer: async () => new ArrayBuffer(100),
-      })),
-    );
-
-    await expect(computeAutoSyncOffset('blob:unknown', 'blob:target')).rejects.toThrow(
-      'supports only PCM/float WAV and MPEG-1 Layer III MP3',
-    );
-    expect(decodeAudioData).not.toHaveBeenCalled();
   });
 });
 
