@@ -458,7 +458,7 @@ function closeSampleBestEffort(sample: AudioSample): void {
   }
 }
 
-interface OggLogicalStreamState {
+interface OggStreamState {
   ended: boolean;
   nextSequenceNumber: number;
   unfinishedPacket: boolean;
@@ -481,7 +481,7 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
   }
 
   const view = new DataView(buffer);
-  const streams = new Map<number, OggLogicalStreamState>();
+  const streams = new Map<number, OggStreamState>();
   let offset = 0;
   let initialBosRegion = true;
   let sawEndOfStream = false;
@@ -500,10 +500,7 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
     const headerFlags = bytes[offset + 5];
     if (
       headerFlags === undefined ||
-      (headerFlags & ~OGG_ALLOWED_HEADER_FLAGS) !== 0 ||
-      (headerFlags &
-        (OGG_CONTINUED_PACKET_FLAG | OGG_BEGINNING_OF_STREAM_FLAG)) ===
-        (OGG_CONTINUED_PACKET_FLAG | OGG_BEGINNING_OF_STREAM_FLAG)
+      (headerFlags & ~OGG_ALLOWED_HEADER_FLAGS) !== 0
     ) {
       throw malformedOggError(label, 'invalid page header flags');
     }
@@ -532,22 +529,25 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
     if (bodyLength > bytes.byteLength - bodyOffset) {
       throw malformedOggError(label, 'truncated page body');
     }
-    const pageEndsWithUnfinishedPacket =
+    const continuesPacket =
       pageSegments > 0 && bytes[lacingOffset + pageSegments - 1] === 255;
 
     const serialNumber = view.getUint32(offset + 14, true);
     const sequenceNumber = view.getUint32(offset + 18, true);
-    const beginsStream = (headerFlags & OGG_BEGINNING_OF_STREAM_FLAG) !== 0;
-    const endsStream = (headerFlags & OGG_END_OF_STREAM_FLAG) !== 0;
-    const continuesPacket = (headerFlags & OGG_CONTINUED_PACKET_FLAG) !== 0;
-    if (endsStream && pageEndsWithUnfinishedPacket) {
+    const isContinued = (headerFlags & OGG_CONTINUED_PACKET_FLAG) !== 0;
+    const isBos = (headerFlags & OGG_BEGINNING_OF_STREAM_FLAG) !== 0;
+    const isEos = (headerFlags & OGG_END_OF_STREAM_FLAG) !== 0;
+    if (isEos && continuesPacket) {
       throw malformedOggError(label, 'EOS page ends with an unfinished packet');
     }
     const stream = streams.get(serialNumber);
 
     if (stream === undefined) {
-      if (!beginsStream) {
+      if (!isBos) {
         throw malformedOggError(label, 'logical stream does not begin with a BOS page');
+      }
+      if (isContinued) {
+        throw malformedOggError(label, 'BOS page cannot continue a prior packet');
       }
       if (!initialBosRegion || sawEndOfStream) {
         throw new AutoSyncMediaError(
@@ -562,32 +562,33 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
         throw malformedOggError(label, 'too many logical streams');
       }
       streams.set(serialNumber, {
-        ended: endsStream,
+        ended: isEos,
         nextSequenceNumber: 1,
-        unfinishedPacket: pageEndsWithUnfinishedPacket,
+        unfinishedPacket: continuesPacket,
       });
     } else {
-      if (beginsStream || stream.ended) {
+      if (isBos || stream.ended) {
         throw malformedOggError(label, 'invalid page after logical stream start or EOS');
       }
       if (sequenceNumber !== stream.nextSequenceNumber) {
         throw malformedOggError(label, 'logical stream page sequence regressed or skipped');
       }
-      if (continuesPacket !== stream.unfinishedPacket) {
+      if (isContinued !== stream.unfinishedPacket) {
         throw malformedOggError(label, 'page continuation flag does not match prior lacing');
       }
-      if (continuesPacket && pageSegments === 0) {
+      if (isContinued && pageSegments === 0) {
+        // An empty page cannot carry the segment needed to continue or finish the packet.
         throw malformedOggError(label, 'continued page has no packet segments');
       }
       stream.nextSequenceNumber = (sequenceNumber + 1) >>> 0;
-      stream.ended = endsStream;
-      stream.unfinishedPacket = pageEndsWithUnfinishedPacket;
+      stream.ended = isEos;
+      stream.unfinishedPacket = continuesPacket;
     }
 
-    if (!beginsStream) {
+    if (!isBos) {
       initialBosRegion = false;
     }
-    if (endsStream) {
+    if (isEos) {
       sawEndOfStream = true;
     }
     offset = bodyOffset + bodyLength;
