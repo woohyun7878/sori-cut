@@ -808,6 +808,9 @@ export async function decodeEncodedAudioToMono(
           if (!Number.isSafeInteger(rawStartFrame)) {
             throw new Error(`${label} audio exceeds the bounded auto-sync sample budget`);
           }
+          if (firstPresentedFrame >= numberOfFrames) {
+            continue;
+          }
           let sampleStartFrame = rawStartFrame + firstPresentedFrame;
           if (!Number.isSafeInteger(sampleStartFrame) || sampleStartFrame < 0) {
             throw new AutoSyncMediaError(
@@ -826,9 +829,6 @@ export async function decodeEncodedAudioToMono(
             sampleStartFrame += overlappingFrames;
           }
           const presentedFrames = numberOfFrames - firstPresentedFrame;
-          if (presentedFrames <= 0) {
-            continue;
-          }
           if (sourceFrames > Number.MAX_SAFE_INTEGER - presentedFrames) {
             throw decodedLimitError(label);
           }
