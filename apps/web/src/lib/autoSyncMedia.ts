@@ -20,7 +20,14 @@ import {
 } from './autoSyncCore';
 
 const MEBIBYTE = 1024 * 1024;
-const CONVERSION_CHUNK_SAMPLES = 16_384;
+export const DECODE_YIELD_FRAME_INTERVAL = 16_384;
+const CONVERSION_CHUNK_SAMPLES = DECODE_YIELD_FRAME_INTERVAL;
+const OGG_FIXED_HEADER_BYTES = 27;
+const OGG_CAPTURE_PATTERN = [0x4f, 0x67, 0x67, 0x53] as const;
+const OGG_ALLOWED_HEADER_FLAGS = 0x07;
+const OGG_CONTINUED_PACKET_FLAG = 0x01;
+const OGG_BEGINNING_OF_STREAM_FLAG = 0x02;
+const OGG_END_OF_STREAM_FLAG = 0x04;
 
 export const AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT = 48 * MEBIBYTE;
 export const AUTO_SYNC_MAX_ENCODED_PEAK_BYTES = 96 * MEBIBYTE;
@@ -47,6 +54,7 @@ export type AutoSyncMediaErrorCode =
   | 'malformed-media'
   | 'missing-response-body'
   | 'no-audio-track'
+  | 'unsupported-chained-ogg'
   | 'unproven-track-selection'
   | 'unknown-codec'
   | 'unknown-format';
@@ -449,6 +457,126 @@ function closeSampleBestEffort(sample: AudioSample): void {
   }
 }
 
+interface OggLogicalStreamState {
+  ended: boolean;
+  nextSequenceNumber: number;
+}
+
+function malformedOggError(label: string, detail: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'malformed-media',
+    `${label} media contains malformed or truncated Ogg framing: ${detail}`,
+  );
+}
+
+function validateOggFraming(buffer: ArrayBuffer, label: string): void {
+  const bytes = new Uint8Array(buffer);
+  if (
+    bytes.byteLength < OGG_CAPTURE_PATTERN.length ||
+    OGG_CAPTURE_PATTERN.some((byte, index) => bytes[index] !== byte)
+  ) {
+    return;
+  }
+
+  const view = new DataView(buffer);
+  const streams = new Map<number, OggLogicalStreamState>();
+  let offset = 0;
+  let initialBosRegion = true;
+  let sawEndOfStream = false;
+
+  while (offset < bytes.byteLength) {
+    if (bytes.byteLength - offset < OGG_FIXED_HEADER_BYTES) {
+      throw malformedOggError(label, 'truncated page header');
+    }
+    if (OGG_CAPTURE_PATTERN.some((byte, index) => bytes[offset + index] !== byte)) {
+      throw malformedOggError(label, 'invalid page capture pattern');
+    }
+    if (bytes[offset + 4] !== 0) {
+      throw malformedOggError(label, 'unsupported page version');
+    }
+
+    const headerFlags = bytes[offset + 5];
+    if (
+      headerFlags === undefined ||
+      (headerFlags & ~OGG_ALLOWED_HEADER_FLAGS) !== 0
+    ) {
+      throw malformedOggError(label, 'invalid page header flags');
+    }
+
+    const pageSegments = bytes[offset + 26];
+    if (pageSegments === undefined) {
+      throw malformedOggError(label, 'truncated page header');
+    }
+    const lacingOffset = offset + OGG_FIXED_HEADER_BYTES;
+    if (pageSegments > bytes.byteLength - lacingOffset) {
+      throw malformedOggError(label, 'truncated page lacing table');
+    }
+
+    let bodyLength = 0;
+    for (let index = 0; index < pageSegments; index++) {
+      const segmentLength = bytes[lacingOffset + index];
+      if (
+        segmentLength === undefined ||
+        bodyLength > Number.MAX_SAFE_INTEGER - segmentLength
+      ) {
+        throw malformedOggError(label, 'invalid page body length');
+      }
+      bodyLength += segmentLength;
+    }
+    const bodyOffset = lacingOffset + pageSegments;
+    if (bodyLength > bytes.byteLength - bodyOffset) {
+      throw malformedOggError(label, 'truncated page body');
+    }
+
+    const serialNumber = view.getUint32(offset + 14, true);
+    const sequenceNumber = view.getUint32(offset + 18, true);
+    const beginsStream = (headerFlags & OGG_BEGINNING_OF_STREAM_FLAG) !== 0;
+    const endsStream = (headerFlags & OGG_END_OF_STREAM_FLAG) !== 0;
+    const continuesPacket = (headerFlags & OGG_CONTINUED_PACKET_FLAG) !== 0;
+    const stream = streams.get(serialNumber);
+
+    if (stream === undefined) {
+      if (!beginsStream) {
+        throw malformedOggError(label, 'logical stream does not begin with a BOS page');
+      }
+      if (!initialBosRegion || sawEndOfStream) {
+        throw new AutoSyncMediaError(
+          'unsupported-chained-ogg',
+          `${label} media uses unsupported chained Ogg logical streams; remux it as a single Ogg stream`,
+        );
+      }
+      if (continuesPacket || sequenceNumber !== 0) {
+        throw malformedOggError(label, 'invalid BOS page');
+      }
+      streams.set(serialNumber, {
+        ended: endsStream,
+        nextSequenceNumber: 1,
+      });
+    } else {
+      if (beginsStream || stream.ended) {
+        throw malformedOggError(label, 'invalid page after logical stream start or EOS');
+      }
+      if (sequenceNumber !== stream.nextSequenceNumber) {
+        throw malformedOggError(label, 'logical stream page sequence regressed or skipped');
+      }
+      stream.nextSequenceNumber = (sequenceNumber + 1) >>> 0;
+      stream.ended = endsStream;
+    }
+
+    if (!beginsStream) {
+      initialBosRegion = false;
+    }
+    if (endsStream) {
+      sawEndOfStream = true;
+    }
+    offset = bodyOffset + bodyLength;
+  }
+
+  if (streams.size === 0 || [...streams.values()].some((stream) => !stream.ended)) {
+    throw malformedOggError(label, 'logical stream is missing its EOS page');
+  }
+}
+
 export async function decodeEncodedAudioToMono(
   buffer: ArrayBuffer,
   label = 'input',
@@ -459,6 +587,7 @@ export async function decodeEncodedAudioToMono(
   if (!Number.isSafeInteger(maximumDecodedBytes) || maximumDecodedBytes < 0) {
     throw new RangeError('maximumDecodedBytes must be a non-negative safe integer');
   }
+  validateOggFraming(buffer, label);
   const input = new Input({
     source: new BufferSource(buffer),
     formats: AUTO_SYNC_INPUT_FORMATS,
@@ -548,6 +677,7 @@ export async function decodeEncodedAudioToMono(
     let outputIndex = 0;
     let previousMono = 0;
     let previousTimestamp = -Infinity;
+    let processedSourceFramesSinceYield = 0;
 
     const emitThroughSourceFrame = (currentMono: number, currentFrameIndex: number) => {
       if (currentFrameIndex === 0) {
@@ -603,6 +733,7 @@ export async function decodeEncodedAudioToMono(
 
         const sample = result.value;
         try {
+          throwIfAborted(signal);
           const { numberOfChannels, numberOfFrames, sampleRate, timestamp } = sample;
           if (
             !Number.isSafeInteger(sampleRate) ||
@@ -680,14 +811,14 @@ export async function decodeEncodedAudioToMono(
             throw decodedLimitError(label);
           }
 
-          for (
-            let frameOffset = firstPresentedFrame;
-            frameOffset < numberOfFrames;
-            frameOffset += CONVERSION_CHUNK_SAMPLES
-          ) {
+          let frameOffset = firstPresentedFrame;
+          while (frameOffset < numberOfFrames) {
             throwIfAborted(signal);
+            const framesUntilYield =
+              DECODE_YIELD_FRAME_INTERVAL - processedSourceFramesSinceYield;
             const frameCount = Math.min(
               CONVERSION_CHUNK_SAMPLES,
+              framesUntilYield,
               numberOfFrames - frameOffset,
             );
             monoScratch.fill(0, 0, frameCount);
@@ -706,7 +837,13 @@ export async function decodeEncodedAudioToMono(
               emitThroughSourceFrame(monoScratch[frame], sourceFrames);
               sourceFrames++;
             }
-            await yieldForAbort();
+            frameOffset += frameCount;
+            processedSourceFramesSinceYield += frameCount;
+            if (processedSourceFramesSinceYield === DECODE_YIELD_FRAME_INTERVAL) {
+              processedSourceFramesSinceYield = 0;
+              await yieldForAbort();
+              throwIfAborted(signal);
+            }
           }
         } finally {
           closeSampleBestEffort(sample);
