@@ -1,13 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+interface MockAudioSample {
+  close: ReturnType<typeof vi.fn>;
+  copyTo: ReturnType<typeof vi.fn>;
+  duration: number;
+  numberOfChannels: number;
+  numberOfFrames: number;
+  sampleRate: number;
+  timestamp: number;
+}
+
 const mediaMock = vi.hoisted(() => ({
+  activeIterators: 0,
   inputs: [] as Array<{ formats: unknown[]; source: { buffer: ArrayBuffer } }>,
+  iteratorReturns: 0,
+  iteratorReturnError: null as Error | null,
+  iterators: [] as Array<{
+    next: ReturnType<typeof vi.fn>;
+    return: ReturnType<typeof vi.fn>;
+  }>,
+  maximumActiveIterators: 0,
+  sampleFactory: null as null | ((buffer: ArrayBuffer) => MockAudioSample[]),
+  selectedTrackIndexes: [] as number[],
   metadata: {
+    canDecode: true,
     channels: 1,
     codec: 'mp3' as string | null,
-    duration: 5,
     format: 'MP3',
-    malformedAt: null as 'format' | 'metadata' | null,
+    malformedAt: null as 'format' | 'decode' | null,
     hasVideo: false,
     primaryTrackIndex: 0,
     readable: true,
@@ -15,12 +35,11 @@ const mediaMock = vi.hoisted(() => ({
     track: true,
     tracks: null as
       | Array<{
-          channels: number;
-          codec: string | null;
-          duration: number;
-          malformedAt?: 'metadata';
-          sampleRate: number;
-        }>
+         canDecode?: boolean;
+         channels: number;
+         codec: string | null;
+         sampleRate: number;
+       }>
       | null,
   },
 }));
@@ -33,7 +52,7 @@ vi.mock('mediabunny', () => {
     private readonly metadata = { ...mediaMock.metadata };
     private readonly tracks = (
       this.metadata.track ? (this.metadata.tracks ?? [this.metadata]) : []
-    ).map((metadata) => this.createTrack(metadata));
+    ).map((metadata, index) => this.createTrack(metadata, index));
 
     constructor(readonly options: { formats: unknown[]; source: BufferSource }) {
       mediaMock.inputs.push(options);
@@ -60,7 +79,7 @@ vi.mock('mediabunny', () => {
       }
       return (
         this.tracks[this.metadata.primaryTrackIndex] ??
-        this.createTrack(this.metadata)
+        this.createTrack(this.metadata, this.metadata.primaryTrackIndex)
       );
     }
 
@@ -69,31 +88,80 @@ vi.mock('mediabunny', () => {
     }
 
     private createTrack(metadata: {
+      canDecode?: boolean;
       channels: number;
       codec: string | null;
-      duration: number;
-      malformedAt?: 'metadata' | 'format' | null;
       sampleRate: number;
-    }) {
+    }, index: number) {
       return {
-        getCodec: async () => metadata.codec,
-        getSampleRate: async () => metadata.sampleRate,
-        getNumberOfChannels: async () => metadata.channels,
-        computeDuration: async () => {
-          if (metadata.malformedAt === 'metadata') {
-            throw new Error('broken packet table');
-          }
-          return metadata.duration;
-        },
+        canDecode: async () => metadata.canDecode ?? this.metadata.canDecode,
+        index,
+        source: this.options.source,
       };
     }
 
     dispose() {}
   }
 
+  class AudioSampleSink {
+    constructor(private readonly track: { index: number; source: BufferSource }) {
+      mediaMock.selectedTrackIndexes.push(track.index);
+    }
+
+    samples() {
+      const samples = mediaMock.sampleFactory?.(this.track.source.buffer) ?? [];
+      let index = 0;
+      let active = false;
+      const finish = () => {
+        if (active) {
+          active = false;
+          mediaMock.activeIterators--;
+        }
+      };
+      const iterator = {
+        next: vi.fn(async () => {
+          if (!active) {
+            active = true;
+            mediaMock.activeIterators++;
+            mediaMock.maximumActiveIterators = Math.max(
+              mediaMock.maximumActiveIterators,
+              mediaMock.activeIterators,
+            );
+          }
+          if (mediaMock.metadata.malformedAt === 'decode') {
+            finish();
+            throw new Error('primary decode failure');
+          }
+          if (index >= samples.length) {
+            finish();
+            return { done: true as const, value: undefined };
+          }
+          return { done: false as const, value: samples[index++] };
+        }),
+        return: vi.fn(async () => {
+          mediaMock.iteratorReturns++;
+          finish();
+          while (index < samples.length) {
+            samples[index++].close();
+          }
+          if (mediaMock.iteratorReturnError) {
+            throw mediaMock.iteratorReturnError;
+          }
+          return { done: true as const, value: undefined };
+        }),
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+      mediaMock.iterators.push(iterator);
+      return iterator;
+    }
+  }
+
   const format = (name: string) => ({ name });
   return {
     ADTS: format('ADTS'),
+    AudioSampleSink,
     BufferSource,
     FLAC: format('FLAC'),
     Input,
@@ -114,9 +182,8 @@ import {
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
   computeAutoSyncOffset,
-  convertAudioBufferToMono,
+  decodeEncodedAudioToMono,
   getUnknownLengthPayloadLimit,
-  inspectEncodedAudioMemory,
   readResponseBuffer,
 } from '../autoSync';
 import {
@@ -195,17 +262,36 @@ function advanceSignal(source: Float32Array, advanceSamples: number): Float32Arr
   return target;
 }
 
-function createAudioBuffer(channelData: Float32Array[], sampleRate = SAMPLE_RATE): AudioBuffer {
-  const length = channelData[0]?.length ?? 0;
+function createMockAudioSample(
+  channelData: Float32Array[],
+  sampleRate = SAMPLE_RATE,
+  timestamp = 0,
+): MockAudioSample {
+  const numberOfFrames = channelData[0]?.length ?? 0;
   return {
+    close: vi.fn(),
+    copyTo: vi.fn(
+      (
+        destination: Float32Array,
+        options: {
+          frameCount?: number;
+          frameOffset?: number;
+          planeIndex: number;
+        },
+      ) => {
+        const frameOffset = options.frameOffset ?? 0;
+        const frameCount = options.frameCount ?? numberOfFrames - frameOffset;
+        destination.set(
+          channelData[options.planeIndex].subarray(frameOffset, frameOffset + frameCount),
+        );
+      },
+    ),
+    duration: numberOfFrames / sampleRate,
     numberOfChannels: channelData.length,
-    length,
+    numberOfFrames,
     sampleRate,
-    duration: length / sampleRate,
-    getChannelData: (channel: number) => channelData[channel],
-    copyFromChannel: vi.fn(),
-    copyToChannel: vi.fn(),
-  } as unknown as AudioBuffer;
+    timestamp,
+  };
 }
 
 function isTransferableArrayBuffer(buffer: ArrayBufferLike): buffer is ArrayBuffer {
@@ -406,11 +492,17 @@ beforeEach(() => {
   fetchedUrls = [];
   workerCreations = 0;
   workerTerminations = 0;
+  mediaMock.activeIterators = 0;
   mediaMock.inputs.length = 0;
+  mediaMock.iteratorReturns = 0;
+  mediaMock.iteratorReturnError = null;
+  mediaMock.iterators.length = 0;
+  mediaMock.maximumActiveIterators = 0;
+  mediaMock.selectedTrackIndexes.length = 0;
   Object.assign(mediaMock.metadata, {
+    canDecode: true,
     channels: 1,
     codec: 'mp3',
-    duration: 5,
     format: 'MP3',
     malformedAt: null,
     hasVideo: false,
@@ -422,19 +514,16 @@ beforeEach(() => {
   });
   decodedReference = createAsymmetricPulseSignal(250);
   decodedTarget = delaySignal(decodedReference, 25 * AUTO_SYNC_FRAME_SIZE);
+  mediaMock.sampleFactory = (buffer) => [
+    createMockAudioSample([
+      buffer.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
+    ]),
+  ];
 
   vi.stubGlobal('Worker', MockAutoSyncWorker);
-  vi.stubGlobal(
-    'AudioContext',
-    class {
-      async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
-        return createAudioBuffer([
-          data.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
-        ]);
-      }
-      async close() {}
-    },
-  );
+  vi.stubGlobal('AudioContext', vi.fn(() => {
+    throw new Error('Web Audio must not be constructed');
+  }));
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
@@ -691,152 +780,198 @@ describe('readResponseBuffer', () => {
   });
 });
 
-describe('inspectEncodedAudioMemory', () => {
+describe('decodeEncodedAudioToMono', () => {
   it.each([
     ['MP4 video reference', 'MP4', 'aac'],
+    ['MOV video reference', 'QuickTime', 'aac'],
     ['WebM video reference', 'WebM', 'opus'],
     ['MP3 audio', 'MP3', 'mp3'],
     ['M4A audio', 'MP4', 'aac'],
+    ['AAC audio', 'ADTS', 'aac'],
     ['Ogg audio', 'Ogg', 'vorbis'],
     ['FLAC audio', 'FLAC', 'flac'],
     ['WAV audio', 'WAVE', 'pcm-s16'],
-  ])('reads complete authoritative metadata for %s', async (_name, format, codec) => {
+  ])('incrementally decodes %s through the selected track', async (_name, format, codec) => {
     Object.assign(mediaMock.metadata, {
-      channels: 2,
       codec,
-      duration: 2.5,
       format,
-      sampleRate: 48_000,
     });
+    const sample = createMockAudioSample([
+      Float32Array.of(1, 0, -1),
+      Float32Array.of(-1, 1, 1),
+    ]);
+    mediaMock.sampleFactory = () => [sample];
 
-    const result = await inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference');
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
 
-    expect(result).toMatchObject({
-      channels: 2,
-      codec,
-      decodedBytes: 960_000,
-      duration: 2.5,
-      format,
-      sampleRate: 48_000,
-      trackCount: 1,
-    });
+    expect([...result]).toEqual([0, 0.5, 0]);
+    expect(sample.close).toHaveBeenCalledOnce();
     expect(mediaMock.inputs.at(-1)?.formats).toEqual(AUTO_SYNC_INPUT_FORMATS);
   });
 
-  it('accepts video containers while summing every audio track allocation', async () => {
+  it('uses the deterministic primary track without decoding unrelated tracks', async () => {
     Object.assign(mediaMock.metadata, {
       format: 'MP4',
       hasVideo: true,
       primaryTrackIndex: 1,
       tracks: [
-        { channels: 1, codec: 'aac', duration: 2, sampleRate: 48_000 },
-        { channels: 2, codec: 'aac', duration: 3, sampleRate: 44_100 },
+        { channels: 1, codec: 'aac', sampleRate: 48_000 },
+        { channels: 2, codec: 'aac', sampleRate: 44_100 },
       ],
     });
-
-    const result = await inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference');
-
-    expect(result).toMatchObject({
-      channels: 2,
-      codec: 'aac',
-      decodedBytes: 1_442_400,
-      duration: 3,
-      format: 'MP4',
-      sampleRate: 44_100,
-      trackCount: 2,
-    });
-  });
-
-  it('rejects multi-track and chained-stream sums that exceed the decoded budget', async () => {
-    const tracks = [
-      { channels: 2, codec: 'opus', duration: 100, sampleRate: 96_000 },
-      { channels: 2, codec: 'vorbis', duration: 100, sampleRate: 96_000 },
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([Float32Array.of(1, 2, 3)]),
     ];
-    Object.assign(mediaMock.metadata, {
-      format: 'Ogg',
-      tracks,
-    });
 
-    await expect(inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference')).rejects.toMatchObject(
-      { code: 'decoded-limit' },
-    );
+    await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect(mediaMock.selectedTrackIndexes).toEqual([1]);
   });
 
-  it('rejects when the primary browser-decoder selection is not among enumerated tracks', async () => {
+  it('preserves linear resampling across incremental sample boundaries', async () => {
+    const samples = [
+      createMockAudioSample(
+        [Float32Array.of(0, 1), Float32Array.of(2, 3)],
+        16_000,
+        0,
+      ),
+      createMockAudioSample(
+        [Float32Array.of(2, 3), Float32Array.of(4, 5)],
+        16_000,
+        2 / 16_000,
+      ),
+    ];
+    mediaMock.sampleFactory = () => samples;
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([1, 3]);
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('trims valid negative decoder preroll before producing analysis samples', async () => {
+    const sample = createMockAudioSample(
+      [Float32Array.of(1, 2, 3, 4)],
+      SAMPLE_RATE,
+      -2 / SAMPLE_RATE,
+    );
+    mediaMock.sampleFactory = () => [sample];
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([3, 4]);
+    expect(sample.close).toHaveBeenCalledOnce();
+  });
+
+  it('preserves timestamp gaps with silence and trims overlapping frames', async () => {
+    const samples = [
+      createMockAudioSample([Float32Array.of(1, 2)], SAMPLE_RATE, 0),
+      createMockAudioSample([Float32Array.of(3, 4)], SAMPLE_RATE, 4 / SAMPLE_RATE),
+      createMockAudioSample([Float32Array.of(5, 6, 7)], SAMPLE_RATE, 5 / SAMPLE_RATE),
+    ];
+    mediaMock.sampleFactory = () => samples;
+
+    const result = await decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference');
+
+    expect([...result]).toEqual([1, 2, 0, 0, 3, 4, 6, 7]);
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it('rejects incompatible midstream shapes and closes samples before returning the iterator', async () => {
+    const first = createMockAudioSample([Float32Array.of(1, 2)], 8_000, 0);
+    const second = createMockAudioSample([Float32Array.of(3, 4)], 16_000, 2 / 8_000);
+    mediaMock.sampleFactory = () => [first, second];
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference'),
+    ).rejects.toMatchObject({ code: 'invalid-metadata' });
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(second.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('rejects ambiguous primary selection before constructing a decoder', async () => {
     Object.assign(mediaMock.metadata, {
       primaryTrackIndex: 99,
-      tracks: [{ channels: 2, codec: 'aac', duration: 2, sampleRate: 48_000 }],
+      tracks: [{ channels: 2, codec: 'aac', sampleRate: 48_000 }],
     });
 
-    await expect(inspectEncodedAudioMemory(new ArrayBuffer(32), 'reference')).rejects.toMatchObject(
-      { code: 'unproven-track-selection' },
-    );
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(32), 'reference'),
+    ).rejects.toMatchObject({ code: 'unproven-track-selection' });
+    expect(mediaMock.selectedTrackIndexes).toEqual([]);
   });
 
   it.each([
     ['no-audio-track', { track: false }],
     ['unknown-format', { readable: false }],
     ['malformed-media', { malformedAt: 'format' }],
-    ['malformed-media', { malformedAt: 'metadata' }],
-    ['unknown-codec', { codec: null }],
-    ['invalid-metadata', { duration: 0 }],
-    ['invalid-metadata', { duration: Number.POSITIVE_INFINITY }],
-    ['invalid-metadata', { sampleRate: 0 }],
-    ['invalid-metadata', { channels: 0 }],
+    ['unknown-codec', { canDecode: false }],
   ])('returns typed %s errors for unusable media', async (code, metadata) => {
     Object.assign(mediaMock.metadata, metadata);
 
-    await expect(inspectEncodedAudioMemory(new ArrayBuffer(8), 'target')).rejects.toMatchObject({
+    await expect(decodeEncodedAudioToMono(new ArrayBuffer(8), 'target')).rejects.toMatchObject({
       code,
       name: 'AutoSyncMediaError',
     });
   });
 
-  it('rejects overflow-safe decoded estimates beyond the existing budget', async () => {
-    expect(AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT).toBe(128 * MEBIBYTE);
-    Object.assign(mediaMock.metadata, {
-      channels: Number.MAX_SAFE_INTEGER,
-      duration: Number.MAX_VALUE,
-      sampleRate: Number.MAX_SAFE_INTEGER,
-    });
-
-    await expect(inspectEncodedAudioMemory(new ArrayBuffer(8), 'target')).rejects.toMatchObject({
-      code: 'decoded-limit',
-    });
-  });
-});
-
-describe('convertAudioBufferToMono', () => {
-  it('averages channels directly at 8 kHz with deterministic dimensions', async () => {
-    const decoded = createAudioBuffer([
-      Float32Array.of(1, 0, -1, 0),
-      Float32Array.of(-1, 1, 1, 0),
-    ]);
-
-    const result = await convertAudioBufferToMono(decoded, 'reference');
-
-    expect([...result]).toEqual([0, 0.5, 0, 0]);
-  });
-
-  it('linearly resamples into the exact bounded output length', async () => {
-    const decoded = createAudioBuffer(
-      [Float32Array.of(0, 1, 2, 3), Float32Array.of(2, 3, 4, 5)],
-      16_000,
+  it.each([
+    ['sample rate', { sampleRate: 0 }],
+    ['channel count', { numberOfChannels: 0 }],
+    ['frame count', { numberOfFrames: 0 }],
+    ['timestamp', { timestamp: Number.NaN }],
+  ])('rejects invalid emitted %s and closes the sample', async (_name, shape) => {
+    const sample = Object.assign(
+      createMockAudioSample([Float32Array.of(1)]),
+      shape,
     );
+    mediaMock.sampleFactory = () => [sample];
 
-    const result = await convertAudioBufferToMono(decoded, 'reference');
-
-    expect(result).toHaveLength(2);
-    expect([...result]).toEqual([1, 3]);
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(8), 'target'),
+    ).rejects.toMatchObject({ code: 'invalid-metadata' });
+    expect(sample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
   });
 
-  it('observes abort between cooperative conversion chunks', async () => {
-    const decoded = createAudioBuffer([new Float32Array(100_000)]);
+  it('bounds cumulative decoded bytes from chained or extra output before copying more', async () => {
+    expect(AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT).toBe(128 * MEBIBYTE);
+    Object.assign(mediaMock.metadata, { format: 'Ogg' });
+    const samples = Array.from({ length: 5 }, (_, index) =>
+      createMockAudioSample(
+        [Float32Array.of(index)],
+        SAMPLE_RATE,
+        index / SAMPLE_RATE,
+      ));
+    mediaMock.sampleFactory = () => samples;
+
+    await expect(
+      decodeEncodedAudioToMono(new ArrayBuffer(8), 'target', undefined, 16),
+    ).rejects.toMatchObject({ code: 'decoded-limit' });
+    expect(samples[0].copyTo).toHaveBeenCalled();
+    expect(samples[3].copyTo).toHaveBeenCalled();
+    expect(samples[4].copyTo).not.toHaveBeenCalled();
+    expect(samples.every((sample) => sample.close.mock.calls.length === 1)).toBe(true);
+    expect(mediaMock.iteratorReturns).toBe(1);
+  });
+
+  it('closes the active sample and returns the iterator on cooperative abort', async () => {
+    const activeSample = createMockAudioSample([new Float32Array(100_000)]);
+    const prefetchedSample = createMockAudioSample([Float32Array.of(1)]);
+    mediaMock.sampleFactory = () => [activeSample, prefetchedSample];
     const controller = new AbortController();
-    const pending = convertAudioBufferToMono(decoded, 'reference', controller.signal);
+    const pending = decodeEncodedAudioToMono(
+      new ArrayBuffer(8),
+      'reference',
+      controller.signal,
+    );
     setTimeout(() => controller.abort(), 0);
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(activeSample.close).toHaveBeenCalledOnce();
+    expect(prefetchedSample.close).toHaveBeenCalledOnce();
+    expect(mediaMock.iteratorReturns).toBe(1);
   });
 });
 
@@ -850,7 +985,7 @@ describe('computeAutoSyncOffset', () => {
       codec,
       format,
       hasVideo: true,
-      tracks: [{ channels: 2, codec, duration: 5, sampleRate: SAMPLE_RATE }],
+      tracks: [{ channels: 2, codec, sampleRate: SAMPLE_RATE }],
     });
 
     await expect(
@@ -873,28 +1008,10 @@ describe('computeAutoSyncOffset', () => {
   });
 
   it('fetches and decodes inputs sequentially after releasing encoded references', async () => {
-    let activeDecodes = 0;
-    let maximumActiveDecodes = 0;
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(data: ArrayBuffer): Promise<AudioBuffer> {
-          activeDecodes++;
-          maximumActiveDecodes = Math.max(maximumActiveDecodes, activeDecodes);
-          await Promise.resolve();
-          activeDecodes--;
-          return createAudioBuffer([
-            data.byteLength === TARGET_BYTES ? decodedTarget : decodedReference,
-          ]);
-        }
-        async close() {}
-      },
-    );
-
     await computeAutoSyncOffset('blob:ref', 'blob:tar');
 
     expect(fetchedUrls).toEqual(['blob:ref', 'blob:tar']);
-    expect(maximumActiveDecodes).toBe(1);
+    expect(mediaMock.maximumActiveIterators).toBe(1);
   });
 
   it('cancels non-OK and oversized declared responses without masking primary errors', async () => {
@@ -916,82 +1033,30 @@ describe('computeAutoSyncOffset', () => {
     expect(oversized.bodyCancel).toHaveBeenCalledOnce();
   });
 
-  it('rejects oversized non-WAV decoded metadata before any decode call', async () => {
-    Object.assign(mediaMock.metadata, {
-      channels: 8,
-      codec: 'opus',
-      duration: 300,
-      format: 'WebM',
-      sampleRate: 192_000,
+  it('never constructs Web Audio contexts', async () => {
+    const audioContext = vi.fn(() => {
+      throw new Error('Web Audio must not be constructed');
     });
-    const decodeAudioData = vi.fn();
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData = decodeAudioData;
-        async close() {}
-      },
-    );
+    vi.stubGlobal('AudioContext', audioContext);
 
-    await expect(computeAutoSyncOffset('blob:webm', 'blob:target')).rejects.toMatchObject({
-      code: 'decoded-limit',
-    });
-    expect(decodeAudioData).not.toHaveBeenCalled();
+    await computeAutoSyncOffset('blob:ref', 'blob:tar');
+
+    expect(audioContext).not.toHaveBeenCalled();
   });
 
-  it('rejects a multi-track MP4 sum before decode even when each track fits alone', async () => {
-    Object.assign(mediaMock.metadata, {
-      format: 'MP4',
-      hasVideo: true,
-      tracks: [
-        { channels: 2, codec: 'aac', duration: 100, sampleRate: 96_000 },
-        { channels: 2, codec: 'aac', duration: 100, sampleRate: 96_000 },
-      ],
+  it('preserves decode and AbortError when iterator cleanup rejects', async () => {
+    Object.assign(mediaMock.metadata, { malformedAt: 'decode' });
+    mediaMock.iteratorReturnError = new Error('iterator cleanup failed');
+    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toMatchObject({
+      code: 'malformed-media',
+      originalCause: expect.objectContaining({ message: 'primary decode failure' }),
     });
-    const decodeAudioData = vi.fn();
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData = decodeAudioData;
-        async close() {}
-      },
-    );
 
-    await expect(computeAutoSyncOffset('blob:mp4', 'blob:target')).rejects.toMatchObject({
-      code: 'decoded-limit',
-    });
-    expect(decodeAudioData).not.toHaveBeenCalled();
-  });
-
-  it('preserves decode and AbortError when decoder cleanup rejects', async () => {
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        async decodeAudioData(): Promise<AudioBuffer> {
-          throw new Error('primary decode failure');
-        }
-        async close(): Promise<void> {
-          throw new Error('close failed');
-        }
-      },
-    );
-    await expect(computeAutoSyncOffset('blob:ref', 'blob:tar')).rejects.toThrow(
-      'primary decode failure',
-    );
-
-    let closes = 0;
-    vi.stubGlobal(
-      'AudioContext',
-      class {
-        decodeAudioData(): Promise<AudioBuffer> {
-          return new Promise(() => {});
-        }
-        async close(): Promise<void> {
-          closes++;
-          throw new Error('close failed');
-        }
-      },
-    );
+    Object.assign(mediaMock.metadata, { malformedAt: null });
+    mediaMock.iteratorReturnError = new Error('iterator cleanup failed');
+    mediaMock.sampleFactory = () => [
+      createMockAudioSample([new Float32Array(100_000)]),
+    ];
     const controller = new AbortController();
     const pending = computeAutoSyncOffset('blob:ref', 'blob:tar', {
       signal: controller.signal,
@@ -1000,7 +1065,7 @@ describe('computeAutoSyncOffset', () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(closes).toBe(1);
+    expect(mediaMock.iteratorReturns).toBeGreaterThanOrEqual(2);
     expect(fetchedUrls.at(-1)).toBe('blob:ref');
   });
 

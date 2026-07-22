@@ -15,11 +15,9 @@ import {
 } from './autoSyncCore';
 import {
   AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
-  AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
   AutoSyncMediaError,
-  convertAudioBufferToMono,
-  inspectEncodedAudioMemory,
+  decodeEncodedAudioToMono,
   readResponseBuffer,
 } from './autoSyncMedia';
 
@@ -30,12 +28,10 @@ export {
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
   AutoSyncMediaError,
-  convertAudioBufferToMono,
+  decodeEncodedAudioToMono,
   getUnknownLengthPayloadLimit,
-  inspectEncodedAudioMemory,
   readResponseBuffer,
   type AutoSyncMediaErrorCode,
-  type EncodedAudioMemory,
 } from './autoSyncMedia';
 
 export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
@@ -68,58 +64,12 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-function raceWithAbort<T>(
-  operation: Promise<T>,
-  signal: AbortSignal | undefined,
-  onAbort?: () => void,
-): Promise<T> {
-  if (!signal) {
-    return operation;
-  }
-  if (signal.aborted) {
-    onAbort?.();
-    return Promise.reject(abortError());
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    const finish = (callback: () => void) => {
-      signal.removeEventListener('abort', handleAbort);
-      callback();
-    };
-    const handleAbort = () => {
-      onAbort?.();
-      finish(() => reject(abortError()));
-    };
-
-    signal.addEventListener('abort', handleAbort, { once: true });
-    operation.then(
-      (value) => finish(() => resolve(value)),
-      (error) => finish(() => reject(error)),
-    );
-  });
-}
-
 async function cancelResponseBodyBestEffort(response: Response): Promise<void> {
   try {
     await response.body?.cancel();
   } catch {
     // Cleanup must not replace the HTTP or resource-limit error.
   }
-}
-
-function closeAudioContextBestEffort(
-  context: AudioContext,
-  state: { promise?: Promise<void> },
-): Promise<void> {
-  if (state.promise) {
-    return state.promise;
-  }
-  try {
-    state.promise = context.close().catch(() => undefined);
-  } catch {
-    state.promise = Promise.resolve();
-  }
-  return state.promise;
 }
 
 function durationLimitError(label: string, tooShort: boolean): Error {
@@ -161,7 +111,7 @@ async function fetchAndDecodeAudio(
   label: string,
   signal: AbortSignal | undefined,
   retainedAnalysisBytes: number,
-): Promise<AudioBuffer> {
+): Promise<Float32Array> {
   throwIfAborted(signal);
   const response = await fetch(url, { signal });
   if (!response.ok) {
@@ -192,34 +142,7 @@ async function fetchAndDecodeAudio(
   );
   throwIfAborted(signal);
 
-  const metadata = await inspectEncodedAudioMemory(encodedBuffer, label, signal);
-  assertUsableDuration(metadata.duration, label);
-
-  const context = new AudioContext({
-    sampleRate: AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
-  });
-  const closeState: { promise?: Promise<void> } = {};
-  let decoded: AudioBuffer;
-  try {
-    decoded = await raceWithAbort(context.decodeAudioData(encodedBuffer), signal, () => {
-      void closeAudioContextBestEffort(context, closeState);
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw error;
-    }
-    throw new Error(
-      `Could not decode ${label} audio for auto-sync: ${
-        error instanceof Error ? error.message : 'unsupported audio data'
-      }`,
-    );
-  } finally {
-    const closePromise = closeAudioContextBestEffort(context, closeState);
-    if (!signal?.aborted) {
-      await closePromise;
-    }
-  }
-  return decoded;
+  return decodeEncodedAudioToMono(encodedBuffer, label, signal);
 }
 
 async function decodeToMono(
@@ -228,24 +151,11 @@ async function decodeToMono(
   signal: AbortSignal | undefined,
   retainedAnalysisBytes: number,
 ): Promise<DecodedAnalysis> {
-  const decoded = await fetchAndDecodeAudio(url, label, signal, retainedAnalysisBytes);
-
-  // The Mediabunny preflight is authoritative; these checks defend against a broken decoder shape.
-  assertUsableDuration(decoded.duration, label);
-  const decodedBytes =
-    decoded.length * decoded.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
-  if (
-    !Number.isSafeInteger(decodedBytes) ||
-    decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT
-  ) {
-    throw new Error(
-      `${label} audio exceeds the 128 MiB decoded-audio memory limit; ` +
-        'use a shorter source with fewer channels or a lower sample rate',
-    );
-  }
+  const samples = await fetchAndDecodeAudio(url, label, signal, retainedAnalysisBytes);
+  assertUsableDuration(samples.length / AUTO_SYNC_ANALYSIS_SAMPLE_RATE, label);
 
   return {
-    samples: await convertAudioBufferToMono(decoded, label, signal),
+    samples,
   };
 }
 

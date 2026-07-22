@@ -63,21 +63,30 @@ The dev server will start at `http://localhost:3000`.
 ## Auto-sync media limits
 
 Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
-(Opus or Vorbis), FLAC, MP3, and WAV inputs. Mediabunny inspects the complete
-bounded encoded input before Web Audio decoding and rejects missing audio
-tracks, malformed or unknown media, invalid metadata, and decoded shapes over
-128 MiB. Video tracks do not disqualify a container: the primary audio track
-is selected only after every audio track has been enumerated, validated, and
-included in the conservative decoded-allocation sum.
+(Opus or Vorbis), FLAC, MP3, and WAV inputs. After the bounded download,
+Mediabunny selects the container's primary audio track and decodes it as
+incremental `AudioSample` resources. Video tracks do not disqualify a
+container. Ogg uses primary-track semantics; later chained logical streams are
+not implicitly concatenated.
+
+Each emitted sample is validated and charged to the 128 MiB cumulative decoded
+work budget before its data is copied. Samples are downmixed and linearly
+resampled into bounded 8 kHz mono analysis chunks, then closed immediately.
+Abort and limit failures return the decoder iterator so queued resources are
+released. Auto-sync does not construct an `AudioContext` or
+`OfflineAudioContext`.
 
 Each accepted encoded input is capped at 48 MiB and requires a streaming
 response body. The advertised encoded peak for accepted inputs is 96 MiB
 without relying on BYOB readers, fetch chunk sizing, or garbage collection:
 
 - With `Content-Length`, a destination of at most 48 MiB can coexist with one
-  ordinary reader chunk of at most the accepted 48 MiB payload.
+  ordinary reader backing buffer only after that complete owner is admitted
+  against the peak.
 - Without `Content-Length`, retained chunks total at most 48 MiB and can coexist
-  with the final assembled copy of at most 48 MiB.
+  with the final assembled copy of at most 48 MiB. Sliced reader views are
+  copied into exact-size storage only after their full backing owners are
+  admitted.
 
 Declared byte streams may use a 64 KiB BYOB scratch buffer opportunistically,
 copying each returned view by its own buffer, offset, and length into the
