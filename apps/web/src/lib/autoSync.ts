@@ -46,6 +46,9 @@ export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
 const DECODE_COPY_CHUNK_FRAMES = 16_384;
 const DECODE_YIELD_INTERVAL_CHUNKS = 16;
+const TIMELINE_FRAME_TOLERANCE = 0.5;
+const MAX_OGG_LOGICAL_STREAMS = 256;
+const OGG_CAPTURE_PATTERN = [0x4f, 0x67, 0x67, 0x53] as const;
 
 export interface AutoSyncResult {
   /** Signed target placement: positive delays it; negative advances its source in-point. */
@@ -167,11 +170,24 @@ function malformedMediaError(label: string, cause: unknown): AutoSyncMediaError 
   );
 }
 
+function invalidSampleMetadataError(label: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'invalid-metadata',
+    `${label} media decoder returned invalid sample-rate, channel, frame, timestamp, or duration metadata`,
+  );
+}
+
 function isAbortError(error: unknown): error is DOMException {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
-function checkedDecodedSampleBytes(sample: AudioSample, label: string): number {
+interface CheckedSampleMetadata {
+  decodedBytes: number;
+  timestampFrame: number;
+  timestampFramesExact: number;
+}
+
+function checkedSampleMetadata(sample: AudioSample, label: string): CheckedSampleMetadata {
   const { duration, numberOfChannels, numberOfFrames, sampleRate, timestamp } = sample;
   if (
     !Number.isSafeInteger(sampleRate) ||
@@ -184,19 +200,146 @@ function checkedDecodedSampleBytes(sample: AudioSample, label: string): number {
     !Number.isFinite(duration) ||
     duration <= 0
   ) {
-    throw new AutoSyncMediaError(
-      'invalid-metadata',
-      `${label} media decoder returned invalid sample-rate, channel, frame, timestamp, or duration metadata`,
-    );
+    throw invalidSampleMetadataError(label);
   }
 
+  const timestampFramesExact = timestamp * sampleRate;
+  const timestampFrame = Math.round(timestampFramesExact);
+  const durationFrames = duration * sampleRate;
+  const maximumTimelineFrames = sampleRate * AUTO_SYNC_MAX_DURATION_SECONDS;
   if (
+    !Number.isFinite(timestampFramesExact) ||
+    !Number.isSafeInteger(timestampFrame) ||
+    Math.abs(timestampFramesExact - timestampFrame) > TIMELINE_FRAME_TOLERANCE ||
+    !Number.isFinite(durationFrames) ||
+    Math.abs(durationFrames - numberOfFrames) > TIMELINE_FRAME_TOLERANCE ||
+    !Number.isSafeInteger(maximumTimelineFrames) ||
     numberOfFrames > Number.MAX_SAFE_INTEGER / numberOfChannels ||
     numberOfFrames * numberOfChannels > Number.MAX_SAFE_INTEGER / Float32Array.BYTES_PER_ELEMENT
   ) {
-    throw decodedLimitError(label);
+    throw invalidSampleMetadataError(label);
   }
-  return numberOfFrames * numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
+
+  return {
+    decodedBytes: numberOfFrames * numberOfChannels * Float32Array.BYTES_PER_ELEMENT,
+    timestampFrame,
+    timestampFramesExact,
+  };
+}
+
+function readOggUint32(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset]! |
+      (bytes[offset + 1]! << 8) |
+      (bytes[offset + 2]! << 16) |
+      (bytes[offset + 3]! << 24)) >>>
+    0
+  );
+}
+
+function oggFramingError(label: string, detail: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'malformed-media',
+    `${label} Ogg framing is truncated or corrupt: ${detail}`,
+  );
+}
+
+function chainedOggError(label: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'unsupported-chained-ogg',
+    `${label} Ogg contains chained logical streams, which auto-sync does not support; ` +
+      'remux it to a single Ogg stream',
+  );
+}
+
+function startsWithOggCapturePattern(bytes: Uint8Array): boolean {
+  return OGG_CAPTURE_PATTERN.every((value, index) => bytes[index] === value);
+}
+
+function validateOggFraming(encodedBuffer: ArrayBuffer, label: string): void {
+  const bytes = new Uint8Array(encodedBuffer);
+  if (!startsWithOggCapturePattern(bytes)) {
+    return;
+  }
+
+  const streams = new Map<number, { ended: boolean; nextSequence: number }>();
+  let offset = 0;
+  let initialBosRegion = true;
+  let anyStreamEnded = false;
+
+  // Lacing is sufficient to walk framing safely; codecs, granules, duration, and CRC stay untouched.
+  while (offset < bytes.byteLength) {
+    if (bytes.byteLength - offset < 27) {
+      throw oggFramingError(label, 'incomplete page header');
+    }
+    if (!OGG_CAPTURE_PATTERN.every((value, index) => bytes[offset + index] === value)) {
+      throw oggFramingError(label, 'missing page capture pattern');
+    }
+    if (bytes[offset + 4] !== 0) {
+      throw oggFramingError(label, 'unsupported page version');
+    }
+
+    const flags = bytes[offset + 5]!;
+    if ((flags & ~0x07) !== 0 || (flags & 0x03) === 0x03) {
+      throw oggFramingError(label, 'invalid page header flags');
+    }
+
+    const serial = readOggUint32(bytes, offset + 14);
+    const sequence = readOggUint32(bytes, offset + 18);
+    const segmentCount = bytes[offset + 26]!;
+    const lacingOffset = offset + 27;
+    const bodyOffset = lacingOffset + segmentCount;
+    if (bodyOffset > bytes.byteLength) {
+      throw oggFramingError(label, 'incomplete lacing table');
+    }
+
+    let bodyLength = 0;
+    for (let index = 0; index < segmentCount; index++) {
+      bodyLength += bytes[lacingOffset + index]!;
+    }
+    if (bodyLength > bytes.byteLength - bodyOffset) {
+      throw oggFramingError(label, 'incomplete page body');
+    }
+
+    const isBos = (flags & 0x02) !== 0;
+    const isEos = (flags & 0x04) !== 0;
+    const stream = streams.get(serial);
+    if (!stream) {
+      if (!isBos) {
+        throw oggFramingError(label, 'logical stream does not begin with a BOS page');
+      }
+      if (!initialBosRegion || anyStreamEnded) {
+        throw chainedOggError(label);
+      }
+      if (sequence !== 0) {
+        throw oggFramingError(label, 'BOS page sequence number is not zero');
+      }
+      if (streams.size >= MAX_OGG_LOGICAL_STREAMS) {
+        throw oggFramingError(label, 'too many logical streams');
+      }
+      streams.set(serial, { ended: isEos, nextSequence: 1 });
+    } else {
+      if (isBos) {
+        throw oggFramingError(label, 'logical stream repeats its BOS page');
+      }
+      if (stream.ended) {
+        throw oggFramingError(label, 'logical stream continues after EOS');
+      }
+      if (sequence !== stream.nextSequence) {
+        throw oggFramingError(label, 'non-contiguous page sequence number');
+      }
+      stream.nextSequence = (sequence + 1) >>> 0;
+      stream.ended = isEos;
+    }
+
+    if (!isBos) {
+      initialBosRegion = false;
+    }
+    if (isEos) {
+      anyStreamEnded = true;
+    }
+    offset = bodyOffset + bodyLength;
+  }
 }
 
 class StreamingLinearResampler {
@@ -374,6 +517,7 @@ async function decodePrimaryTrackToMono(
   label: string,
   signal: AbortSignal | undefined,
 ): Promise<Float32Array> {
+  validateOggFraming(encodedBuffer, label);
   const input = new Input({
     source: new BufferSource(encodedBuffer),
     formats: AUTO_SYNC_INPUT_FORMATS,
@@ -389,7 +533,12 @@ async function decodePrimaryTrackToMono(
     let decodedBytes = 0;
     let planarScratch = new Float32Array(0);
     let monoScratch = new Float32Array(0);
+    const silenceScratch = new Float32Array(DECODE_COPY_CHUNK_FRAMES);
     let chunksSinceYield = 0;
+    let sourceChannels: number | undefined;
+    let sourceRate: number | undefined;
+    let timelineFrame = 0;
+    let previousTimestampFramesExact: number | undefined;
 
     while (true) {
       throwIfAborted(signal);
@@ -408,14 +557,73 @@ async function decodePrimaryTrackToMono(
       const sample = result.value;
       let sampleError: unknown;
       try {
-        const sampleBytes = checkedDecodedSampleBytes(sample, label);
-        if (sampleBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - decodedBytes) {
+        const metadata = checkedSampleMetadata(sample, label);
+        if (sourceRate === undefined) {
+          sourceRate = sample.sampleRate;
+          sourceChannels = sample.numberOfChannels;
+        } else if (sample.sampleRate !== sourceRate || sample.numberOfChannels !== sourceChannels) {
+          throw new AutoSyncMediaError(
+            'invalid-metadata',
+            `${label} media decoder changed sample rate or channel count between audio samples`,
+          );
+        }
+        if (
+          previousTimestampFramesExact !== undefined &&
+          metadata.timestampFramesExact < previousTimestampFramesExact - TIMELINE_FRAME_TOLERANCE
+        ) {
+          throw new AutoSyncMediaError(
+            'invalid-metadata',
+            `${label} media decoder returned materially non-monotonic audio timestamps`,
+          );
+        }
+        previousTimestampFramesExact = metadata.timestampFramesExact;
+
+        const sampleEndFrame = metadata.timestampFrame + sample.numberOfFrames;
+        if (!Number.isSafeInteger(sampleEndFrame)) {
+          throw invalidSampleMetadataError(label);
+        }
+        if (sampleEndFrame > sourceRate * AUTO_SYNC_MAX_DURATION_SECONDS) {
+          throw durationLimitError(label, false);
+        }
+
+        const preRollFrames =
+          metadata.timestampFramesExact < 0
+            ? Math.min(sample.numberOfFrames, Math.ceil(-metadata.timestampFramesExact))
+            : 0;
+        const placedStartFrame = metadata.timestampFrame + preRollFrames;
+        const gapFrames = Math.max(0, placedStartFrame - timelineFrame);
+        const gapBytes = gapFrames * Float32Array.BYTES_PER_ELEMENT;
+        if (
+          !Number.isSafeInteger(gapBytes) ||
+          metadata.decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - decodedBytes ||
+          gapBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - decodedBytes - metadata.decodedBytes
+        ) {
           throw decodedLimitError(label);
         }
-        decodedBytes += sampleBytes;
+        decodedBytes += metadata.decodedBytes + gapBytes;
 
+        let remainingGapFrames = gapFrames;
+        while (remainingGapFrames > 0) {
+          throwIfAborted(signal);
+          const frameCount = Math.min(DECODE_COPY_CHUNK_FRAMES, remainingGapFrames);
+          resampler.push(silenceScratch.subarray(0, frameCount), sourceRate, label);
+          remainingGapFrames -= frameCount;
+          chunksSinceYield++;
+          if (chunksSinceYield >= DECODE_YIELD_INTERVAL_CHUNKS) {
+            chunksSinceYield = 0;
+            await yieldForAbort();
+            throwIfAborted(signal);
+          }
+        }
+        timelineFrame += gapFrames;
+
+        const overlapFrames = Math.min(
+          sample.numberOfFrames - preRollFrames,
+          Math.max(0, timelineFrame - placedStartFrame),
+        );
+        const trimmedFrames = preRollFrames + overlapFrames;
         for (
-          let frameOffset = 0;
+          let frameOffset = trimmedFrames;
           frameOffset < sample.numberOfFrames;
           frameOffset += DECODE_COPY_CHUNK_FRAMES
         ) {
@@ -453,6 +661,9 @@ async function decodePrimaryTrackToMono(
             await yieldForAbort();
             throwIfAborted(signal);
           }
+        }
+        if (trimmedFrames < sample.numberOfFrames) {
+          timelineFrame = Math.max(timelineFrame, sampleEndFrame);
         }
       } catch (error) {
         sampleError = error;

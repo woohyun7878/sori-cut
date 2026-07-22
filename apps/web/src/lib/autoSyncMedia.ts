@@ -38,6 +38,7 @@ export type AutoSyncMediaErrorCode =
   | 'malformed-media'
   | 'missing-response-body'
   | 'no-audio-track'
+  | 'unsupported-chained-ogg'
   | 'unproven-track-selection'
   | 'unknown-codec'
   | 'unknown-format';

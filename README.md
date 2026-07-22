@@ -67,8 +67,10 @@ Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
 audio track selected by Mediabunny, requires that track to be decodable, and
 incrementally converts its emitted samples to bounded 8 kHz mono analysis data.
 Every emitted sample is charged to the 128 MiB decoded-audio budget before its
-PCM is copied. This also bounds chained Ogg streams without rejecting an Ogg
-input merely because the absence of later logical streams cannot be proven.
+PCM is copied. Ogg inputs may contain multiple logical streams in their initial
+multiplexed BOS region; Mediabunny's primary audio track is still the only track
+analyzed. Chained Ogg streams are rejected before decode because Mediabunny
+1.50.8 traverses only the first chain.
 
 Each accepted encoded input is capped at 48 MiB and requires a streaming
 response body. The advertised encoded peak for accepted inputs is 96 MiB
