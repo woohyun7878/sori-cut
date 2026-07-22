@@ -28,6 +28,7 @@ const OGG_ALLOWED_HEADER_FLAGS = 0x07;
 const OGG_CONTINUED_PACKET_FLAG = 0x01;
 const OGG_BEGINNING_OF_STREAM_FLAG = 0x02;
 const OGG_END_OF_STREAM_FLAG = 0x04;
+const MAX_OGG_LOGICAL_STREAMS = 256;
 
 export const AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT = 48 * MEBIBYTE;
 export const AUTO_SYNC_MAX_ENCODED_PEAK_BYTES = 96 * MEBIBYTE;
@@ -498,7 +499,10 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
     const headerFlags = bytes[offset + 5];
     if (
       headerFlags === undefined ||
-      (headerFlags & ~OGG_ALLOWED_HEADER_FLAGS) !== 0
+      (headerFlags & ~OGG_ALLOWED_HEADER_FLAGS) !== 0 ||
+      (headerFlags &
+        (OGG_CONTINUED_PACKET_FLAG | OGG_BEGINNING_OF_STREAM_FLAG)) ===
+        (OGG_CONTINUED_PACKET_FLAG | OGG_BEGINNING_OF_STREAM_FLAG)
     ) {
       throw malformedOggError(label, 'invalid page header flags');
     }
@@ -532,7 +536,6 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
     const sequenceNumber = view.getUint32(offset + 18, true);
     const beginsStream = (headerFlags & OGG_BEGINNING_OF_STREAM_FLAG) !== 0;
     const endsStream = (headerFlags & OGG_END_OF_STREAM_FLAG) !== 0;
-    const continuesPacket = (headerFlags & OGG_CONTINUED_PACKET_FLAG) !== 0;
     const stream = streams.get(serialNumber);
 
     if (stream === undefined) {
@@ -545,8 +548,11 @@ function validateOggFraming(buffer: ArrayBuffer, label: string): void {
           `${label} media uses unsupported chained Ogg logical streams; remux it as a single Ogg stream`,
         );
       }
-      if (continuesPacket || sequenceNumber !== 0) {
+      if (sequenceNumber !== 0) {
         throw malformedOggError(label, 'invalid BOS page');
+      }
+      if (streams.size >= MAX_OGG_LOGICAL_STREAMS) {
+        throw malformedOggError(label, 'too many logical streams');
       }
       streams.set(serialNumber, {
         ended: endsStream,

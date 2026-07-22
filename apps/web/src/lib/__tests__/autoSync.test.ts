@@ -954,6 +954,10 @@ describe('decodeEncodedAudioToMono', () => {
       createOggBuffer(createOggPage({ flags: 0x0e, sequence: 0, serial: 11 })),
     ],
     [
+      'continued BOS flags',
+      createOggBuffer(createOggPage({ flags: 0x03, sequence: 0, serial: 11 })),
+    ],
+    [
       'sequence regression',
       createOggBuffer(
         createOggPage({ flags: 0x02, sequence: 0, serial: 11 }),
@@ -962,7 +966,19 @@ describe('decodeEncodedAudioToMono', () => {
       ),
     ],
     [
-      'truncation',
+      'truncated header',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11 }).slice(0, 10),
+      ),
+    ],
+    [
+      'truncated lacing table',
+      createOggBuffer(
+        createOggPage({ flags: 0x06, sequence: 0, serial: 11 }).slice(0, 27),
+      ),
+    ],
+    [
+      'truncated body',
       createOggBuffer(
         createOggPage({
           body: [1, 2, 3],
@@ -970,6 +986,14 @@ describe('decodeEncodedAudioToMono', () => {
           sequence: 0,
           serial: 11,
         }).slice(0, -1),
+      ),
+    ],
+    [
+      'logical stream bound',
+      createOggBuffer(
+        ...Array.from({ length: 257 }, (_, serial) =>
+          createOggPage({ flags: 0x02, sequence: 0, serial }),
+        ),
       ),
     ],
   ])('rejects malformed Ogg %s before decoder input', async (_name, buffer) => {
