@@ -14,6 +14,7 @@ import {
   type CrossCorrelationResult,
 } from './autoSyncCore';
 import {
+  AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
   AutoSyncMediaError,
@@ -23,6 +24,7 @@ import {
 } from './autoSyncMedia';
 
 export {
+  AUTO_SYNC_BYOB_CHUNK_BYTES,
   AUTO_SYNC_INPUT_FORMATS,
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
@@ -158,6 +160,7 @@ async function fetchAndDecodeAudio(
   url: string,
   label: string,
   signal: AbortSignal | undefined,
+  retainedAnalysisBytes: number,
 ): Promise<AudioBuffer> {
   throwIfAborted(signal);
   const response = await fetch(url, { signal });
@@ -184,6 +187,8 @@ async function fetchAndDecodeAudio(
     `${label} media exceeds the 48 MiB auto-sync encoded-input limit`,
     signal,
     declaredBytes,
+    AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
+    retainedAnalysisBytes,
   );
   throwIfAborted(signal);
 
@@ -221,8 +226,9 @@ async function decodeToMono(
   url: string,
   label: string,
   signal: AbortSignal | undefined,
+  retainedAnalysisBytes: number,
 ): Promise<DecodedAnalysis> {
-  const decoded = await fetchAndDecodeAudio(url, label, signal);
+  const decoded = await fetchAndDecodeAudio(url, label, signal, retainedAnalysisBytes);
 
   // The Mediabunny preflight is authoritative; these checks defend against a broken decoder shape.
   assertUsableDuration(decoded.duration, label);
@@ -375,8 +381,13 @@ export async function computeAutoSyncOffset(
   targetUrl: string,
   options: AutoSyncOptions = {},
 ): Promise<AutoSyncResult> {
-  const reference = await decodeToMono(referenceUrl, 'reference', options.signal);
-  const target = await decodeToMono(targetUrl, 'target', options.signal);
+  const reference = await decodeToMono(referenceUrl, 'reference', options.signal, 0);
+  const target = await decodeToMono(
+    targetUrl,
+    'target',
+    options.signal,
+    reference.samples.byteLength,
+  );
   if (reference.samples.byteLength + target.samples.byteLength > AUTO_SYNC_MAX_ANALYSIS_BYTES) {
     throw new Error('Auto-sync inputs exceed the combined analysis-memory limit');
   }

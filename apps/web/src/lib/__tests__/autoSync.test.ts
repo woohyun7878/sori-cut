@@ -108,6 +108,7 @@ vi.mock('mediabunny', () => {
 });
 
 import {
+  AUTO_SYNC_BYOB_CHUNK_BYTES,
   AUTO_SYNC_INPUT_FORMATS,
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
@@ -232,6 +233,7 @@ function createStreamResponse(options: {
   chunks?: Uint8Array[];
   contentLength?: number;
   pendingRead?: boolean;
+  byobReadSizes?: number[];
   readerCancel?: () => Promise<void>;
   status?: number;
   supportsByob?: boolean;
@@ -252,6 +254,7 @@ function createStreamResponse(options: {
   };
   const byobReader = {
     read: vi.fn((view: ArrayBufferView) => {
+      options.byobReadSizes?.push(view.byteLength);
       if (chunks.length === 0) {
         if (isTransferableArrayBuffer(view.buffer)) {
           structuredClone(view.buffer, { transfer: [view.buffer] });
@@ -467,6 +470,28 @@ describe('readResponseBuffer', () => {
     expect(AUTO_SYNC_MAX_ENCODED_PEAK_BYTES).toBe(96 * MEBIBYTE);
   });
 
+  it('caps declared BYOB scratch reads at 64 KiB', async () => {
+    const byobReadSizes: number[] = [];
+    const payload = new Uint8Array(AUTO_SYNC_BYOB_CHUNK_BYTES + 10);
+    const response = createStreamResponse({
+      byobReadSizes,
+      chunks: [payload],
+      contentLength: payload.byteLength,
+      supportsByob: true,
+    });
+
+    await expect(
+      readResponseBuffer(
+        response,
+        payload.byteLength,
+        'too large',
+        undefined,
+        payload.byteLength,
+      ),
+    ).resolves.toHaveProperty('byteLength', payload.byteLength);
+    expect(Math.max(...byobReadSizes)).toBe(AUTO_SYNC_BYOB_CHUNK_BYTES);
+  });
+
   it('caps unknown-length payloads at 48 MiB and rejects larger input', async () => {
     expect(getUnknownLengthPayloadLimit(AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT)).toBe(
       AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
@@ -512,6 +537,30 @@ describe('readResponseBuffer', () => {
         AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
       ),
     ).rejects.toMatchObject({ code: 'content-length-mismatch' });
+    expect(response.reader.cancel).toHaveBeenCalled();
+  });
+
+  it('accounts retained analysis bytes before fallback destination allocation', async () => {
+    const response = createStreamResponse({
+      chunks: [new Uint8Array(8)],
+      contentLength: 8,
+    });
+
+    await expect(
+      readResponseBuffer(response, 12, 'bounded peak', undefined, 8, 18, 4),
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
+    expect(response.reader.cancel).toHaveBeenCalled();
+  });
+
+  it('rechecks retained peak admission for later fallback chunks', async () => {
+    const response = createStreamResponse({
+      chunks: [new Uint8Array(2), new Uint8Array(8)],
+      contentLength: 10,
+    });
+
+    await expect(
+      readResponseBuffer(response, 12, 'bounded peak', undefined, 10, 20, 4),
+    ).rejects.toMatchObject({ code: 'encoded-limit' });
     expect(response.reader.cancel).toHaveBeenCalled();
   });
 

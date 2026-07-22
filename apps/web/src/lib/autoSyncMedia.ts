@@ -24,6 +24,7 @@ const CONVERSION_CHUNK_SAMPLES = 16_384;
 export const AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT = 48 * MEBIBYTE;
 export const AUTO_SYNC_MAX_ENCODED_PEAK_BYTES = 96 * MEBIBYTE;
 export const AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT = 128 * MEBIBYTE;
+export const AUTO_SYNC_BYOB_CHUNK_BYTES = 64 * 1024;
 
 export const AUTO_SYNC_INPUT_FORMATS: InputFormat[] = [
   MP4,
@@ -143,14 +144,21 @@ function decodedLimitError(label: string): AutoSyncMediaError {
   );
 }
 
-export function getUnknownLengthPayloadLimit(maximumBytes: number): number {
-  // Unknown-length inputs now use the same truthful 48 MiB payload cap as declared inputs.
-  return maximumBytes;
+export function getUnknownLengthPayloadLimit(
+  maximumBytes: number,
+  peakBudgetBytes = maximumBytes * 2,
+  retainedBytes = 0,
+): number {
+  const availableBytes = Math.max(0, peakBudgetBytes - retainedBytes);
+  return Math.min(maximumBytes, Math.floor(availableBytes / 2));
 }
 
 async function readDeclaredByob(
   body: ReadableStream<Uint8Array>,
   declaredBytes: number,
+  peakBudgetBytes: number,
+  retainedBytes: number,
+  limitMessage: string,
   signal: AbortSignal | undefined,
 ): Promise<ArrayBuffer | null> {
   let reader: ReadableStreamBYOBReader;
@@ -160,11 +168,22 @@ async function readDeclaredByob(
     return null;
   }
 
-  let destination = new Uint8Array(declaredBytes);
+  const scratchBytes = Math.min(
+    AUTO_SYNC_BYOB_CHUNK_BYTES,
+    Math.max(0, peakBudgetBytes - retainedBytes - declaredBytes),
+  );
+  if (scratchBytes < 1) {
+    cancelReaderBestEffort(reader);
+    throw new AutoSyncMediaError('encoded-limit', limitMessage);
+  }
+
+  const destination = new Uint8Array(declaredBytes);
+  let scratch = new Uint8Array(scratchBytes);
   let totalBytes = 0;
   try {
-    while (totalBytes < declaredBytes) {
-      const request = destination.subarray(totalBytes);
+    while (true) {
+      const requestBytes = Math.min(scratch.byteLength, Math.max(1, declaredBytes - totalBytes));
+      const request = scratch.subarray(0, requestBytes);
       const result = await raceWithAbort(reader.read(request), signal, () => {
         cancelReaderBestEffort(reader);
       });
@@ -179,29 +198,29 @@ async function readDeclaredByob(
         );
       }
 
-      if (totalBytes > declaredBytes - result.value.byteLength) {
+      if (
+        result.value.byteLength > requestBytes ||
+        totalBytes > declaredBytes - result.value.byteLength
+      ) {
         throw new AutoSyncMediaError(
           'content-length-mismatch',
           'Audio response did not match its Content-Length',
         );
       }
-      const destinationOffset = result.value.byteOffset - totalBytes;
+      destination.set(result.value, totalBytes);
+      totalBytes += result.value.byteLength;
+
+      const scratchOffset = result.value.byteOffset;
       if (
-        destinationOffset < 0 ||
-        destinationOffset > result.value.buffer.byteLength ||
-        declaredBytes > result.value.buffer.byteLength - destinationOffset
+        scratchOffset > result.value.buffer.byteLength ||
+        scratchBytes > result.value.buffer.byteLength - scratchOffset
       ) {
         throw new AutoSyncMediaError(
           'content-length-mismatch',
           'Audio byte stream returned incompatible buffer ownership',
         );
       }
-      destination = new Uint8Array(
-        result.value.buffer,
-        destinationOffset,
-        declaredBytes,
-      );
-      totalBytes += result.value.byteLength;
+      scratch = new Uint8Array(result.value.buffer, scratchOffset, scratchBytes);
     }
 
     if (totalBytes !== declaredBytes) {
@@ -211,25 +230,7 @@ async function readDeclaredByob(
       );
     }
 
-    const sentinel = await raceWithAbort(reader.read(new Uint8Array(1)), signal, () => {
-      cancelReaderBestEffort(reader);
-    });
-    throwIfAborted(signal);
-    if (!sentinel.done) {
-      throw new AutoSyncMediaError(
-        'content-length-mismatch',
-        'Audio response did not match its Content-Length',
-      );
-    }
-
-    if (
-      destination.byteOffset === 0 &&
-      destination.byteLength === destination.buffer.byteLength &&
-      destination.buffer instanceof ArrayBuffer
-    ) {
-      return destination.buffer;
-    }
-    return destination.slice().buffer;
+    return destination.buffer;
   } catch (error) {
     cancelReaderBestEffort(reader);
     throw error;
@@ -248,6 +249,8 @@ export async function readResponseBuffer(
   limitMessage: string,
   signal: AbortSignal | undefined,
   declaredBytes?: number,
+  peakBudgetBytes = maximumBytes * 2,
+  retainedBytes = 0,
 ): Promise<ArrayBuffer> {
   if (!response.body) {
     throw new AutoSyncMediaError(
@@ -259,13 +262,29 @@ export async function readResponseBuffer(
     throw new RangeError('maximumBytes must be a non-negative safe integer');
   }
   if (
+    !Number.isSafeInteger(peakBudgetBytes) ||
+    peakBudgetBytes < 0 ||
+    !Number.isSafeInteger(retainedBytes) ||
+    retainedBytes < 0 ||
+    retainedBytes > peakBudgetBytes
+  ) {
+    throw new RangeError('encoded peak and retained bytes must be non-negative safe integers');
+  }
+  if (
     declaredBytes !== undefined &&
     (!Number.isSafeInteger(declaredBytes) || declaredBytes < 0 || declaredBytes > maximumBytes)
   ) {
     throw new RangeError('declaredBytes must be within the configured encoded limit');
   }
   if (declaredBytes !== undefined) {
-    const byobBuffer = await readDeclaredByob(response.body, declaredBytes, signal);
+    const byobBuffer = await readDeclaredByob(
+      response.body,
+      declaredBytes,
+      peakBudgetBytes,
+      retainedBytes,
+      limitMessage,
+      signal,
+    );
     if (byobBuffer !== null) {
       return byobBuffer;
     }
@@ -275,6 +294,10 @@ export async function readResponseBuffer(
   const reader = response.body.getReader();
   let destination: Uint8Array | null = null;
   const chunks: Uint8Array[] = [];
+  const payloadLimit =
+    declaredBytes === undefined
+      ? getUnknownLengthPayloadLimit(maximumBytes, peakBudgetBytes, retainedBytes)
+      : maximumBytes;
   let totalBytes = 0;
 
   try {
@@ -307,20 +330,22 @@ export async function readResponseBuffer(
           'Audio response did not match its Content-Length',
         );
       }
-      if (nextTotal > maximumBytes) {
+      if (nextTotal > payloadLimit) {
         cancelReaderBestEffort(reader);
         throw new AutoSyncMediaError('encoded-limit', limitMessage);
       }
 
+      if (
+        declaredBytes !== undefined &&
+        (
+          declaredBytes > peakBudgetBytes - retainedBytes ||
+          chunkBytes > peakBudgetBytes - retainedBytes - declaredBytes
+        )
+      ) {
+        cancelReaderBestEffort(reader);
+        throw new AutoSyncMediaError('encoded-limit', limitMessage);
+      }
       if (declaredBytes !== undefined && destination === null) {
-        const peakBytes = maximumBytes * 2;
-        if (
-          !Number.isSafeInteger(peakBytes) ||
-          declaredBytes > peakBytes - chunkBytes
-        ) {
-          cancelReaderBestEffort(reader);
-          throw new AutoSyncMediaError('encoded-limit', limitMessage);
-        }
         destination = new Uint8Array(declaredBytes);
       }
       if (destination !== null) {
