@@ -4,6 +4,13 @@
  */
 
 import {
+  AudioSampleSink,
+  BufferSource,
+  Input,
+  type AudioSample,
+  type InputAudioTrack,
+} from 'mediabunny';
+import {
   AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
   AUTO_SYNC_FRAME_SIZE,
   AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
@@ -18,8 +25,7 @@ import {
   AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
   AutoSyncMediaError,
-  convertAudioBufferToMono,
-  inspectEncodedAudioMemory,
+  AUTO_SYNC_INPUT_FORMATS,
   readResponseBuffer,
 } from './autoSyncMedia';
 
@@ -30,17 +36,16 @@ export {
   AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT,
   AUTO_SYNC_MAX_ENCODED_PEAK_BYTES,
   AutoSyncMediaError,
-  convertAudioBufferToMono,
   getUnknownLengthPayloadLimit,
-  inspectEncodedAudioMemory,
   readResponseBuffer,
   type AutoSyncMediaErrorCode,
-  type EncodedAudioMemory,
 } from './autoSyncMedia';
 
 export const AUTO_SYNC_MAX_ANALYSIS_BYTES =
   AUTO_SYNC_MAX_ANALYSIS_SAMPLES * Float32Array.BYTES_PER_ELEMENT * 2;
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
+const DECODE_COPY_CHUNK_FRAMES = 16_384;
+const DECODE_YIELD_INTERVAL_CHUNKS = 16;
 
 export interface AutoSyncResult {
   /** Signed target placement: positive delays it; negative advances its source in-point. */
@@ -107,29 +112,16 @@ async function cancelResponseBodyBestEffort(response: Response): Promise<void> {
   }
 }
 
-function closeAudioContextBestEffort(
-  context: AudioContext,
-  state: { promise?: Promise<void> },
-): Promise<void> {
-  if (state.promise) {
-    return state.promise;
-  }
-  try {
-    state.promise = context.close().catch(() => undefined);
-  } catch {
-    state.promise = Promise.resolve();
-  }
-  return state.promise;
-}
-
-function durationLimitError(label: string, tooShort: boolean): Error {
+function durationLimitError(label: string, tooShort: boolean): AutoSyncMediaError {
   if (tooShort) {
-    return new Error(
+    return new AutoSyncMediaError(
+      'invalid-metadata',
       `${label} audio is too short for auto-sync; at least ` +
         `${AUTO_SYNC_MIN_DURATION_SECONDS} second is required`,
     );
   }
-  return new Error(
+  return new AutoSyncMediaError(
+    'invalid-metadata',
     `${label} audio is too long for auto-sync; the limit is ` +
       `${AUTO_SYNC_MAX_DURATION_SECONDS / 60} minutes`,
   );
@@ -137,7 +129,10 @@ function durationLimitError(label: string, tooShort: boolean): Error {
 
 function assertUsableDuration(duration: number, label: string): void {
   if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error(`${label} audio has no usable duration for auto-sync`);
+    throw new AutoSyncMediaError(
+      'invalid-metadata',
+      `${label} audio has no usable duration for auto-sync`,
+    );
   }
   if (duration < AUTO_SYNC_MIN_DURATION_SECONDS) {
     throw durationLimitError(label, true);
@@ -156,12 +151,357 @@ function parseContentLength(response: Response): number | undefined {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+function decodedLimitError(label: string): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'decoded-limit',
+    `${label} audio exceeds the 128 MiB decoded-audio memory limit; ` +
+      'use a shorter source with fewer channels or a lower sample rate',
+  );
+}
+
+function malformedMediaError(label: string, cause: unknown): AutoSyncMediaError {
+  return new AutoSyncMediaError(
+    'malformed-media',
+    `Could not decode ${label} media for auto-sync`,
+    cause,
+  );
+}
+
+function isAbortError(error: unknown): error is DOMException {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function checkedDecodedSampleBytes(sample: AudioSample, label: string): number {
+  const { duration, numberOfChannels, numberOfFrames, sampleRate, timestamp } = sample;
+  if (
+    !Number.isSafeInteger(sampleRate) ||
+    sampleRate <= 0 ||
+    !Number.isSafeInteger(numberOfChannels) ||
+    numberOfChannels <= 0 ||
+    !Number.isSafeInteger(numberOfFrames) ||
+    numberOfFrames <= 0 ||
+    !Number.isFinite(timestamp) ||
+    !Number.isFinite(duration) ||
+    duration <= 0
+  ) {
+    throw new AutoSyncMediaError(
+      'invalid-metadata',
+      `${label} media decoder returned invalid sample-rate, channel, frame, timestamp, or duration metadata`,
+    );
+  }
+
+  if (
+    numberOfFrames > Number.MAX_SAFE_INTEGER / numberOfChannels ||
+    numberOfFrames * numberOfChannels > Number.MAX_SAFE_INTEGER / Float32Array.BYTES_PER_ELEMENT
+  ) {
+    throw decodedLimitError(label);
+  }
+  return numberOfFrames * numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
+}
+
+class StreamingLinearResampler {
+  private output: Float32Array | undefined;
+  private outputFrames = 0;
+  private previousSample = 0;
+  private sourceFrames = 0;
+  private sourceRate: number | undefined;
+
+  push(samples: Float32Array, sampleRate: number, label: string): void {
+    if (this.sourceRate === undefined) {
+      this.sourceRate = sampleRate;
+    } else if (sampleRate !== this.sourceRate) {
+      throw new AutoSyncMediaError(
+        'invalid-metadata',
+        `${label} media decoder changed sample rate between audio samples`,
+      );
+    }
+
+    for (const sample of samples) {
+      if (!Number.isFinite(sample)) {
+        throw new AutoSyncMediaError(
+          'invalid-metadata',
+          `${label} media decoder returned a non-finite PCM sample`,
+        );
+      }
+      if (this.sourceFrames === 0) {
+        this.write(sample, label);
+        this.previousSample = sample;
+        this.sourceFrames = 1;
+        continue;
+      }
+
+      const sourceIndex = this.sourceFrames;
+      let sourcePosition = (this.outputFrames * this.sourceRate) / AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
+      while (sourcePosition <= sourceIndex) {
+        const fraction = sourcePosition - (sourceIndex - 1);
+        this.write(this.previousSample + (sample - this.previousSample) * fraction, label);
+        sourcePosition = (this.outputFrames * this.sourceRate) / AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
+      }
+      this.previousSample = sample;
+      this.sourceFrames++;
+    }
+  }
+
+  finish(label: string): Float32Array {
+    if (this.sourceRate === undefined || this.sourceFrames === 0 || !this.output) {
+      throw new AutoSyncMediaError(
+        'invalid-metadata',
+        `${label} audio has no usable duration for auto-sync`,
+      );
+    }
+
+    const expectedOutputFrames = Math.ceil(
+      (this.sourceFrames * AUTO_SYNC_ANALYSIS_SAMPLE_RATE) / this.sourceRate,
+    );
+    if (
+      !Number.isSafeInteger(expectedOutputFrames) ||
+      expectedOutputFrames <= 0 ||
+      expectedOutputFrames > AUTO_SYNC_MAX_ANALYSIS_SAMPLES
+    ) {
+      throw durationLimitError(label, false);
+    }
+    while (this.outputFrames < expectedOutputFrames) {
+      this.write(this.previousSample, label);
+    }
+
+    assertUsableDuration(this.sourceFrames / this.sourceRate, label);
+    return this.output.slice(0, this.outputFrames);
+  }
+
+  private write(sample: number, label: string): void {
+    if (this.outputFrames >= AUTO_SYNC_MAX_ANALYSIS_SAMPLES) {
+      throw durationLimitError(label, false);
+    }
+    this.output ??= new Float32Array(AUTO_SYNC_MAX_ANALYSIS_SAMPLES);
+    this.output[this.outputFrames++] = sample;
+  }
+}
+
+function yieldForAbort(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function selectPrimaryAudioTrack(
+  input: Input,
+  label: string,
+  signal: AbortSignal | undefined,
+): Promise<InputAudioTrack> {
+  let canRead: boolean;
+  try {
+    canRead = await raceWithAbort(input.canRead(), signal, () => {
+      try {
+        input.dispose();
+      } catch {
+        // Cleanup must not replace AbortError.
+      }
+    });
+  } catch (error) {
+    throwIfAborted(signal);
+    throw malformedMediaError(label, error);
+  }
+  if (!canRead) {
+    throw new AutoSyncMediaError(
+      'unknown-format',
+      `${label} media format is not supported for auto-sync`,
+    );
+  }
+
+  let tracks: InputAudioTrack[];
+  let primaryTrack: InputAudioTrack | null;
+  try {
+    [tracks, primaryTrack] = await raceWithAbort(
+      Promise.all([input.getAudioTracks(), input.getPrimaryAudioTrack()]),
+      signal,
+      () => {
+        try {
+          input.dispose();
+        } catch {
+          // Cleanup must not replace AbortError.
+        }
+      },
+    );
+  } catch (error) {
+    throwIfAborted(signal);
+    throw malformedMediaError(label, error);
+  }
+  if (tracks.length === 0 || primaryTrack === null) {
+    throw new AutoSyncMediaError(
+      'no-audio-track',
+      `${label} media has no audio track to use for auto-sync`,
+    );
+  }
+  if (!tracks.includes(primaryTrack)) {
+    throw new AutoSyncMediaError(
+      'unproven-track-selection',
+      `${label} media primary audio-track selection is inconsistent`,
+    );
+  }
+
+  let canDecode: boolean;
+  try {
+    canDecode = await raceWithAbort(primaryTrack.canDecode(), signal, () => {
+      try {
+        input.dispose();
+      } catch {
+        // Cleanup must not replace AbortError.
+      }
+    });
+  } catch (error) {
+    throwIfAborted(signal);
+    throw malformedMediaError(label, error);
+  }
+  if (!canDecode) {
+    throw new AutoSyncMediaError(
+      'unknown-codec',
+      `${label} media primary audio track cannot be decoded for auto-sync`,
+    );
+  }
+  return primaryTrack;
+}
+
+async function closeSample(sample: AudioSample, primaryError: unknown): Promise<void> {
+  try {
+    sample.close();
+  } catch (error) {
+    if (primaryError === undefined) {
+      throw error;
+    }
+  }
+}
+
+async function decodePrimaryTrackToMono(
+  encodedBuffer: ArrayBuffer,
+  label: string,
+  signal: AbortSignal | undefined,
+): Promise<Float32Array> {
+  const input = new Input({
+    source: new BufferSource(encodedBuffer),
+    formats: AUTO_SYNC_INPUT_FORMATS,
+  });
+  let iterator: AsyncGenerator<AudioSample, void, unknown> | undefined;
+  let decoded: Float32Array | undefined;
+  let primaryError: unknown;
+
+  try {
+    const primaryTrack = await selectPrimaryAudioTrack(input, label, signal);
+    iterator = new AudioSampleSink(primaryTrack).samples();
+    const resampler = new StreamingLinearResampler();
+    let decodedBytes = 0;
+    let planarScratch = new Float32Array(0);
+    let monoScratch = new Float32Array(0);
+    let chunksSinceYield = 0;
+
+    while (true) {
+      throwIfAborted(signal);
+      const result = await raceWithAbort(iterator.next(), signal, () => {
+        try {
+          input.dispose();
+        } catch {
+          // Cleanup must not replace AbortError.
+        }
+      });
+      throwIfAborted(signal);
+      if (result.done) {
+        break;
+      }
+
+      const sample = result.value;
+      let sampleError: unknown;
+      try {
+        const sampleBytes = checkedDecodedSampleBytes(sample, label);
+        if (sampleBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - decodedBytes) {
+          throw decodedLimitError(label);
+        }
+        decodedBytes += sampleBytes;
+
+        for (
+          let frameOffset = 0;
+          frameOffset < sample.numberOfFrames;
+          frameOffset += DECODE_COPY_CHUNK_FRAMES
+        ) {
+          throwIfAborted(signal);
+          const frameCount = Math.min(
+            DECODE_COPY_CHUNK_FRAMES,
+            sample.numberOfFrames - frameOffset,
+          );
+          if (planarScratch.length < frameCount) {
+            planarScratch = new Float32Array(frameCount);
+            monoScratch = new Float32Array(frameCount);
+          } else {
+            monoScratch.fill(0, 0, frameCount);
+          }
+
+          for (let channel = 0; channel < sample.numberOfChannels; channel++) {
+            sample.copyTo(planarScratch.subarray(0, frameCount), {
+              planeIndex: channel,
+              format: 'f32-planar',
+              frameOffset,
+              frameCount,
+            });
+            for (let frame = 0; frame < frameCount; frame++) {
+              monoScratch[frame] += planarScratch[frame];
+            }
+          }
+          for (let frame = 0; frame < frameCount; frame++) {
+            monoScratch[frame] /= sample.numberOfChannels;
+          }
+          resampler.push(monoScratch.subarray(0, frameCount), sample.sampleRate, label);
+
+          chunksSinceYield++;
+          if (chunksSinceYield >= DECODE_YIELD_INTERVAL_CHUNKS) {
+            chunksSinceYield = 0;
+            await yieldForAbort();
+            throwIfAborted(signal);
+          }
+        }
+      } catch (error) {
+        sampleError = error;
+        throw error;
+      } finally {
+        await closeSample(sample, sampleError);
+      }
+    }
+
+    decoded = resampler.finish(label);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  let cleanupError: unknown;
+  if (iterator) {
+    try {
+      await iterator.return();
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+  try {
+    input.dispose();
+  } catch (error) {
+    cleanupError ??= error;
+  }
+
+  if (primaryError !== undefined) {
+    if (primaryError instanceof AutoSyncMediaError || isAbortError(primaryError)) {
+      throw primaryError;
+    }
+    throw malformedMediaError(label, primaryError);
+  }
+  if (cleanupError !== undefined) {
+    throw malformedMediaError(label, cleanupError);
+  }
+  if (!decoded) {
+    throw malformedMediaError(label, new Error('Decoder produced no analysis result'));
+  }
+  return decoded;
+}
+
 async function fetchAndDecodeAudio(
   url: string,
   label: string,
   signal: AbortSignal | undefined,
   retainedAnalysisBytes: number,
-): Promise<AudioBuffer> {
+): Promise<Float32Array> {
   throwIfAborted(signal);
   const response = await fetch(url, { signal });
   if (!response.ok) {
@@ -191,35 +531,7 @@ async function fetchAndDecodeAudio(
     retainedAnalysisBytes,
   );
   throwIfAborted(signal);
-
-  const metadata = await inspectEncodedAudioMemory(encodedBuffer, label, signal);
-  assertUsableDuration(metadata.duration, label);
-
-  const context = new AudioContext({
-    sampleRate: AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
-  });
-  const closeState: { promise?: Promise<void> } = {};
-  let decoded: AudioBuffer;
-  try {
-    decoded = await raceWithAbort(context.decodeAudioData(encodedBuffer), signal, () => {
-      void closeAudioContextBestEffort(context, closeState);
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw error;
-    }
-    throw new Error(
-      `Could not decode ${label} audio for auto-sync: ${
-        error instanceof Error ? error.message : 'unsupported audio data'
-      }`,
-    );
-  } finally {
-    const closePromise = closeAudioContextBestEffort(context, closeState);
-    if (!signal?.aborted) {
-      await closePromise;
-    }
-  }
-  return decoded;
+  return decodePrimaryTrackToMono(encodedBuffer, label, signal);
 }
 
 async function decodeToMono(
@@ -228,24 +540,8 @@ async function decodeToMono(
   signal: AbortSignal | undefined,
   retainedAnalysisBytes: number,
 ): Promise<DecodedAnalysis> {
-  const decoded = await fetchAndDecodeAudio(url, label, signal, retainedAnalysisBytes);
-
-  // The Mediabunny preflight is authoritative; these checks defend against a broken decoder shape.
-  assertUsableDuration(decoded.duration, label);
-  const decodedBytes =
-    decoded.length * decoded.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
-  if (
-    !Number.isSafeInteger(decodedBytes) ||
-    decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT
-  ) {
-    throw new Error(
-      `${label} audio exceeds the 128 MiB decoded-audio memory limit; ` +
-        'use a shorter source with fewer channels or a lower sample rate',
-    );
-  }
-
   return {
-    samples: await convertAudioBufferToMono(decoded, label, signal),
+    samples: await fetchAndDecodeAudio(url, label, signal, retainedAnalysisBytes),
   };
 }
 

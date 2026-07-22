@@ -63,12 +63,12 @@ The dev server will start at `http://localhost:3000`.
 ## Auto-sync media limits
 
 Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
-(Opus or Vorbis), FLAC, MP3, and WAV inputs. Mediabunny inspects the complete
-bounded encoded input before Web Audio decoding and rejects missing audio
-tracks, malformed or unknown media, invalid metadata, and decoded shapes over
-128 MiB. Video tracks do not disqualify a container: the primary audio track
-is selected only after every audio track has been enumerated, validated, and
-included in the conservative decoded-allocation sum.
+(Opus or Vorbis), FLAC, MP3, and WAV inputs. Auto-sync analyzes the primary
+audio track selected by Mediabunny, requires that track to be decodable, and
+incrementally converts its emitted samples to bounded 8 kHz mono analysis data.
+Every emitted sample is charged to the 128 MiB decoded-audio budget before its
+PCM is copied. This also bounds chained Ogg streams without rejecting an Ogg
+input merely because the absence of later logical streams cannot be proven.
 
 Each accepted encoded input is capped at 48 MiB and requires a streaming
 response body. The advertised encoded peak for accepted inputs is 96 MiB

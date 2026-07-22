@@ -1,8 +1,6 @@
 import {
   ADTS,
-  BufferSource,
   FLAC,
-  Input,
   MATROSKA,
   MP3,
   MP4,
@@ -10,16 +8,10 @@ import {
   QTFF,
   WAVE,
   WEBM,
-  type InputAudioTrack,
   type InputFormat,
 } from 'mediabunny';
-import {
-  AUTO_SYNC_ANALYSIS_SAMPLE_RATE,
-  AUTO_SYNC_MAX_ANALYSIS_SAMPLES,
-} from './autoSyncCore';
 
 const MEBIBYTE = 1024 * 1024;
-const CONVERSION_CHUNK_SAMPLES = 16_384;
 
 export const AUTO_SYNC_MAX_ENCODED_BYTES_PER_INPUT = 48 * MEBIBYTE;
 export const AUTO_SYNC_MAX_ENCODED_PEAK_BYTES = 96 * MEBIBYTE;
@@ -62,16 +54,6 @@ export class AutoSyncMediaError extends Error {
   }
 }
 
-export interface EncodedAudioMemory {
-  channels: number;
-  codec: string;
-  decodedBytes: number;
-  duration: number;
-  format: string;
-  sampleRate: number;
-  trackCount: number;
-}
-
 function abortError(): DOMException {
   return new DOMException('Auto-sync was cancelled', 'AbortError');
 }
@@ -82,9 +64,7 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-type ResponseBodyReader =
-  | ReadableStreamBYOBReader
-  | ReadableStreamDefaultReader<Uint8Array>;
+type ResponseBodyReader = ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
 
 function cancelReaderBestEffort(reader: ResponseBodyReader): void {
   try {
@@ -123,25 +103,6 @@ function raceWithAbort<T>(
       (error) => finish(() => reject(error)),
     );
   });
-}
-
-function checkedProduct(factors: readonly number[]): number | null {
-  let product = 1;
-  for (const factor of factors) {
-    if (!Number.isSafeInteger(factor) || factor < 0 || product > Number.MAX_SAFE_INTEGER / factor) {
-      return null;
-    }
-    product *= factor;
-  }
-  return product;
-}
-
-function decodedLimitError(label: string): AutoSyncMediaError {
-  return new AutoSyncMediaError(
-    'decoded-limit',
-    `${label} audio exceeds the 128 MiB decoded-audio memory limit; ` +
-      'use a shorter source with fewer channels or a lower sample rate',
-  );
 }
 
 export function getUnknownLengthPayloadLimit(
@@ -349,21 +310,17 @@ export async function readResponseBuffer(
 
       if (
         declaredBytes !== undefined &&
-        (
-          declaredBytes > peakBudgetBytes - retainedBytes ||
-          ownerBytes > peakBudgetBytes - retainedBytes - declaredBytes
-        )
+        (declaredBytes > peakBudgetBytes - retainedBytes ||
+          ownerBytes > peakBudgetBytes - retainedBytes - declaredBytes)
       ) {
         cancelReaderBestEffort(reader);
         throw new AutoSyncMediaError('encoded-limit', limitMessage);
       }
       if (
         declaredBytes === undefined &&
-        (
-          totalBytes > peakBudgetBytes - retainedBytes ||
+        (totalBytes > peakBudgetBytes - retainedBytes ||
           ownerBytes > peakBudgetBytes - retainedBytes - totalBytes ||
-          chunkBytes > peakBudgetBytes - retainedBytes - totalBytes - ownerBytes
-        )
+          chunkBytes > peakBudgetBytes - retainedBytes - totalBytes - ownerBytes)
       ) {
         cancelReaderBestEffort(reader);
         throw new AutoSyncMediaError('encoded-limit', limitMessage);
@@ -407,253 +364,4 @@ export async function readResponseBuffer(
     writeOffset += chunk.byteLength;
   }
   return combined.buffer;
-}
-
-export async function inspectEncodedAudioMemory(
-  buffer: ArrayBuffer,
-  label = 'input',
-  signal?: AbortSignal,
-): Promise<EncodedAudioMemory> {
-  throwIfAborted(signal);
-  const input = new Input({
-    source: new BufferSource(buffer),
-    formats: AUTO_SYNC_INPUT_FORMATS,
-  });
-  const dispose = () => input.dispose();
-
-  try {
-    let canRead: boolean;
-    try {
-      canRead = await raceWithAbort(input.canRead(), signal, dispose);
-    } catch (error) {
-      throwIfAborted(signal);
-      throw new AutoSyncMediaError(
-        'malformed-media',
-        `${label} media is malformed and its audio metadata could not be read`,
-        error,
-      );
-    }
-    if (!canRead) {
-      throw new AutoSyncMediaError(
-        'unknown-format',
-        `${label} media format is not supported for auto-sync`,
-      );
-    }
-
-    const [format, audioTracks, primaryTrack] = await raceWithAbort(
-      Promise.all([input.getFormat(), input.getAudioTracks(), input.getPrimaryAudioTrack()]),
-      signal,
-      dispose,
-    );
-    if (audioTracks.length === 0) {
-      throw new AutoSyncMediaError(
-        'no-audio-track',
-        `${label} media has no audio track to use for auto-sync`,
-      );
-    }
-    const primaryTrackIndex = primaryTrack === null ? -1 : audioTracks.indexOf(primaryTrack);
-    if (primaryTrackIndex < 0) {
-      throw new AutoSyncMediaError(
-        'unproven-track-selection',
-        `${label} media audio-track selection cannot be proven safe for browser decoding`,
-      );
-    }
-
-    let trackMetadata: Array<{
-      channels: number;
-      codec: string | null;
-      duration: number;
-      sampleRate: number;
-    }>;
-    try {
-      trackMetadata = await raceWithAbort(
-        Promise.all(
-          audioTracks.map(async (track: InputAudioTrack) => {
-            const [codec, sampleRate, channels, duration] = await Promise.all([
-              track.getCodec(),
-              track.getSampleRate(),
-              track.getNumberOfChannels(),
-              track.computeDuration(),
-            ]);
-            return { channels, codec, duration, sampleRate };
-          }),
-        ),
-        signal,
-        dispose,
-      );
-    } catch (error) {
-      throwIfAborted(signal);
-      throw new AutoSyncMediaError(
-        'malformed-media',
-        `${label} media is malformed and its complete audio metadata could not be read`,
-        error,
-      );
-    }
-
-    let decodedBytes = 0;
-    let duration = 0;
-    for (const metadata of trackMetadata) {
-      if (!metadata.codec) {
-        throw new AutoSyncMediaError(
-          'unknown-codec',
-          `${label} media contains an audio track with an unsupported codec`,
-        );
-      }
-      if (
-        !Number.isSafeInteger(metadata.sampleRate) ||
-        metadata.sampleRate <= 0 ||
-        !Number.isSafeInteger(metadata.channels) ||
-        metadata.channels <= 0 ||
-        !Number.isFinite(metadata.duration) ||
-        metadata.duration <= 0
-      ) {
-        throw new AutoSyncMediaError(
-          'invalid-metadata',
-          `${label} media contains invalid audio duration, sample-rate, or channel metadata`,
-        );
-      }
-
-      const decodedFrames = Math.ceil(metadata.duration * metadata.sampleRate);
-      if (!Number.isSafeInteger(decodedFrames) || decodedFrames <= 0) {
-        throw decodedLimitError(label);
-      }
-      const trackDecodedBytes = checkedProduct([
-        decodedFrames,
-        metadata.channels,
-        Float32Array.BYTES_PER_ELEMENT,
-      ]);
-      if (
-        trackDecodedBytes === null ||
-        decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT - trackDecodedBytes
-      ) {
-        throw decodedLimitError(label);
-      }
-      decodedBytes += trackDecodedBytes;
-      duration = Math.max(duration, metadata.duration);
-    }
-
-    const primaryMetadata = trackMetadata[primaryTrackIndex];
-    if (!primaryMetadata?.codec) {
-      throw new AutoSyncMediaError(
-        'unproven-track-selection',
-        `${label} media primary audio-track metadata could not be selected safely`,
-      );
-    }
-    return {
-      channels: primaryMetadata.channels,
-      codec: primaryMetadata.codec,
-      decodedBytes,
-      duration,
-      format: format.name,
-      sampleRate: primaryMetadata.sampleRate,
-      trackCount: audioTracks.length,
-    };
-  } catch (error) {
-    if (error instanceof AutoSyncMediaError) {
-      throw error;
-    }
-    throwIfAborted(signal);
-    throw new AutoSyncMediaError(
-      'malformed-media',
-      `${label} media is malformed and could not be inspected for auto-sync`,
-      error,
-    );
-  } finally {
-    input.dispose();
-  }
-}
-
-function validateDecodedAudioBuffer(decoded: AudioBuffer, label: string): Float32Array[] {
-  if (
-    !Number.isSafeInteger(decoded.length) ||
-    decoded.length <= 0 ||
-    !Number.isSafeInteger(decoded.numberOfChannels) ||
-    decoded.numberOfChannels <= 0 ||
-    !Number.isFinite(decoded.sampleRate) ||
-    decoded.sampleRate <= 0 ||
-    !Number.isFinite(decoded.duration) ||
-    decoded.duration <= 0
-  ) {
-    throw new Error(`${label} audio decoder returned an invalid buffer shape`);
-  }
-
-  const decodedBytes = checkedProduct([
-    decoded.length,
-    decoded.numberOfChannels,
-    Float32Array.BYTES_PER_ELEMENT,
-  ]);
-  if (decodedBytes === null || decodedBytes > AUTO_SYNC_MAX_DECODED_BYTES_PER_INPUT) {
-    throw decodedLimitError(label);
-  }
-
-  const channels: Float32Array[] = [];
-  for (let channel = 0; channel < decoded.numberOfChannels; channel++) {
-    const samples = decoded.getChannelData(channel);
-    if (samples.length !== decoded.length) {
-      throw new Error(`${label} audio decoder returned inconsistent channel data`);
-    }
-    channels.push(samples);
-  }
-  return channels;
-}
-
-function yieldForAbort(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-export async function convertAudioBufferToMono(
-  decoded: AudioBuffer,
-  label: string,
-  signal?: AbortSignal,
-): Promise<Float32Array> {
-  const channels = validateDecodedAudioBuffer(decoded, label);
-  const sourceRate = decoded.sampleRate;
-  const outputLength =
-    sourceRate === AUTO_SYNC_ANALYSIS_SAMPLE_RATE
-      ? decoded.length
-      : Math.ceil((decoded.length * AUTO_SYNC_ANALYSIS_SAMPLE_RATE) / sourceRate);
-  if (
-    !Number.isSafeInteger(outputLength) ||
-    outputLength <= 0 ||
-    outputLength > AUTO_SYNC_MAX_ANALYSIS_SAMPLES
-  ) {
-    throw new Error(`${label} audio exceeds the bounded auto-sync sample budget`);
-  }
-
-  const output = new Float32Array(outputLength);
-  const direct = sourceRate === AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
-  for (let chunkStart = 0; chunkStart < outputLength; chunkStart += CONVERSION_CHUNK_SAMPLES) {
-    throwIfAborted(signal);
-    const chunkEnd = Math.min(chunkStart + CONVERSION_CHUNK_SAMPLES, outputLength);
-    for (let outputIndex = chunkStart; outputIndex < chunkEnd; outputIndex++) {
-      if (direct) {
-        let sum = 0;
-        for (const channel of channels) {
-          sum += channel[outputIndex];
-        }
-        output[outputIndex] = sum / channels.length;
-        continue;
-      }
-
-      const sourcePosition = (outputIndex * sourceRate) / AUTO_SYNC_ANALYSIS_SAMPLE_RATE;
-      const leftIndex = Math.min(Math.floor(sourcePosition), decoded.length - 1);
-      const rightIndex = Math.min(leftIndex + 1, decoded.length - 1);
-      const fraction = sourcePosition - leftIndex;
-      let left = 0;
-      let right = 0;
-      for (const channel of channels) {
-        left += channel[leftIndex];
-        right += channel[rightIndex];
-      }
-      const leftMono = left / channels.length;
-      const rightMono = right / channels.length;
-      output[outputIndex] = leftMono + (rightMono - leftMono) * fraction;
-    }
-
-    if (chunkEnd < outputLength) {
-      await yieldForAbort();
-    }
-  }
-  throwIfAborted(signal);
-  return output;
 }
