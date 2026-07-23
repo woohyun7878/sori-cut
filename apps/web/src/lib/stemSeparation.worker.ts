@@ -1,9 +1,5 @@
 /**
- * Web Worker for ML-based stem separation using ONNX Runtime.
- *
- * This worker receives audio channel data, runs a source separation model
- * (lightweight Demucs-style U-Net operating on spectrograms), and returns
- * separated stem audio data.
+ * Web Worker for stem separation using ONNX Runtime.
  *
  * Communication protocol:
  *   Main → Worker: { type: 'separate', channelData: Float32Array[], sampleRate: number, modelUrl: string }
@@ -47,7 +43,57 @@ let session: ort.InferenceSession | null = null;
 let loadedModelUrl: string | null = null;
 
 function postProgress(progress: number): void {
-  self.postMessage({ type: 'progress', progress });
+  self.postMessage({ type: 'progress', progress: Math.round(progress) });
+}
+
+function postError(message: string): void {
+  self.postMessage({ type: 'error', message });
+}
+
+/**
+ * Validate incoming message payload. Returns an error string or null if valid.
+ */
+function validatePayload(msg: unknown): string | null {
+  if (msg === null || typeof msg !== 'object') {
+    return 'Invalid message: expected an object.';
+  }
+
+  const m = msg as Record<string, unknown>;
+
+  if (m.type !== 'separate') {
+    return `Unknown message type: "${String(m.type)}".`;
+  }
+
+  if (!Array.isArray(m.channelData) || m.channelData.length === 0) {
+    return 'Invalid payload: channelData must be a non-empty array.';
+  }
+
+  for (let i = 0; i < m.channelData.length; i++) {
+    if (!(m.channelData[i] instanceof Float32Array)) {
+      return `Invalid payload: channelData[${i}] is not a Float32Array.`;
+    }
+    if (m.channelData[i].length === 0) {
+      return `Invalid payload: channelData[${i}] is empty.`;
+    }
+  }
+
+  // All channels must have the same length
+  const expectedLength = (m.channelData[0] as Float32Array).length;
+  for (let i = 1; i < m.channelData.length; i++) {
+    if ((m.channelData[i] as Float32Array).length !== expectedLength) {
+      return `Invalid payload: channel lengths differ (ch0=${expectedLength}, ch${i}=${(m.channelData[i] as Float32Array).length}).`;
+    }
+  }
+
+  if (typeof m.sampleRate !== 'number' || m.sampleRate <= 0 || !Number.isFinite(m.sampleRate)) {
+    return `Invalid payload: sampleRate must be a positive finite number, got ${String(m.sampleRate)}.`;
+  }
+
+  if (typeof m.modelUrl !== 'string' || m.modelUrl.length === 0) {
+    return 'Invalid payload: modelUrl must be a non-empty string.';
+  }
+
+  return null;
 }
 
 /**
@@ -68,7 +114,7 @@ async function getSession(modelUrl: string): Promise<ort.InferenceSession> {
     loadedModelUrl = modelUrl;
   } catch (err) {
     throw new Error(
-      `Failed to load ONNX model from ${modelUrl}: ${err instanceof Error ? err.message : String(err)}`
+      `[model-load] Failed to load ONNX model from "${modelUrl}": ${err instanceof Error ? err.message : String(err)}`
     );
   }
 
@@ -97,14 +143,19 @@ async function runModel(
   const outputTensor = results[outputName];
 
   if (!outputTensor) {
-    throw new Error('Model did not produce expected output tensor');
+    throw new Error('[inference] Model did not produce expected output tensor.');
   }
 
   const outputData = outputTensor.data as Float32Array;
   const numStems = 4;
   const segSize = numFrames * numBins;
 
-  // Split output into per-stem masks
+  if (outputData.length < numStems * segSize) {
+    throw new Error(
+      `[inference] Output tensor size mismatch: expected >=${numStems * segSize}, got ${outputData.length}.`
+    );
+  }
+
   const masks: Float32Array[] = [];
   for (let s = 0; s < numStems; s++) {
     masks.push(outputData.slice(s * segSize, (s + 1) * segSize));
@@ -114,17 +165,14 @@ async function runModel(
 }
 
 /**
- * Apply soft-mask separation using Wiener-like filtering.
- * If the model isn't available, falls back to a spectral heuristic.
+ * Spectral heuristic fallback when no ONNX model is available.
  */
 function applySpectralHeuristic(
-  magnitude: Float32Array,
+  _magnitude: Float32Array,
   _phase: Float32Array,
   numFrames: number,
   numBins: number,
 ): Float32Array[] {
-  // Frequency-band based heuristic masks for each stem
-  // This provides reasonable separation without a model
   const masks: Float32Array[] = Array.from({ length: 4 }, () => new Float32Array(numFrames * numBins));
 
   const nyquist = numBins - 1;
@@ -133,15 +181,13 @@ function applySpectralHeuristic(
     const frameOffset = frame * numBins;
 
     for (let bin = 0; bin < numBins; bin++) {
-      const freq = bin / nyquist; // Normalized frequency 0-1
+      const freq = bin / nyquist;
 
-      // Vocals: mid-frequency dominant (300Hz - 4kHz range, roughly 0.014 - 0.18 normalized at 44.1kHz)
       let vocalMask = 0;
       if (freq > 0.01 && freq < 0.25) {
         vocalMask = Math.exp(-((freq - 0.08) ** 2) / (2 * 0.04 ** 2));
       }
 
-      // Drums: bimodal - low kick (< 200Hz) and high transients (> 4kHz)
       let drumMask = 0;
       if (freq < 0.015) {
         drumMask = 0.6 * Math.exp(-(freq ** 2) / (2 * 0.005 ** 2));
@@ -150,19 +196,16 @@ function applySpectralHeuristic(
         drumMask += 0.7 * (1 - Math.exp(-((freq - 0.18) ** 2) / (2 * 0.1 ** 2)));
       }
 
-      // Bass: very low frequency (< 250Hz)
       let bassMask = 0;
       if (freq < 0.03) {
         bassMask = Math.exp(-(freq ** 2) / (2 * 0.012 ** 2));
       }
 
-      // Guitar: mid-low to mid (200Hz - 2kHz, 0.009 - 0.09 normalized)
       let guitarMask = 0;
       if (freq > 0.008 && freq < 0.15) {
         guitarMask = Math.exp(-((freq - 0.04) ** 2) / (2 * 0.03 ** 2));
       }
 
-      // Normalize masks so they sum to ~1 (Wiener-like)
       const total = vocalMask + drumMask + bassMask + guitarMask + 1e-8;
       masks[0][frameOffset + bin] = vocalMask / total;
       masks[1][frameOffset + bin] = drumMask / total;
@@ -179,7 +222,7 @@ function applySpectralHeuristic(
  */
 async function separateChannel(
   samples: Float32Array,
-  sampleRate: number,
+  _sampleRate: number,
   inferenceSession: ort.InferenceSession | null,
   progressBase: number,
   progressScale: number,
@@ -193,23 +236,26 @@ async function separateChannel(
     const end = Math.min(start + SEGMENT_SAMPLES, totalLength);
     const segment = samples.slice(start, end);
 
-    // STFT
     const { magnitude, phase, numFrames, numBins } = computeSTFT(segment, FFT_SIZE, HOP_SIZE);
 
-    // Get separation masks
+    // Short segments that produce zero STFT frames get silence
+    if (numFrames === 0) {
+      const segProgress = progressBase + ((seg + 1) / numSegments) * progressScale;
+      postProgress(segProgress);
+      continue;
+    }
+
     let masks: Float32Array[];
     if (inferenceSession) {
       try {
         masks = await runModel(inferenceSession, magnitude, numFrames, numBins);
       } catch {
-        // Fall back to heuristic if model inference fails
         masks = applySpectralHeuristic(magnitude, phase, numFrames, numBins);
       }
     } else {
       masks = applySpectralHeuristic(magnitude, phase, numFrames, numBins);
     }
 
-    // Apply masks and ISTFT for each stem
     for (let stemIdx = 0; stemIdx < 4; stemIdx++) {
       const maskedMag = new Float32Array(numFrames * numBins);
       for (let i = 0; i < maskedMag.length; i++) {
@@ -218,12 +264,10 @@ async function separateChannel(
 
       const stemSignal = computeISTFT(maskedMag, phase, numFrames, numBins, FFT_SIZE, HOP_SIZE, segment.length);
 
-      // Overlap-add into output with crossfade
       for (let i = 0; i < stemSignal.length; i++) {
         const outIdx = start + i;
         if (outIdx >= totalLength) break;
 
-        // Crossfade in overlap region
         if (seg > 0 && i < OVERLAP_SAMPLES) {
           const fade = i / OVERLAP_SAMPLES;
           stemOutputs[stemIdx][outIdx] = stemOutputs[stemIdx][outIdx] * (1 - fade) + stemSignal[i] * fade;
@@ -234,7 +278,7 @@ async function separateChannel(
     }
 
     const segProgress = progressBase + ((seg + 1) / numSegments) * progressScale;
-    postProgress(Math.round(segProgress));
+    postProgress(segProgress);
   }
 
   return stemOutputs;
@@ -255,7 +299,6 @@ async function handleSeparate(msg: SeparateMessage): Promise<void> {
     inferenceSession = await getSession(modelUrl);
   } catch {
     // Model not available — fall back to spectral heuristic
-    // This is acceptable; the heuristic still provides useful separation
     postProgress(5);
   }
 
@@ -281,7 +324,6 @@ async function handleSeparate(msg: SeparateMessage): Promise<void> {
 
   postProgress(95);
 
-  // Build result
   const stems = STEM_DEFS.map((def, idx) => ({
     name: def.name,
     label: def.label,
@@ -299,12 +341,14 @@ async function handleSeparate(msg: SeparateMessage): Promise<void> {
 self.addEventListener('message', (event: MessageEvent<WorkerMessage>) => {
   const msg = event.data;
 
-  if (msg.type === 'separate') {
-    handleSeparate(msg).catch((err) => {
-      self.postMessage({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Unknown separation error',
-      });
-    });
+  // Validate payload before processing
+  const validationError = validatePayload(msg);
+  if (validationError) {
+    postError(validationError);
+    return;
   }
+
+  handleSeparate(msg as SeparateMessage).catch((err) => {
+    postError(err instanceof Error ? err.message : 'Unknown separation error');
+  });
 });

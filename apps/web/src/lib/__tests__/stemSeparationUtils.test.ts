@@ -190,5 +190,25 @@ describe('stemSeparationUtils', () => {
       const secondSample = view.getInt16(46, true);
       expect(secondSample).toBeLessThan(0);
     });
+
+    it('throws on empty channelData array', () => {
+      expect(() => encodeWavBlob([], 44100)).toThrow(/non-empty/);
+    });
+
+    it('throws on zero-length channel', () => {
+      expect(() => encodeWavBlob([new Float32Array(0)], 44100)).toThrow(/empty.*0 samples/);
+    });
+
+    it('throws on mismatched channel lengths', () => {
+      expect(() =>
+        encodeWavBlob([new Float32Array(100), new Float32Array(50)], 44100)
+      ).toThrow(/mismatch/);
+    });
+
+    it('throws on invalid sample rate', () => {
+      expect(() => encodeWavBlob([new Float32Array(10)], 0)).toThrow(/sampleRate/);
+      expect(() => encodeWavBlob([new Float32Array(10)], -1)).toThrow(/sampleRate/);
+      expect(() => encodeWavBlob([new Float32Array(10)], Infinity)).toThrow(/sampleRate/);
+    });
   });
 });
