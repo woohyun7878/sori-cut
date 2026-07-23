@@ -93,6 +93,16 @@ describe('Timeline trim gesture lifecycle', () => {
     storeState.tracks = [];
   });
 
+  /**
+   * Dispatch a pointer-like event with correct clientX.
+   * jsdom lacks PointerEvent, so we use MouseEvent and dispatchEvent directly.
+   * For element targets this bubbles through React's delegation; for window it hits native listeners.
+   */
+  function dispatchPointer(target: EventTarget, type: string, init: { clientX?: number } = {}) {
+    const event = new MouseEvent(type, { clientX: init.clientX ?? 0, bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+  }
+
   function renderWithTrack() {
     storeState.tracks = [
       {
@@ -122,9 +132,8 @@ describe('Timeline trim gesture lifecycle', () => {
     renderWithTrack();
     const handle = getTrimHandle('left');
 
-    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 100 });
-    // Immediately release — no movement
-    fireEvent.pointerUp(window, { pointerId: 1, clientX: 100 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 100 });
+    dispatchPointer(window, 'pointerup', { clientX: 100 });
 
     expect(storeState.trimTrack).not.toHaveBeenCalled();
   });
@@ -133,10 +142,10 @@ describe('Timeline trim gesture lifecycle', () => {
     renderWithTrack();
     const handle = getTrimHandle('right');
 
-    fireEvent.pointerDown(handle, { pointerId: 2, clientX: 200 });
-    fireEvent.pointerMove(window, { pointerId: 2, clientX: 250 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 250 });
     // Cancel the gesture (e.g., browser intervention)
-    fireEvent.pointerCancel(window, { pointerId: 2 });
+    dispatchPointer(window, 'pointercancel', { clientX: 250 });
 
     expect(storeState.trimTrack).not.toHaveBeenCalled();
   });
@@ -145,10 +154,10 @@ describe('Timeline trim gesture lifecycle', () => {
     renderWithTrack();
     const handle = getTrimHandle('left');
 
-    fireEvent.pointerDown(handle, { pointerId: 3, clientX: 200 });
-    fireEvent.pointerMove(window, { pointerId: 3, clientX: 180 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 180 });
     // Window loses focus
-    fireEvent.blur(window);
+    window.dispatchEvent(new Event('blur'));
 
     expect(storeState.trimTrack).not.toHaveBeenCalled();
   });
@@ -157,8 +166,8 @@ describe('Timeline trim gesture lifecycle', () => {
     const { unmount } = renderWithTrack();
     const handle = getTrimHandle('left');
 
-    fireEvent.pointerDown(handle, { pointerId: 4, clientX: 200 });
-    fireEvent.pointerMove(window, { pointerId: 4, clientX: 150 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 150 });
     // Component unmounts mid-drag
     unmount();
 
@@ -169,10 +178,10 @@ describe('Timeline trim gesture lifecycle', () => {
     renderWithTrack();
     const handle = getTrimHandle('right');
 
-    fireEvent.pointerDown(handle, { pointerId: 5, clientX: 200 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
     // Move significantly (64px/s zoom → 50px = ~0.78s)
-    fireEvent.pointerMove(window, { pointerId: 5, clientX: 150 });
-    fireEvent.pointerUp(window, { pointerId: 5, clientX: 150 });
+    dispatchPointer(window, 'pointermove', { clientX: 150 });
+    dispatchPointer(window, 'pointerup', { clientX: 150 });
 
     expect(storeState.trimTrack).toHaveBeenCalledTimes(1);
   });
@@ -181,13 +190,13 @@ describe('Timeline trim gesture lifecycle', () => {
     renderWithTrack();
     const handle = getTrimHandle('left');
 
-    fireEvent.pointerDown(handle, { pointerId: 6, clientX: 200 });
-    fireEvent.pointerMove(window, { pointerId: 6, clientX: 250 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 250 });
 
     // Fire multiple finalizer events
-    fireEvent.pointerUp(window, { pointerId: 6, clientX: 250 });
-    fireEvent.pointerCancel(window, { pointerId: 6 });
-    fireEvent.blur(window);
+    dispatchPointer(window, 'pointerup', { clientX: 250 });
+    dispatchPointer(window, 'pointercancel', { clientX: 250 });
+    window.dispatchEvent(new Event('blur'));
 
     // Only one commit (from pointerup), rest are no-ops
     expect(storeState.trimTrack).toHaveBeenCalledTimes(1);
@@ -201,9 +210,9 @@ describe('Timeline trim gesture lifecycle', () => {
     fireEvent.click(screen.getByRole('button', { name: /Snap/ }));
 
     const handle = getTrimHandle('right');
-    fireEvent.pointerDown(handle, { pointerId: 7, clientX: 400 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 400 });
     // pointerUp at SAME position — no movement at all, preview stays null
-    fireEvent.pointerUp(window, { pointerId: 7, clientX: 400 });
+    dispatchPointer(window, 'pointerup', { clientX: 400 });
 
     expect(storeState.trimTrack).not.toHaveBeenCalled();
   });
@@ -212,16 +221,15 @@ describe('Timeline trim gesture lifecycle', () => {
     const { rerender } = renderWithTrack();
     const handle = getTrimHandle('left');
 
-    fireEvent.pointerDown(handle, { pointerId: 8, clientX: 200 });
-    fireEvent.pointerMove(window, { pointerId: 8, clientX: 150 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 150 });
 
     // Track disappears (simulating removal)
     storeState.tracks = [];
     rerender(<Timeline />);
 
     // Gesture should have been cancelled
-    // Trying to complete doesn't call trimTrack
-    fireEvent.pointerUp(window, { pointerId: 8, clientX: 150 });
+    dispatchPointer(window, 'pointerup', { clientX: 150 });
     expect(storeState.trimTrack).not.toHaveBeenCalled();
   });
 
@@ -229,15 +237,56 @@ describe('Timeline trim gesture lifecycle', () => {
     const { rerender } = renderWithTrack();
     const handle = getTrimHandle('right');
 
-    fireEvent.pointerDown(handle, { pointerId: 9, clientX: 200 });
-    fireEvent.pointerMove(window, { pointerId: 9, clientX: 250 });
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 250 });
 
     // Source URL changes (video replaced with same track ID)
     storeState.tracks = [{ ...storeState.tracks[0], sourceUrl: 'blob:new-video' }];
     rerender(<Timeline />);
 
     // Gesture should have been cancelled
-    fireEvent.pointerUp(window, { pointerId: 9, clientX: 250 });
+    dispatchPointer(window, 'pointerup', { clientX: 250 });
     expect(storeState.trimTrack).not.toHaveBeenCalled();
+  });
+
+  it('discards when timing is externally mutated during drag (auto-sync)', () => {
+    const { rerender } = renderWithTrack();
+    const handle = getTrimHandle('right');
+
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 150 });
+
+    // External timing mutation (simulating auto-sync or concurrent edit)
+    storeState.tracks = [{ ...storeState.tracks[0], startOffset: 3 }];
+    rerender(<Timeline />);
+
+    // Gesture should have been cancelled — pointerup no-ops
+    dispatchPointer(window, 'pointerup', { clientX: 150 });
+    expect(storeState.trimTrack).not.toHaveBeenCalled();
+  });
+
+  it('discards when duration is externally mutated during drag', () => {
+    const { rerender } = renderWithTrack();
+    const handle = getTrimHandle('left');
+
+    dispatchPointer(handle, 'pointerdown', { clientX: 200 });
+    dispatchPointer(window, 'pointermove', { clientX: 150 });
+
+    // External duration mutation
+    storeState.tracks = [{ ...storeState.tracks[0], duration: 5 }];
+    rerender(<Timeline />);
+
+    dispatchPointer(window, 'pointerup', { clientX: 150 });
+    expect(storeState.trimTrack).not.toHaveBeenCalled();
+  });
+
+  it('handle click does not propagate to clip selection (no undo pollution)', () => {
+    renderWithTrack();
+    const handle = getTrimHandle('left');
+
+    // Click on handle — should NOT trigger selection via the clip's onClick
+    fireEvent.click(handle);
+
+    expect(storeState.setSelectedTrack).not.toHaveBeenCalled();
   });
 });

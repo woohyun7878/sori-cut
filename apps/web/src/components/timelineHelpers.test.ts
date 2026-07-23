@@ -172,5 +172,100 @@ describe('computeTrimGeometry', () => {
       expect(result).not.toBeNull();
       expect(result!.sourceStartOffset).toBe(base.initialSourceStartOffset);
     });
+
+    it('allows re-extension back toward sourceDuration when knownSourceEnd > current end', () => {
+      // Scenario: track was trimmed from duration=10 to duration=5, knownSourceEnd=12 (sourceDuration)
+      const result = computeTrimGeometry({
+        edge: 'right',
+        initialOffset: 2,
+        initialDuration: 5,
+        initialSourceStartOffset: 2,
+        knownSourceEnd: 12, // sourceDuration allows re-extension
+        deltaTime: 3,
+        snapEnabled: false,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.duration).toBe(8); // 5 + 3 = 8, within sourceDuration bound (12 - 2 = 10 max)
+    });
+
+    it('does not clamp when knownSourceEnd is Infinity (unknown duration)', () => {
+      const result = computeTrimGeometry({
+        edge: 'right',
+        initialOffset: 2,
+        initialDuration: 5,
+        initialSourceStartOffset: 2,
+        knownSourceEnd: Infinity,
+        deltaTime: 100,
+        snapEnabled: false,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.duration).toBe(105); // No upper bound
+    });
+  });
+
+  describe('non-finite input rejection', () => {
+    const base = {
+      edge: 'left' as const,
+      initialOffset: 2,
+      initialDuration: 8,
+      initialSourceStartOffset: 2,
+      knownSourceEnd: 10,
+      deltaTime: 1,
+      snapEnabled: false,
+    };
+
+    it('returns null for NaN deltaTime', () => {
+      expect(computeTrimGeometry({ ...base, deltaTime: NaN })).toBeNull();
+    });
+
+    it('returns null for Infinity initialOffset', () => {
+      expect(computeTrimGeometry({ ...base, initialOffset: Infinity })).toBeNull();
+    });
+
+    it('returns null for NaN initialDuration', () => {
+      expect(computeTrimGeometry({ ...base, initialDuration: NaN })).toBeNull();
+    });
+
+    it('returns null for -Infinity initialSourceStartOffset', () => {
+      expect(computeTrimGeometry({ ...base, initialSourceStartOffset: -Infinity })).toBeNull();
+    });
+
+    it('returns null for Infinity deltaTime', () => {
+      expect(computeTrimGeometry({ ...base, deltaTime: Infinity })).toBeNull();
+    });
+  });
+
+  describe('exact boundary cases', () => {
+    it('0.25s boundary: preview geometry matches commit exactly (no silent expansion)', () => {
+      // Result duration should be exactly what computeTrimGeometry returns — no 0.5 expansion
+      const result = computeTrimGeometry({
+        edge: 'right',
+        initialOffset: 0,
+        initialDuration: 5,
+        initialSourceStartOffset: 0,
+        knownSourceEnd: 10,
+        deltaTime: -4.25, // leaves 0.75s — above min (0.5)
+        snapEnabled: false,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.duration).toBe(0.75);
+    });
+
+    it('left trim with snap that hits grid exactly produces no-change geometry', () => {
+      // initialOffset=2 (already on grid), deltaTime=0 → snapped offset=2, same as initial
+      const result = computeTrimGeometry({
+        edge: 'left',
+        initialOffset: 2,
+        initialDuration: 8,
+        initialSourceStartOffset: 2,
+        knownSourceEnd: 10,
+        deltaTime: 0,
+        snapEnabled: true,
+      });
+      // Duration unchanged
+      expect(result).not.toBeNull();
+      expect(result!.offset).toBe(2);
+      expect(result!.duration).toBe(8);
+    });
   });
 });

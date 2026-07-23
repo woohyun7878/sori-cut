@@ -85,7 +85,8 @@ export function formatTimelineTime(seconds: number, precise = false) {
 
 // --- Trim preview geometry ---
 
-export const MIN_TRIM_DURATION = 0.1;
+/** Shared minimum clip duration, used by both preview geometry and store commit. */
+export const MIN_TRIM_DURATION = 0.5;
 export const TRIM_COMMIT_TOLERANCE = 0.001;
 
 export interface TrimGeometryInput {
@@ -107,7 +108,8 @@ export interface TrimGeometryResult {
 /**
  * Pure computation of trim preview geometry.
  * Enforces: sourceStartOffset >= 0, offset >= 0, duration >= MIN,
- * and sourceStartOffset + duration <= knownSourceEnd.
+ * and sourceStartOffset + duration <= knownSourceEnd (when finite).
+ * Returns null for invalid/non-finite inputs or results.
  */
 export function computeTrimGeometry(input: TrimGeometryInput): TrimGeometryResult | null {
   const {
@@ -119,6 +121,16 @@ export function computeTrimGeometry(input: TrimGeometryInput): TrimGeometryResul
     deltaTime,
     snapEnabled,
   } = input;
+
+  // Reject non-finite inputs
+  if (
+    !Number.isFinite(initialOffset) ||
+    !Number.isFinite(initialDuration) ||
+    !Number.isFinite(initialSourceStartOffset) ||
+    !Number.isFinite(deltaTime)
+  ) {
+    return null;
+  }
 
   if (edge === 'left') {
     const fixedEnd = initialOffset + initialDuration;
@@ -143,6 +155,11 @@ export function computeTrimGeometry(input: TrimGeometryInput): TrimGeometryResul
     const newDuration = fixedEnd - newOffset;
     if (newDuration < MIN_TRIM_DURATION) return null;
 
+    // Final non-finite guard
+    if (!Number.isFinite(newOffset) || !Number.isFinite(newDuration) || !Number.isFinite(newSourceStartOffset)) {
+      return null;
+    }
+
     return { offset: newOffset, duration: newDuration, sourceStartOffset: newSourceStartOffset };
   } else {
     const initialEnd = initialOffset + initialDuration;
@@ -151,8 +168,14 @@ export function computeTrimGeometry(input: TrimGeometryInput): TrimGeometryResul
     let newDuration = newEnd - initialOffset;
 
     newDuration = Math.max(MIN_TRIM_DURATION, newDuration);
-    const maxDuration = knownSourceEnd - initialSourceStartOffset;
-    newDuration = Math.min(newDuration, maxDuration);
+    // knownSourceEnd may be Infinity (unknown source duration) — only clamp if finite
+    if (Number.isFinite(knownSourceEnd)) {
+      const maxDuration = knownSourceEnd - initialSourceStartOffset;
+      newDuration = Math.min(newDuration, maxDuration);
+    }
+
+    // Final non-finite guard
+    if (!Number.isFinite(newDuration)) return null;
 
     return { offset: initialOffset, duration: newDuration, sourceStartOffset: initialSourceStartOffset };
   }

@@ -728,4 +728,87 @@ describe('useProjectStore', () => {
       expect(after).toBe(before + 1);
     });
   });
+
+  describe('trimTrack exact geometry and source bounds', () => {
+    beforeEach(() => {
+      // Clear undo history
+      useProjectStore.setState({ pastStates: [], futureStates: [] });
+      useProjectStore.getState().addTrack({
+        id: 'trim-exact',
+        type: 'audio',
+        startOffset: 0,
+        duration: 10,
+        sourceUrl: 'blob:source',
+        sourceDuration: 10,
+      });
+    });
+
+    it('commits exact geometry from preview without silent expansion', () => {
+      // Preview computed 0.75s duration — store should accept exactly
+      useProjectStore.getState().trimTrack('trim-exact', 0, 0.75);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      expect(t.duration).toBe(0.75);
+    });
+
+    it('guards non-finite offset — does not commit NaN', () => {
+      useProjectStore.getState().trimTrack('trim-exact', NaN, 5);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      // Track remains at original values
+      expect(t.startOffset).toBe(0);
+      expect(t.duration).toBe(10);
+    });
+
+    it('guards non-finite duration — does not commit Infinity', () => {
+      useProjectStore.getState().trimTrack('trim-exact', 0, Infinity);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      expect(t.duration).toBe(10);
+    });
+
+    it('preserves sourceDuration through trim operations', () => {
+      useProjectStore.getState().trimTrack('trim-exact', 2, 5);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      expect(t.sourceDuration).toBe(10);
+    });
+  });
+
+  describe('same-ID replacement and selection', () => {
+    it('setVideo clears selection when source URL changes on same ID', () => {
+      const video1 = {
+        id: 'v1',
+        name: 'video1.mp4',
+        blob: new Blob(['v'], { type: 'video/mp4' }),
+        url: 'blob:vid-1',
+        duration: 10,
+        width: 1920,
+        height: 1080,
+      };
+      useProjectStore.getState().setVideo(video1);
+      useProjectStore.getState().setSelectedTrack('video-track');
+      expect(useProjectStore.getState().selectedTrackId).toBe('video-track');
+
+      // Replace with different source
+      const video2 = { ...video1, url: 'blob:vid-2' };
+      useProjectStore.getState().setVideo(video2);
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+
+    it('setVideo preserves selection when source URL is unchanged (same content)', () => {
+      const video = {
+        id: 'v1',
+        name: 'video.mp4',
+        blob: new Blob(['v'], { type: 'video/mp4' }),
+        url: 'blob:vid-same',
+        duration: 10,
+        width: 1920,
+        height: 1080,
+      };
+      useProjectStore.getState().setVideo(video);
+      useProjectStore.getState().setSelectedTrack('video-track');
+
+      // Replace with same source URL (e.g., metadata update)
+      const video2 = { ...video, name: 'video-renamed.mp4' };
+      useProjectStore.getState().setVideo(video2);
+      expect(useProjectStore.getState().selectedTrackId).toBe('video-track');
+    });
+  });
 });
