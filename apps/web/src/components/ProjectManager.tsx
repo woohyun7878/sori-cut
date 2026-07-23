@@ -97,13 +97,19 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
   return (
     <div className="relative">
       <div className="flex min-w-0 items-center gap-2">
-        <button onClick={() => setIsOpen(!isOpen)} className="studio-secondary-button">
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="studio-secondary-button"
+          aria-expanded={isOpen}
+        >
           <svg
             className="h-4 w-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
             strokeWidth={2}
+            aria-hidden="true"
           >
             <path
               strokeLinecap="round"
@@ -120,23 +126,24 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
           onChange={(e) => setProjectName(e.target.value)}
           className="h-8 w-48 min-w-0 rounded-control border border-editor-border bg-canvas px-2.5 text-[13px] text-primary focus:border-brand-500"
           placeholder="Project name"
+          aria-label="Project name"
         />
 
-        {statusLabel && (
-          <span
-            className={`text-xs ${
-              saveStatus === 'saving'
-                ? 'text-yellow-400'
-                : saveStatus === 'saved'
-                  ? 'text-green-400'
-                  : saveStatus === 'error'
-                    ? 'text-red-400'
-                    : 'text-gray-500'
-            }`}
-          >
-            {statusLabel}
-          </span>
-        )}
+        <span
+          role="status"
+          aria-live="polite"
+          className={`text-xs ${
+            saveStatus === 'saving'
+              ? 'text-yellow-400'
+              : saveStatus === 'saved'
+                ? 'text-green-400'
+                : saveStatus === 'error'
+                  ? 'text-red-400'
+                  : 'text-gray-500'
+          }`}
+        >
+          {statusLabel}
+        </span>
       </div>
 
       {/* Dropdown project list */}
@@ -145,6 +152,7 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
           <div className="flex h-12 items-center justify-between border-b border-editor-border px-3">
             <h3 className="text-sm font-semibold text-white">Projects</h3>
             <button
+              type="button"
               onClick={handleNewProject}
               className="h-8 rounded-control bg-brand-600 px-3 text-xs font-medium text-white transition-colors hover:bg-brand-700"
             >
@@ -162,19 +170,22 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
                   className={`flex min-h-12 items-center justify-between border-b border-editor-border px-3 transition-colors last:border-b-0 hover:bg-hover ${
                     p.id === projectId ? 'bg-gray-800/50' : ''
                   }`}
-                  onClick={() => handleLoad(p.id)}
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-white">{p.name}</p>
-                    <p className="text-xs text-gray-500">{formatDate(p.updatedAt)}</p>
-                  </div>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(p.id);
-                    }}
+                    type="button"
+                    onClick={() => handleLoad(p.id)}
+                    aria-current={p.id === projectId ? 'true' : undefined}
+                    className="min-w-0 flex-1 py-2 text-left"
+                  >
+                    <span className="block truncate text-sm font-medium text-white">{p.name}</span>
+                    <span className="block text-xs text-gray-500">{formatDate(p.updatedAt)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(p.id)}
                     className="ml-2 rounded p-1 text-gray-500 hover:bg-red-900/30 hover:text-red-400 transition-colors"
-                    title="Delete"
+                    aria-label={`Delete project ${p.name}`}
+                    title="Delete project"
                   >
                     <svg
                       className="h-4 w-4"
@@ -182,6 +193,7 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
                       viewBox="0 0 24 24"
                       stroke="currentColor"
                       strokeWidth={2}
+                      aria-hidden="true"
                     >
                       <path
                         strokeLinecap="round"
