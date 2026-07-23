@@ -50,6 +50,8 @@ export interface TimelineTrack {
   duration: number;
   /** Seconds into the source media where this clip begins playing. */
   sourceStartOffset: number;
+  /** Immutable total duration of the source media (set at import/creation). Undefined for legacy/unknown tracks. */
+  sourceDuration?: number;
   /** Signed placement of source time zero relative to the reference timeline. */
   syncOffset?: number;
   /** Source in-point before the current sync alignment was applied. */
@@ -68,6 +70,7 @@ interface AddTrackInput {
   sourceUrl?: string;
   startOffset?: number;
   sourceStartOffset?: number;
+  sourceDuration?: number;
   syncOffset?: number;
   syncBaseSourceStartOffset?: number;
   syncBaseDuration?: number;
@@ -205,6 +208,10 @@ function sanitizeTrack(
   const startOffset = Math.max(track.startOffset ?? 0, 0);
   const duration = Math.max(track.duration ?? fallbackDuration, 0.5);
   const sourceStartOffset = Math.max(track.sourceStartOffset ?? 0, 0);
+  // sourceDuration is the immutable total media length — set at creation, preserved through trim/split.
+  const sourceDuration = track.sourceDuration !== undefined && Number.isFinite(track.sourceDuration) && track.sourceDuration > 0
+    ? track.sourceDuration
+    : undefined;
 
   return {
     id: track.id ?? crypto.randomUUID(),
@@ -214,6 +221,7 @@ function sanitizeTrack(
     startOffset,
     duration,
     sourceStartOffset,
+    sourceDuration,
     syncOffset: track.syncOffset ?? startOffset - sourceStartOffset,
     syncBaseSourceStartOffset: track.syncBaseSourceStartOffset ?? sourceStartOffset,
     syncBaseDuration: track.syncBaseDuration ?? duration,
@@ -321,6 +329,7 @@ export const useProjectStore = create<ProjectState>()(
             name: file.name,
             sourceUrl: file.url,
             duration: file.duration,
+            sourceDuration: file.duration,
             type: 'audio',
             volume: 1,
           },
@@ -328,9 +337,23 @@ export const useProjectStore = create<ProjectState>()(
           file.duration || 8,
         );
 
+        const nextTracks = upsertTrack(state.tracks, audioTrack);
+        // Clear selection if source identity of selected track changed
+        let clearSelection = false;
+        if (state.selectedTrackId) {
+          const prevSelected = state.tracks.find((t) => t.id === state.selectedTrackId);
+          const nextSelected = nextTracks.find((t) => t.id === state.selectedTrackId);
+          if (prevSelected && nextSelected && prevSelected.sourceUrl !== nextSelected.sourceUrl) {
+            clearSelection = true;
+          } else if (prevSelected && !nextSelected) {
+            clearSelection = true;
+          }
+        }
+
         return {
           originalAudio: file,
-          tracks: upsertTrack(state.tracks, audioTrack),
+          tracks: nextTracks,
+          ...(clearSelection ? { selectedTrackId: null } : {}),
         };
       }),
     setStems: (stems) =>
@@ -348,27 +371,34 @@ export const useProjectStore = create<ProjectState>()(
 
         const nextTracks = stems.reduce(
           (tracks, stem) => {
+            const stemSourceDuration = state.originalAudio?.duration ?? state.video?.duration ?? 8;
             const track = sanitizeTrack(
               {
                 id: `stem-${stem.id}`,
                 name: stem.label,
                 sourceUrl: stem.url,
-                duration: state.originalAudio?.duration ?? state.video?.duration ?? 8,
+                duration: stemSourceDuration,
+                sourceDuration: stemSourceDuration,
                 type: 'stem',
                 muted: stem.muted,
                 volume: stem.volume,
               },
               tracks,
-              state.originalAudio?.duration ?? state.video?.duration ?? 8,
+              stemSourceDuration,
             );
             return upsertTrack(tracks, track);
           },
           removeTracksByPrefix(state.tracks, 'stem-'),
         );
 
+        const selectedStillPresent =
+          !state.selectedTrackId ||
+          nextTracks.some((t) => t.id === state.selectedTrackId);
+
         return {
           stems,
           tracks: nextTracks,
+          ...(selectedStillPresent ? {} : { selectedTrackId: null }),
         };
       }),
     toggleStemMute: (id) =>
@@ -421,6 +451,7 @@ export const useProjectStore = create<ProjectState>()(
             name: recording.name,
             sourceUrl: recording.url,
             duration: recording.duration,
+            sourceDuration: recording.duration,
             type: 'recording',
             volume: 1,
           },
@@ -437,19 +468,24 @@ export const useProjectStore = create<ProjectState>()(
       set((state) => {
         const recordingToRemove = state.recordings.find((recording) => recording.id === id);
         revokeUrl(recordingToRemove?.url);
+        const removedTrackId = `recording-${id}`;
 
         return {
           recordings: state.recordings.filter((recording) => recording.id !== id),
-          tracks: state.tracks.filter((track) => track.id !== `recording-${id}`),
+          tracks: state.tracks.filter((track) => track.id !== removedTrackId),
+          selectedTrackId: state.selectedTrackId === removedTrackId ? null : state.selectedTrackId,
         };
       }),
     setVideo: (video) =>
       set((state) => {
         if (!video) {
           revokeUrl(state.video?.url);
+          const removedVideoTracks = state.tracks.filter((track) => track.type === 'video');
+          const selectedCleared = removedVideoTracks.some((t) => t.id === state.selectedTrackId);
           return {
             video: null,
             tracks: state.tracks.filter((track) => track.type !== 'video'),
+            ...(selectedCleared ? { selectedTrackId: null } : {}),
           };
         }
 
@@ -463,6 +499,7 @@ export const useProjectStore = create<ProjectState>()(
             name: video.name,
             sourceUrl: video.url,
             duration: video.duration,
+            sourceDuration: video.duration,
             type: 'video',
             muted: true,
             volume: 0,
@@ -471,9 +508,27 @@ export const useProjectStore = create<ProjectState>()(
           video.duration || 8,
         );
 
+        const nextTracks = [videoTrack, ...state.tracks.filter((track) => track.type !== 'video')];
+        // Clear selection if:
+        // - Selected track is gone from nextTracks, OR
+        // - Selected track exists but source identity changed (same ID, different source)
+        let shouldClearSelection = false;
+        if (state.selectedTrackId) {
+          const nextSelected = nextTracks.find((t) => t.id === state.selectedTrackId);
+          if (!nextSelected) {
+            shouldClearSelection = true;
+          } else {
+            const prevSelected = state.tracks.find((t) => t.id === state.selectedTrackId);
+            if (prevSelected && prevSelected.sourceUrl !== nextSelected.sourceUrl) {
+              shouldClearSelection = true;
+            }
+          }
+        }
+
         return {
           video,
-          tracks: [videoTrack, ...state.tracks.filter((track) => track.type !== 'video')],
+          tracks: nextTracks,
+          ...(shouldClearSelection ? { selectedTrackId: null } : {}),
         };
       }),
     addTrack: (track = {}) => {
@@ -492,6 +547,7 @@ export const useProjectStore = create<ProjectState>()(
     removeTrack: (id) =>
       set((state) => ({
         tracks: state.tracks.filter((track) => track.id !== id),
+        selectedTrackId: state.selectedTrackId === id ? null : state.selectedTrackId,
       })),
     updateTrackOffset: (id, offset) =>
       set((state) => ({
@@ -591,16 +647,29 @@ export const useProjectStore = create<ProjectState>()(
         tracks: state.tracks.map((t) => {
           if (t.id !== id) return t;
 
-          const clampedOffset = Math.max(0, newOffset);
-          // Moving the start edge right (or left) shifts the source in-point by the same amount.
-          const offsetDelta = clampedOffset - t.startOffset;
+          // Trust pre-validated geometry from computeTrimGeometry.
+          // Only guard against non-finite values (NaN/Infinity).
+          if (!Number.isFinite(newOffset) || !Number.isFinite(newDuration)) return t;
 
-          const nextDuration = Math.max(0.5, newDuration);
+          const clampedOffset = Math.max(0, newOffset);
+          const offsetDelta = clampedOffset - t.startOffset;
           const nextSourceStartOffset = Math.max(0, t.sourceStartOffset + offsetDelta);
+
+          // Exact duration from pre-validated preview; only apply finite/positive floor.
+          const nextDuration = Math.max(0, newDuration);
+          if (nextDuration <= 0) return t;
+
+          // Source-bound guard: if sourceDuration known, ensure within bounds.
+          const sourceBound = t.sourceDuration;
+          const finalDuration = sourceBound !== undefined
+            ? Math.min(nextDuration, sourceBound - nextSourceStartOffset)
+            : nextDuration;
+          if (finalDuration <= 0) return t;
+
           return rebaseTrackSync({
             ...t,
             startOffset: clampedOffset,
-            duration: nextDuration,
+            duration: finalDuration,
             sourceStartOffset: nextSourceStartOffset,
           });
         }),

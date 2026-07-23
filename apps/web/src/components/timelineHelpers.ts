@@ -82,3 +82,101 @@ export function formatTimelineTime(seconds: number, precise = false) {
 
   return precise ? `${base}.${String(Math.floor((safeSeconds % 1) * 100)).padStart(2, '0')}` : base;
 }
+
+// --- Trim preview geometry ---
+
+/** Shared minimum clip duration, used by both preview geometry and store commit. */
+export const MIN_TRIM_DURATION = 0.5;
+export const TRIM_COMMIT_TOLERANCE = 0.001;
+
+export interface TrimGeometryInput {
+  edge: 'left' | 'right';
+  initialOffset: number;
+  initialDuration: number;
+  initialSourceStartOffset: number;
+  knownSourceEnd: number;
+  deltaTime: number;
+  snapEnabled: boolean;
+}
+
+export interface TrimGeometryResult {
+  offset: number;
+  duration: number;
+  sourceStartOffset: number;
+}
+
+/**
+ * Pure computation of trim preview geometry.
+ * Enforces: sourceStartOffset >= 0, offset >= 0, duration >= MIN,
+ * and sourceStartOffset + duration <= knownSourceEnd (when finite).
+ * Returns null for invalid/non-finite inputs or results.
+ */
+export function computeTrimGeometry(input: TrimGeometryInput): TrimGeometryResult | null {
+  const {
+    edge,
+    initialOffset,
+    initialDuration,
+    initialSourceStartOffset,
+    knownSourceEnd,
+    deltaTime,
+    snapEnabled,
+  } = input;
+
+  // Reject non-finite inputs
+  if (
+    !Number.isFinite(initialOffset) ||
+    !Number.isFinite(initialDuration) ||
+    !Number.isFinite(initialSourceStartOffset) ||
+    !Number.isFinite(deltaTime)
+  ) {
+    return null;
+  }
+
+  if (edge === 'left') {
+    const fixedEnd = initialOffset + initialDuration;
+
+    let newOffset = initialOffset + deltaTime;
+    if (snapEnabled) newOffset = snapTimelineTime(newOffset, true);
+    let newSourceStartOffset = initialSourceStartOffset + (newOffset - initialOffset);
+
+    // Clamp: sourceStartOffset >= 0
+    if (newSourceStartOffset < 0) {
+      newSourceStartOffset = 0;
+      newOffset = initialOffset - initialSourceStartOffset;
+    }
+
+    // Clamp: offset >= 0
+    if (newOffset < 0) {
+      newOffset = 0;
+      newSourceStartOffset = initialSourceStartOffset - initialOffset;
+      if (newSourceStartOffset < 0) newSourceStartOffset = 0;
+    }
+
+    const newDuration = fixedEnd - newOffset;
+    if (newDuration < MIN_TRIM_DURATION) return null;
+
+    // Final non-finite guard
+    if (!Number.isFinite(newOffset) || !Number.isFinite(newDuration) || !Number.isFinite(newSourceStartOffset)) {
+      return null;
+    }
+
+    return { offset: newOffset, duration: newDuration, sourceStartOffset: newSourceStartOffset };
+  } else {
+    const initialEnd = initialOffset + initialDuration;
+    let newEnd = initialEnd + deltaTime;
+    if (snapEnabled) newEnd = snapTimelineTime(newEnd, true);
+    let newDuration = newEnd - initialOffset;
+
+    newDuration = Math.max(MIN_TRIM_DURATION, newDuration);
+    // knownSourceEnd may be Infinity (unknown source duration) — only clamp if finite
+    if (Number.isFinite(knownSourceEnd)) {
+      const maxDuration = knownSourceEnd - initialSourceStartOffset;
+      newDuration = Math.min(newDuration, maxDuration);
+    }
+
+    // Final non-finite guard
+    if (!Number.isFinite(newDuration)) return null;
+
+    return { offset: initialOffset, duration: newDuration, sourceStartOffset: initialSourceStartOffset };
+  }
+}

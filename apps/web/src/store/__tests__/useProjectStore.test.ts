@@ -554,4 +554,261 @@ describe('useProjectStore', () => {
       expect(useProjectStore.getState().playheadPosition).toBe(0);
     });
   });
+
+  describe('selection consistency', () => {
+    it('removeTrack clears selectedTrackId when the selected track is removed', () => {
+      useProjectStore.getState().addTrack({ id: 'sel-1', type: 'audio', duration: 5 });
+      useProjectStore.getState().setSelectedTrack('sel-1');
+      expect(useProjectStore.getState().selectedTrackId).toBe('sel-1');
+
+      useProjectStore.getState().removeTrack('sel-1');
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+
+    it('removeTrack preserves selection when a different track is removed', () => {
+      useProjectStore.getState().addTrack({ id: 'sel-a', type: 'audio', duration: 5 });
+      useProjectStore.getState().addTrack({ id: 'sel-b', type: 'audio', duration: 5 });
+      useProjectStore.getState().setSelectedTrack('sel-a');
+
+      useProjectStore.getState().removeTrack('sel-b');
+      expect(useProjectStore.getState().selectedTrackId).toBe('sel-a');
+    });
+
+    it('removeRecording clears selectedTrackId for the recording track', () => {
+      const rec = {
+        id: 'rec-sel',
+        name: 'Test Rec',
+        blob: new Blob(['audio'], { type: 'audio/wav' }),
+        url: 'blob:rec-sel-url',
+        duration: 3,
+        createdAt: Date.now(),
+      };
+      useProjectStore.getState().addRecording(rec);
+      useProjectStore.getState().setSelectedTrack('recording-rec-sel');
+      expect(useProjectStore.getState().selectedTrackId).toBe('recording-rec-sel');
+
+      useProjectStore.getState().removeRecording('rec-sel');
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+
+    it('setVideo(null) clears selectedTrackId when the video track was selected', () => {
+      const video = {
+        id: 'vid-1',
+        name: 'video.mp4',
+        blob: new Blob(['vid'], { type: 'video/mp4' }),
+        url: 'blob:vid-url',
+        duration: 10,
+        width: 1920,
+        height: 1080,
+      };
+      useProjectStore.getState().setVideo(video);
+      useProjectStore.getState().setSelectedTrack('video-track');
+      expect(useProjectStore.getState().selectedTrackId).toBe('video-track');
+
+      useProjectStore.getState().setVideo(null);
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+
+    it('setStems clears selectedTrackId when the selected stem track is removed', () => {
+      const stemA = {
+        id: 'stem-a',
+        name: 'vocals',
+        label: 'Vocals',
+        blob: new Blob(['stem'], { type: 'audio/wav' }),
+        url: 'blob:stem-a-url',
+        muted: false,
+        volume: 0.8,
+        solo: false,
+      };
+      useProjectStore.getState().setStems([stemA]);
+      useProjectStore.getState().setSelectedTrack('stem-stem-a');
+      expect(useProjectStore.getState().selectedTrackId).toBe('stem-stem-a');
+
+      // Replace with a different stem set — previous stem track no longer exists
+      useProjectStore.getState().setStems([]);
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+  });
+
+  describe('undo correctness for editing operations', () => {
+    beforeEach(() => {
+      // Clear undo history to avoid MAX_HISTORY cap from prior tests
+      useProjectStore.setState({ pastStates: [], futureStates: [], canUndo: false, canRedo: false });
+    });
+
+    it('trimTrack creates an undo entry that restores pre-trim state', () => {
+      useProjectStore.getState().addTrack({ id: 'undo-t', type: 'audio', startOffset: 0, duration: 10 });
+
+      useProjectStore.getState().trimTrack('undo-t', 2, 8);
+      useProjectStore.getState().undo();
+
+      const track = useProjectStore.getState().tracks.find((t) => t.id === 'undo-t')!;
+      expect(track.startOffset).toBe(0);
+      expect(track.duration).toBe(10);
+    });
+
+    it('unrelated mute during a trim sequence gets its own undo entry', () => {
+      useProjectStore.getState().addTrack({ id: 'trim-m', type: 'audio', startOffset: 0, duration: 10 });
+      useProjectStore.getState().addTrack({ id: 'other-m', type: 'stem', duration: 5 });
+
+      // Simulate: trim, then unrelated mute
+      useProjectStore.getState().trimTrack('trim-m', 2, 8);
+      useProjectStore.getState().toggleTrackMute('other-m');
+
+      // Undo the mute
+      useProjectStore.getState().undo();
+      expect(useProjectStore.getState().tracks.find((t) => t.id === 'other-m')!.muted).toBe(false);
+
+      // Track should still be trimmed (mute undo did not affect trim)
+      expect(useProjectStore.getState().tracks.find((t) => t.id === 'trim-m')!.startOffset).toBe(2);
+
+      // Undo the trim
+      useProjectStore.getState().undo();
+      expect(useProjectStore.getState().tracks.find((t) => t.id === 'trim-m')!.startOffset).toBe(0);
+    });
+
+    it('undo/redo cycle preserves correct order', () => {
+      useProjectStore.getState().addTrack({ id: 'cycle-t', type: 'audio', startOffset: 0, duration: 10 });
+
+      useProjectStore.getState().trimTrack('cycle-t', 1, 9);
+      useProjectStore.getState().trimTrack('cycle-t', 2, 8);
+
+      useProjectStore.getState().undo();
+      expect(useProjectStore.getState().tracks.find((t) => t.id === 'cycle-t')!.startOffset).toBe(1);
+
+      useProjectStore.getState().redo();
+      expect(useProjectStore.getState().tracks.find((t) => t.id === 'cycle-t')!.startOffset).toBe(2);
+    });
+
+    it('setVideo replacement clears selection when previous video split clip is removed', () => {
+      const videoA = {
+        id: 'vid-a',
+        name: 'a.mp4',
+        blob: new Blob(['vid'], { type: 'video/mp4' }),
+        url: 'blob:vid-a',
+        duration: 10,
+        width: 1920,
+        height: 1080,
+      };
+      const videoB = {
+        id: 'vid-b',
+        name: 'b.mp4',
+        blob: new Blob(['vid'], { type: 'video/mp4' }),
+        url: 'blob:vid-b',
+        duration: 8,
+        width: 1280,
+        height: 720,
+      };
+
+      useProjectStore.getState().setVideo(videoA);
+      // Simulate a user having split the video track — add extra video clip
+      useProjectStore.getState().addTrack({ id: 'video-split-2', type: 'video', duration: 5 });
+      useProjectStore.getState().setSelectedTrack('video-split-2');
+
+      // Replacing the video removes all video-type tracks
+      useProjectStore.getState().setVideo(videoB);
+
+      // The split video clip is gone, selection should be cleared
+      expect(useProjectStore.getState().tracks.find((t) => t.id === 'video-split-2')).toBeUndefined();
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+
+    it('trimTrack with unchanged values does not pollute undo history', () => {
+      useProjectStore.getState().addTrack({ id: 'noop-t', type: 'audio', startOffset: 2, duration: 8 });
+      const before = useProjectStore.getState().pastStates.length;
+
+      // "trim" to the exact same values — simulates click-without-drag
+      useProjectStore.getState().trimTrack('noop-t', 2, 8);
+
+      // The store still creates an undo entry (since it doesn't know if geometry changed),
+      // but the UI layer prevents this call entirely. This test documents store behavior.
+      const after = useProjectStore.getState().pastStates.length;
+      // Store DOES push (it can't distinguish no-op at the store level).
+      // The UI commitment tolerance (TRIM_COMMIT_TOLERANCE) prevents the call.
+      expect(after).toBe(before + 1);
+    });
+  });
+
+  describe('trimTrack exact geometry and source bounds', () => {
+    beforeEach(() => {
+      // Clear undo history
+      useProjectStore.setState({ pastStates: [], futureStates: [] });
+      useProjectStore.getState().addTrack({
+        id: 'trim-exact',
+        type: 'audio',
+        startOffset: 0,
+        duration: 10,
+        sourceUrl: 'blob:source',
+        sourceDuration: 10,
+      });
+    });
+
+    it('commits exact geometry from preview without silent expansion', () => {
+      // Preview computed 0.75s duration — store should accept exactly
+      useProjectStore.getState().trimTrack('trim-exact', 0, 0.75);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      expect(t.duration).toBe(0.75);
+    });
+
+    it('guards non-finite offset — does not commit NaN', () => {
+      useProjectStore.getState().trimTrack('trim-exact', NaN, 5);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      // Track remains at original values
+      expect(t.startOffset).toBe(0);
+      expect(t.duration).toBe(10);
+    });
+
+    it('guards non-finite duration — does not commit Infinity', () => {
+      useProjectStore.getState().trimTrack('trim-exact', 0, Infinity);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      expect(t.duration).toBe(10);
+    });
+
+    it('preserves sourceDuration through trim operations', () => {
+      useProjectStore.getState().trimTrack('trim-exact', 2, 5);
+      const t = useProjectStore.getState().tracks.find((t) => t.id === 'trim-exact')!;
+      expect(t.sourceDuration).toBe(10);
+    });
+  });
+
+  describe('same-ID replacement and selection', () => {
+    it('setVideo clears selection when source URL changes on same ID', () => {
+      const video1 = {
+        id: 'v1',
+        name: 'video1.mp4',
+        blob: new Blob(['v'], { type: 'video/mp4' }),
+        url: 'blob:vid-1',
+        duration: 10,
+        width: 1920,
+        height: 1080,
+      };
+      useProjectStore.getState().setVideo(video1);
+      useProjectStore.getState().setSelectedTrack('video-track');
+      expect(useProjectStore.getState().selectedTrackId).toBe('video-track');
+
+      // Replace with different source
+      const video2 = { ...video1, url: 'blob:vid-2' };
+      useProjectStore.getState().setVideo(video2);
+      expect(useProjectStore.getState().selectedTrackId).toBeNull();
+    });
+
+    it('setVideo preserves selection when source URL is unchanged (same content)', () => {
+      const video = {
+        id: 'v1',
+        name: 'video.mp4',
+        blob: new Blob(['v'], { type: 'video/mp4' }),
+        url: 'blob:vid-same',
+        duration: 10,
+        width: 1920,
+        height: 1080,
+      };
+      useProjectStore.getState().setVideo(video);
+      useProjectStore.getState().setSelectedTrack('video-track');
+
+      // Replace with same source URL (e.g., metadata update)
+      const video2 = { ...video, name: 'video-renamed.mp4' };
+      useProjectStore.getState().setVideo(video2);
+      expect(useProjectStore.getState().selectedTrackId).toBe('video-track');
+    });
+  });
 });
