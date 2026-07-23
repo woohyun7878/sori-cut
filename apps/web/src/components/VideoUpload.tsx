@@ -134,7 +134,6 @@ export function VideoUpload({ compact = false, showPreview = true }: VideoUpload
           accept={ACCEPTED_VIDEO_TYPES}
           className="hidden"
           type="file"
-          aria-label="Choose a video file"
           onChange={(event) => void handleInputChange(event)}
         />
 

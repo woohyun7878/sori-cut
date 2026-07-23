@@ -23,13 +23,16 @@ afterEach(() => {
 });
 
 describe('VideoUpload accessibility', () => {
-  it('exposes a keyboard-operable browse button and a labeled file input', () => {
+  it('exposes a keyboard-operable browse button that opens the file picker', () => {
     const { container } = render(<VideoUpload />);
 
-    expect(screen.getByRole('button', { name: /browse video/i })).toBeInTheDocument();
+    const browse = screen.getByRole('button', { name: /browse video/i });
+    expect(browse).toBeInTheDocument();
 
-    const input = container.querySelector('input[type="file"]');
-    expect(input).toHaveAttribute('aria-label', 'Choose a video file');
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const clickSpy = vi.spyOn(input, 'click');
+    fireEvent.click(browse);
+    expect(clickSpy).toHaveBeenCalled();
   });
 
   it('announces an unsupported file selection through an alert region', async () => {

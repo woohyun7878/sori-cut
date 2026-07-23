@@ -101,7 +101,6 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
           type="button"
           onClick={() => setIsOpen(!isOpen)}
           className="studio-secondary-button"
-          aria-haspopup="menu"
           aria-expanded={isOpen}
         >
           <svg

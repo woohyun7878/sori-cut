@@ -56,6 +56,8 @@ describe('ProjectManager accessibility', () => {
     render(<ProjectManager saveStatus="idle" />);
     const toggle = screen.getByRole('button', { name: 'Projects' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // Disclosure pattern, not an APG menu: must not advertise a menu popup.
+    expect(toggle).not.toHaveAttribute('aria-haspopup');
 
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'));
