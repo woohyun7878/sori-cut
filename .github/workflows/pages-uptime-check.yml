@@ -8,9 +8,15 @@ on:
 permissions:
   contents: read
 
+# Prevent overlapping scheduled runs from piling up if a check is slow.
+concurrency:
+  group: pages-uptime-check
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check public endpoints
         shell: bash

@@ -6,25 +6,31 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel in-progress runs for the same ref to save CI minutes.
+# Cancel superseded runs on the same ref, but let pushes to the default
+# branch finish so every main commit keeps a complete status history.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least-privilege token: CI only needs to read the repository.
+permissions:
+  contents: read
 
 jobs:
   verify:
     name: Typecheck, lint, test & build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
