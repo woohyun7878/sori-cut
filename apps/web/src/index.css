@@ -33,13 +33,26 @@
   --space-8: 32px;
   --control-height: 32px;
   --primary-control-height: 36px;
-  --command-height: 52px;
+  --command-height: 48px;
   --tool-rail-width: 56px;
   --panel-width: 300px;
-  --timeline-header-width: 208px;
+  --timeline-header-width: 140px;
   --timeline-row-height: 48px;
   --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-brand);
   color-scheme: dark;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --command-height: 52px;
+    --timeline-header-width: 180px;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --timeline-header-width: 208px;
+  }
 }
 
 @layer base {
@@ -99,13 +112,20 @@
   }
 
   .studio-command-bar {
-    @apply z-50 flex shrink-0 items-center justify-between gap-3 border-b border-editor-border bg-surface;
+    @apply z-50 flex shrink-0 items-center justify-between gap-2 border-b border-editor-border bg-surface;
     height: var(--command-height);
-    padding-inline: var(--space-3);
+    padding-inline: var(--space-2);
+  }
+
+  @media (min-width: 640px) {
+    .studio-command-bar {
+      gap: var(--space-3);
+      padding-inline: var(--space-3);
+    }
   }
 
   .studio-command-group {
-    @apply flex items-center gap-2;
+    @apply flex items-center gap-1.5 sm:gap-2;
   }
 
   .studio-command-divider {
@@ -134,6 +154,7 @@
     @apply inline-flex shrink-0 items-center justify-center rounded-control text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
     width: var(--control-height);
     height: var(--control-height);
+    touch-action: manipulation;
   }
 
   .studio-main {
@@ -141,7 +162,7 @@
   }
 
   .studio-upper {
-    @apply relative grid min-h-[300px] flex-1 overflow-hidden;
+    @apply relative grid min-h-[240px] flex-1 overflow-hidden;
     grid-template-columns: var(--tool-rail-width) minmax(0, 1fr);
   }
 
@@ -151,6 +172,7 @@
 
   .studio-tool-button {
     @apply relative flex h-[54px] w-12 flex-col items-center justify-center gap-1 rounded-control text-[10px] font-medium text-muted transition-colors duration-150 hover:bg-hover hover:text-primary;
+    touch-action: manipulation;
   }
 
   .studio-tool-button::before {
@@ -175,6 +197,8 @@
     @apply fixed bottom-0 z-40 flex flex-col overflow-hidden border-editor-border bg-surface shadow-2xl transition-transform duration-150;
     top: var(--command-height);
     width: min(320px, calc(100vw - var(--tool-rail-width)));
+    will-change: transform;
+    touch-action: none;
   }
 
   .studio-context-panel {
@@ -268,11 +292,13 @@
   }
 
   .studio-preview-stage {
-    @apply flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_center,#151a20_0,#0b0d10_68%)] p-3;
+    @apply flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_center,#151a20_0,#0b0d10_68%)] p-2 sm:p-3;
   }
 
   .studio-device-frame {
     @apply relative aspect-[9/16] h-full max-h-full max-w-full overflow-hidden rounded-control border border-gray-600 bg-black shadow-2xl transition-transform duration-150;
+    min-height: 160px;
+    min-width: 90px;
   }
 
   .studio-preview-tool {
@@ -326,7 +352,8 @@
   }
 
   .studio-timeline-region {
-    @apply flex h-[38vh] min-h-[280px] max-h-[430px] shrink-0 flex-col border-t border-editor-border bg-surface;
+    @apply flex min-h-[200px] max-h-[430px] shrink-0 flex-col border-t border-editor-border bg-surface;
+    height: clamp(200px, 34vh, 430px);
   }
 
   .studio-timeline-title {
@@ -449,6 +476,8 @@
 
   .timeline-toolbar {
     @apply flex h-9 shrink-0 items-center justify-between gap-2 overflow-x-auto border-b border-editor-border bg-surface px-2;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
   }
 
   .timeline-timecode {
@@ -457,6 +486,7 @@
 
   .timeline-tool-button {
     @apply inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-secondary transition-colors hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
+    touch-action: manipulation;
   }
 
   .timeline-tool-button.is-active {
@@ -469,18 +499,26 @@
 
   .timeline-zoom-button {
     @apply flex h-7 w-7 items-center justify-center rounded text-sm text-secondary hover:bg-hover hover:text-primary;
+    touch-action: manipulation;
   }
 
   .timeline-scroll {
     @apply min-h-0 flex-1 overflow-auto bg-canvas;
     scrollbar-color: #3b4652 #0b0d10;
     scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
   }
 
   .timeline-grid {
     display: grid;
     min-width: max-content;
-    grid-template-columns: var(--timeline-header-width) minmax(720px, 1fr);
+    grid-template-columns: var(--timeline-header-width) minmax(600px, 1fr);
+  }
+
+  @media (min-width: 768px) {
+    .timeline-grid {
+      grid-template-columns: var(--timeline-header-width) minmax(720px, 1fr);
+    }
   }
 
   .timeline-track-corner {
@@ -498,6 +536,7 @@
 
   .timeline-track-toggle {
     @apply flex h-6 w-6 items-center justify-center rounded border border-editor-border text-[10px] font-bold text-muted transition-colors hover:bg-hover hover:text-primary;
+    touch-action: manipulation;
   }
 
   .timeline-track-toggle.is-active {
@@ -625,22 +664,22 @@
 
 @media (max-height: 700px) {
   .studio-upper {
-    min-height: 220px;
+    min-height: 200px;
   }
 
   .studio-timeline-region {
-    height: 34vh;
-    min-height: 220px;
+    height: clamp(180px, 32vh, 350px);
+    min-height: 180px;
   }
 }
 
 @media (max-height: 560px) {
   .studio-upper {
-    min-height: 180px;
+    min-height: 160px;
   }
 
   .studio-timeline-region {
-    min-height: 180px;
+    min-height: 150px;
   }
 
   .studio-preview-toolbar {

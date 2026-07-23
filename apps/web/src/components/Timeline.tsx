@@ -526,8 +526,11 @@ export function Timeline() {
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[160px] rounded-control border border-editor-border bg-surface-raised py-1 shadow-2xl"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          className="fixed z-50 min-w-[160px] max-w-[calc(100vw-16px)] rounded-control border border-editor-border bg-surface-raised py-1 shadow-2xl"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 176),
+            top: Math.min(contextMenu.y, window.innerHeight - 80),
+          }}
           role="menu"
           aria-label="Clip actions"
         >
