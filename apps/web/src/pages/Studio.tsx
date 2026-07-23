@@ -759,11 +759,11 @@ export function Studio() {
             type="button"
             onClick={() => setInspectorOpen(true)}
           >
-            <Icon name="inspector" className="h-4 w-4" /> Inspector
+            <Icon name="inspector" className="h-4 w-4" /> <span className="hidden sm:inline">Inspector</span>
           </button>
           <button
             onClick={() => setHelpOpen(true)}
-            className="studio-icon-button"
+            className="studio-icon-button hidden sm:inline-flex"
             aria-label="Keyboard shortcuts"
             title="Shortcuts"
           >

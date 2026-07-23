@@ -215,3 +215,57 @@ describe('useResizablePanels', () => {
     expect(screen.getByTestId('right-width')).toHaveTextContent('0');
   });
 });
+
+describe('resolveWorkspaceLayout responsive regression', () => {
+  it('ensures preview center never goes below minimum at narrow container widths', () => {
+    // Simulates a 768px tablet viewport at the desktop breakpoint
+    const resolved = resolveWorkspaceLayout(1360, defaultLayout);
+    expect(resolved.centerWidth).toBeGreaterThanOrEqual(MIN_PREVIEW_WIDTH);
+  });
+
+  it('collapses panel budget gracefully when container is exactly at breakpoint', () => {
+    const maxLayout: WorkspaceLayout = {
+      version: 1,
+      left: { width: LEFT_PANEL_MAX, collapsed: false },
+      right: { width: RIGHT_PANEL_MAX, collapsed: false },
+    };
+    const resolved = resolveWorkspaceLayout(1360, maxLayout);
+    // Must never allow center to go below minimum
+    expect(resolved.centerWidth).toBeGreaterThanOrEqual(MIN_PREVIEW_WIDTH);
+    // Panels should be reduced
+    expect(resolved.leftWidth).toBeLessThanOrEqual(LEFT_PANEL_MAX);
+    expect(resolved.rightWidth).toBeLessThanOrEqual(RIGHT_PANEL_MAX);
+  });
+
+  it('handles both panels collapsed at narrow width', () => {
+    const collapsedLayout: WorkspaceLayout = {
+      version: 1,
+      left: { width: DEFAULT_PANEL_WIDTH, collapsed: true },
+      right: { width: DEFAULT_PANEL_WIDTH, collapsed: true },
+    };
+    const resolved = resolveWorkspaceLayout(1360, collapsedLayout);
+    // When both collapsed, center gets maximum space
+    expect(resolved.leftWidth).toBe(0);
+    expect(resolved.rightWidth).toBe(0);
+    expect(resolved.centerWidth).toBeGreaterThan(MIN_PREVIEW_WIDTH);
+  });
+
+  it('produces valid layout for very wide desktop (2560px)', () => {
+    const resolved = resolveWorkspaceLayout(2560, defaultLayout);
+    expect(resolved.centerWidth).toBeGreaterThanOrEqual(MIN_PREVIEW_WIDTH);
+    expect(resolved.leftWidth).toBe(DEFAULT_PANEL_WIDTH);
+    expect(resolved.rightWidth).toBe(DEFAULT_PANEL_WIDTH);
+  });
+
+  it('panel max adapts when the other panel is large', () => {
+    const asymmetric: WorkspaceLayout = {
+      version: 1,
+      left: { width: LEFT_PANEL_MAX, collapsed: false },
+      right: { width: 240, collapsed: false },
+    };
+    const resolved = resolveWorkspaceLayout(1400, asymmetric);
+    // Right max should be constrained by the large left panel
+    expect(resolved.rightMax).toBeLessThanOrEqual(RIGHT_PANEL_MAX);
+    expect(resolved.centerWidth).toBeGreaterThanOrEqual(MIN_PREVIEW_WIDTH);
+  });
+});
