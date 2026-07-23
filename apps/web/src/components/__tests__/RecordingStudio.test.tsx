@@ -92,7 +92,6 @@ class MockAudioContext {
 
 let getUserMediaMock: ReturnType<typeof vi.fn>;
 let revokeObjectURLSpy: ReturnType<typeof vi.spyOn>;
-let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   MockMediaRecorder.instances = [];
@@ -130,7 +129,7 @@ beforeEach(() => {
   if (!URL.revokeObjectURL) {
     (URL as unknown as Record<string, unknown>).revokeObjectURL = () => {};
   }
-  createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview-url');
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview-url');
   revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
 
   // ResizeObserver (may be used by wavesurfer.js)
@@ -202,10 +201,9 @@ describe('RecordingStudio', () => {
   it('does not open a second stream on rapid double-click (race guard)', async () => {
     // Make getUserMedia slow so the second call would overlap the first.
     const streams = [createMockStream(), createMockStream()];
-    let callCount = 0;
     const resolvers: Array<(v: MediaStream) => void> = [];
     getUserMediaMock.mockImplementation(
-      () => new Promise<MediaStream>((resolve) => { resolvers.push(resolve); callCount++; }),
+      () => new Promise<MediaStream>((resolve) => { resolvers.push(resolve); }),
     );
 
     const { container } = render(<RecordingStudio />);
@@ -300,21 +298,31 @@ describe('RecordingStudio', () => {
   });
 
   it('closes AudioContext on stop', async () => {
+    const instances: MockAudioContext[] = [];
+    const OrigCtx = MockAudioContext;
+    vi.stubGlobal('AudioContext', class extends OrigCtx {
+      constructor() {
+        super();
+        instances.push(this as unknown as MockAudioContext);
+      }
+    });
+
     render(<RecordingStudio />);
 
     await act(async () => {
       await clickStart();
     });
 
+    expect(instances).toHaveLength(1);
+    expect(instances[0].close).not.toHaveBeenCalled();
+
     await act(async () => {
       await clickStop();
       await new Promise((r) => setTimeout(r, 10));
     });
 
-    // Verify the full start→stop lifecycle ran (AudioContext was created + stream started)
-    expect(getUserMediaMock).toHaveBeenCalledTimes(1);
-    expect(MockMediaRecorder.instances).toHaveLength(1);
-    expect(MockMediaRecorder.instances[0].state).toBe('inactive');
+    expect(instances[0].close).toHaveBeenCalledTimes(1);
+    expect(instances[0].state).toBe('closed');
   });
 
   it('waits for final MediaRecorder onstop before cleanup (no chunk loss)', async () => {
@@ -351,5 +359,106 @@ describe('RecordingStudio', () => {
     expect(stream._track.stop).toHaveBeenCalled();
 
     MockMediaRecorder.prototype.stop = origStop;
+  });
+
+  it('stops late-resolved stream when user clicks Stop during getUserMedia', async () => {
+    // Verifies the abort path triggered by user clicking Stop while
+    // beginRecording() is still awaiting getUserMedia. The stop button is
+    // now enabled during the starting phase via isStarting state.
+    const stream = createMockStream();
+    let resolveGUM!: (value: MediaStream) => void;
+    getUserMediaMock.mockImplementation(
+      () => new Promise<MediaStream>((resolve) => { resolveGUM = resolve; }),
+    );
+
+    render(<RecordingStudio />);
+
+    // Click Start — enters beginRecording, awaits getUserMedia.
+    await act(async () => {
+      await clickStart();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Stop button should be enabled now (isStarting=true).
+    const stopBtn = screen.getByRole('button', { name: /stop recording/i });
+    expect(stopBtn).not.toBeDisabled();
+
+    // Click Stop — sets abortStartRef=true.
+    await act(async () => {
+      await userEvent.click(stopBtn);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // Resolve getUserMedia — the abort guard stops tracks immediately.
+    await act(async () => {
+      resolveGUM(stream);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // Stream tracks stopped, no recorder/preview created, UI returns to idle.
+    expect(stream._track.stop).toHaveBeenCalled();
+    expect(MockMediaRecorder.instances).toHaveLength(0);
+    expect(screen.queryByText(/new recording/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /start recording/i })).not.toBeDisabled();
+  });
+
+  it('resolves onstop wait even if preserved onstop handler throws', async () => {
+    // Ensures cleanup proceeds even when external code attached a
+    // throwing onstop handler prior to our stop() call.
+    const stream = createMockStream();
+    getUserMediaMock.mockResolvedValue(stream);
+
+    render(<RecordingStudio />);
+
+    await act(async () => {
+      await clickStart();
+    });
+
+    // Attach a throwing onstop handler (simulates external library hooking onstop)
+    const recorder = MockMediaRecorder.instances[0];
+    recorder.onstop = () => { throw new Error('external handler crash'); };
+
+    await act(async () => {
+      await clickStop();
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // Despite the throw, cleanup still completed — stream tracks stopped.
+    expect(stream._track.stop).toHaveBeenCalled();
+  });
+
+  it('cleanupStream is idempotent (no double-close rejection)', async () => {
+    // If unmount overlaps stop completion, cleanupStream may be called twice.
+    // Verify no unhandled rejection on double-close.
+    const instances: MockAudioContext[] = [];
+    const OrigCtx = MockAudioContext;
+    vi.stubGlobal('AudioContext', class extends OrigCtx {
+      constructor() {
+        super();
+        instances.push(this as unknown as MockAudioContext);
+      }
+    });
+
+    const { unmount } = render(<RecordingStudio />);
+
+    await act(async () => {
+      await clickStart();
+    });
+
+    // Stop recording (calls cleanupStream once)
+    await act(async () => {
+      await clickStop();
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(instances[0].close).toHaveBeenCalledTimes(1);
+
+    // Unmount triggers the cleanup effect which would call close() again
+    // if not guarded. This should NOT throw or increment call count.
+    unmount();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // close() still only called once — the guard in cleanupStream checked state.
+    expect(instances[0].close).toHaveBeenCalledTimes(1);
   });
 });

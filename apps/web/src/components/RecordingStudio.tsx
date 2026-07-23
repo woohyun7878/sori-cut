@@ -32,6 +32,7 @@ export function RecordingStudio() {
   const recordings = useProjectStore((state) => state.recordings);
   const addRecording = useProjectStore((state) => state.addRecording);
   const [isRecording, setIsRecording] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [monitoringEnabled, setMonitoringEnabled] = useState(false);
   const [level, setLevel] = useState(0);
@@ -156,8 +157,11 @@ export function RecordingStudio() {
     monitoringGainRef.current?.disconnect();
     monitoringGainRef.current = null;
 
-    if (audioContextRef.current) {
-      await audioContextRef.current.close();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      const ctx = audioContextRef.current;
+      audioContextRef.current = null;
+      await ctx.close();
+    } else {
       audioContextRef.current = null;
     }
   };
@@ -204,8 +208,14 @@ export function RecordingStudio() {
       await new Promise<void>((resolve) => {
         const prev = recorder.onstop;
         recorder.onstop = (event) => {
-          if (typeof prev === 'function') prev.call(recorder, event);
-          resolve();
+          try {
+            if (typeof prev === 'function') prev.call(recorder, event);
+          } catch {
+            // Swallow errors from previously-attached onstop handlers so
+            // cleanup always proceeds.
+          } finally {
+            resolve();
+          }
         };
         recorder.stop();
       });
@@ -217,6 +227,7 @@ export function RecordingStudio() {
   const beginRecording = async () => {
     if (isStartingRef.current) return;
     isStartingRef.current = true;
+    setIsStarting(true);
     abortStartRef.current = false;
 
     try {
@@ -293,6 +304,7 @@ export function RecordingStudio() {
       await cleanupStream();
     } finally {
       isStartingRef.current = false;
+      setIsStarting(false);
     }
   };
 
@@ -473,7 +485,7 @@ export function RecordingStudio() {
             <button
               type="button"
               onClick={() => void stopRecording()}
-              disabled={!isRecording && !isCountingIn}
+              disabled={!isRecording && !isCountingIn && !isStarting}
               className="rounded-xl border border-red-400/50 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-500"
             >
               Stop Recording
