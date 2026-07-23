@@ -57,6 +57,10 @@ export function RecordingStudio() {
   const startedAtRef = useRef<number>(0);
   const previewRef = useRef<RecordingDraft | null>(null);
   const metronomeRef = useRef<Metronome | null>(null);
+  /** Guards against concurrent beginRecording() calls (double-click race). */
+  const isStartingRef = useRef(false);
+  /** Signals that stop was requested while beginRecording() was in-flight. */
+  const abortStartRef = useRef(false);
 
   previewRef.current = preview;
 
@@ -68,6 +72,9 @@ export function RecordingStudio() {
 
   useEffect(
     () => () => {
+      // Signal any in-flight beginRecording() to abort on resolve.
+      abortStartRef.current = true;
+
       if (previewRef.current) {
         URL.revokeObjectURL(previewRef.current.url);
       }
@@ -175,6 +182,12 @@ export function RecordingStudio() {
       return;
     }
 
+    // If beginRecording() is still in-flight, signal it to abort.
+    if (isStartingRef.current) {
+      abortStartRef.current = true;
+      return;
+    }
+
     if (!isRecording) {
       return;
     }
@@ -184,16 +197,37 @@ export function RecordingStudio() {
     setIsRecording(false);
     setElapsed(Date.now() - startedAtRef.current);
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      // Wait for the final dataavailable + stop events before tearing down the
+      // stream so the last audio chunk is not lost.
+      await new Promise<void>((resolve) => {
+        const prev = recorder.onstop;
+        recorder.onstop = (event) => {
+          if (typeof prev === 'function') prev.call(recorder, event);
+          resolve();
+        };
+        recorder.stop();
+      });
     }
 
     await cleanupStream();
   };
 
   const beginRecording = async () => {
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
+    abortStartRef.current = false;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // If stop was requested while waiting for permission, tear down immediately.
+      if (abortStartRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       const mimeType = pickRecorderMimeType();
       const recorderOptions: MediaRecorderOptions = mimeType ? { mimeType } : {};
       const mediaRecorder = new MediaRecorder(stream, recorderOptions);
@@ -257,11 +291,13 @@ export function RecordingStudio() {
       setIsCountingIn(false);
       setCountInBeat(0);
       await cleanupStream();
+    } finally {
+      isStartingRef.current = false;
     }
   };
 
   const handleStartRecording = async () => {
-    if (isRecording || isCountingIn) {
+    if (isRecording || isCountingIn || isStartingRef.current) {
       return;
     }
 
