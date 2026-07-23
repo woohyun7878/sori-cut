@@ -6,25 +6,32 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel in-progress runs for the same ref to save CI minutes.
+# Each push to the default branch gets its own SHA-keyed concurrency group so
+# every main commit runs to completion; PR and branch runs share a per-ref
+# group and cancel superseded runs to save CI minutes.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least-privilege token: CI only needs to read the repository.
+permissions:
+  contents: read
 
 jobs:
   verify:
     name: Typecheck, lint, test & build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
