@@ -32,6 +32,7 @@ export function RecordingStudio() {
   const recordings = useProjectStore((state) => state.recordings);
   const addRecording = useProjectStore((state) => state.addRecording);
   const [isRecording, setIsRecording] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [monitoringEnabled, setMonitoringEnabled] = useState(false);
   const [level, setLevel] = useState(0);
@@ -57,6 +58,10 @@ export function RecordingStudio() {
   const startedAtRef = useRef<number>(0);
   const previewRef = useRef<RecordingDraft | null>(null);
   const metronomeRef = useRef<Metronome | null>(null);
+  /** Guards against concurrent beginRecording() calls (double-click race). */
+  const isStartingRef = useRef(false);
+  /** Signals that stop was requested while beginRecording() was in-flight. */
+  const abortStartRef = useRef(false);
 
   previewRef.current = preview;
 
@@ -68,6 +73,9 @@ export function RecordingStudio() {
 
   useEffect(
     () => () => {
+      // Signal any in-flight beginRecording() to abort on resolve.
+      abortStartRef.current = true;
+
       if (previewRef.current) {
         URL.revokeObjectURL(previewRef.current.url);
       }
@@ -149,8 +157,11 @@ export function RecordingStudio() {
     monitoringGainRef.current?.disconnect();
     monitoringGainRef.current = null;
 
-    if (audioContextRef.current) {
-      await audioContextRef.current.close();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      const ctx = audioContextRef.current;
+      audioContextRef.current = null;
+      await ctx.close();
+    } else {
       audioContextRef.current = null;
     }
   };
@@ -175,6 +186,12 @@ export function RecordingStudio() {
       return;
     }
 
+    // If beginRecording() is still in-flight, signal it to abort.
+    if (isStartingRef.current) {
+      abortStartRef.current = true;
+      return;
+    }
+
     if (!isRecording) {
       return;
     }
@@ -184,16 +201,44 @@ export function RecordingStudio() {
     setIsRecording(false);
     setElapsed(Date.now() - startedAtRef.current);
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      // Wait for the final dataavailable + stop events before tearing down the
+      // stream so the last audio chunk is not lost.
+      await new Promise<void>((resolve) => {
+        const prev = recorder.onstop;
+        recorder.onstop = (event) => {
+          try {
+            if (typeof prev === 'function') prev.call(recorder, event);
+          } catch {
+            // Swallow errors from previously-attached onstop handlers so
+            // cleanup always proceeds.
+          } finally {
+            resolve();
+          }
+        };
+        recorder.stop();
+      });
     }
 
     await cleanupStream();
   };
 
   const beginRecording = async () => {
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
+    setIsStarting(true);
+    abortStartRef.current = false;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // If stop was requested while waiting for permission, tear down immediately.
+      if (abortStartRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       const mimeType = pickRecorderMimeType();
       const recorderOptions: MediaRecorderOptions = mimeType ? { mimeType } : {};
       const mediaRecorder = new MediaRecorder(stream, recorderOptions);
@@ -257,11 +302,14 @@ export function RecordingStudio() {
       setIsCountingIn(false);
       setCountInBeat(0);
       await cleanupStream();
+    } finally {
+      isStartingRef.current = false;
+      setIsStarting(false);
     }
   };
 
   const handleStartRecording = async () => {
-    if (isRecording || isCountingIn) {
+    if (isRecording || isCountingIn || isStartingRef.current) {
       return;
     }
 
@@ -437,7 +485,7 @@ export function RecordingStudio() {
             <button
               type="button"
               onClick={() => void stopRecording()}
-              disabled={!isRecording && !isCountingIn}
+              disabled={!isRecording && !isCountingIn && !isStarting}
               className="rounded-xl border border-red-400/50 bg-red-500/10 px-5 py-3 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-gray-800 disabled:bg-gray-900 disabled:text-gray-500"
             >
               Stop Recording
