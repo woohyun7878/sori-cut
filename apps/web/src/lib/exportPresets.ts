@@ -67,6 +67,16 @@ export function getExportPreset(id: ExportPresetId): ExportPreset {
   return preset;
 }
 
+/**
+ * Resolves a preset by id, falling back to the default preset when the id is
+ * missing or unrecognised. Unlike {@link getExportPreset} this never throws, so
+ * it is safe to call during render with a value that may have come from
+ * persisted or otherwise untrusted state.
+ */
+export function resolveExportPreset(id: string | null | undefined): ExportPreset {
+  return exportPresets.find((option) => option.id === id) ?? getExportPreset(DEFAULT_EXPORT_PRESET_ID);
+}
+
 export type ExportQuality = 'draft' | 'standard' | 'high';
 
 export interface ExportQualityOption {
@@ -94,6 +104,14 @@ export function getExportQuality(id: ExportQuality): ExportQualityOption {
   }
 
   return quality;
+}
+
+/**
+ * Resolves a quality tier by id, falling back to the default tier when the id is
+ * missing or unrecognised. Never throws, so it is safe to call during render.
+ */
+export function resolveExportQuality(id: string | null | undefined): ExportQualityOption {
+  return exportQualityOptions.find((option) => option.id === id) ?? getExportQuality(DEFAULT_EXPORT_QUALITY);
 }
 
 /**

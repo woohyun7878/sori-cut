@@ -10,6 +10,8 @@ import {
   formatBitrate,
   getExportPreset,
   getExportQuality,
+  resolveExportPreset,
+  resolveExportQuality,
   validateDuration,
   type ExportPreset,
 } from '../exportPresets';
@@ -254,5 +256,47 @@ describe('formatBitrate', () => {
 
   it('formats sub-megabit rates in kbps', () => {
     expect(formatBitrate(800)).toBe('800 kbps');
+  });
+});
+
+describe('resolveExportPreset', () => {
+  it('returns the matching preset for a known id', () => {
+    expect(resolveExportPreset('tiktok').id).toBe('tiktok');
+    expect(resolveExportPreset('youtube-shorts').id).toBe('youtube-shorts');
+  });
+
+  it('falls back to the default preset for an unknown id', () => {
+    expect(resolveExportPreset('myspace').id).toBe(DEFAULT_EXPORT_PRESET_ID);
+  });
+
+  it('falls back to the default preset for null or undefined', () => {
+    expect(resolveExportPreset(null).id).toBe(DEFAULT_EXPORT_PRESET_ID);
+    expect(resolveExportPreset(undefined).id).toBe(DEFAULT_EXPORT_PRESET_ID);
+    expect(resolveExportPreset('').id).toBe(DEFAULT_EXPORT_PRESET_ID);
+  });
+
+  it('never throws for arbitrary input', () => {
+    expect(() => resolveExportPreset('anything')).not.toThrow();
+  });
+});
+
+describe('resolveExportQuality', () => {
+  it('returns the matching quality tier for a known id', () => {
+    expect(resolveExportQuality('draft').id).toBe('draft');
+    expect(resolveExportQuality('high').id).toBe('high');
+  });
+
+  it('falls back to the default quality for an unknown id', () => {
+    expect(resolveExportQuality('ultra').id).toBe(DEFAULT_EXPORT_QUALITY);
+  });
+
+  it('falls back to the default quality for null or undefined', () => {
+    expect(resolveExportQuality(null).id).toBe(DEFAULT_EXPORT_QUALITY);
+    expect(resolveExportQuality(undefined).id).toBe(DEFAULT_EXPORT_QUALITY);
+    expect(resolveExportQuality('').id).toBe(DEFAULT_EXPORT_QUALITY);
+  });
+
+  it('never throws for arbitrary input', () => {
+    expect(() => resolveExportQuality('anything')).not.toThrow();
   });
 });
