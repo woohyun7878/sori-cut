@@ -55,9 +55,10 @@ export function TransportBar() {
           <button
             className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-600 text-lg font-semibold text-white shadow-lg shadow-brand-900/50 transition-colors hover:bg-brand-700"
             type="button"
+            aria-label={isPlaying ? 'Pause' : 'Play'}
             onClick={() => setIsPlaying(!isPlaying)}
           >
-            {isPlaying ? '❚❚' : '▶'}
+            <span aria-hidden="true">{isPlaying ? '❚❚' : '▶'}</span>
           </button>
           <button
             className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-brand-400/60"
@@ -74,6 +75,7 @@ export function TransportBar() {
                 : 'border-gray-700 bg-gray-900 text-gray-200 hover:border-brand-400/60',
             ].join(' ')}
             type="button"
+            aria-pressed={loopEnabled}
             onClick={() => setLoopEnabled(!loopEnabled)}
           >
             Loop
@@ -90,13 +92,14 @@ export function TransportBar() {
         <button
           className="relative block h-4 w-full overflow-hidden rounded-full border border-gray-800 bg-gray-950"
           type="button"
+          aria-label={`Seek. ${formatTime(playheadPosition)} of ${formatTime(totalDuration)}`}
           onClick={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             const nextPosition = ((event.clientX - rect.left) / rect.width) * totalDuration;
             setPlayheadPosition(nextPosition);
           }}
         >
-          <span className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-500 to-brand-400" style={{ width: `${progressPercent}%` }} />
+          <span className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-500 to-brand-400" style={{ width: `${progressPercent}%` }} aria-hidden="true" />
         </button>
       </div>
     </section>

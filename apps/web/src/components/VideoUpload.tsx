@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, useMemo, useState } from 'react';
+import { ChangeEvent, DragEvent, useMemo, useRef, useState } from 'react';
 import { useProjectStore, type VideoFile } from '../store/useProjectStore';
 
 const ACCEPTED_VIDEO_TYPES = '.mp4,.mov,.webm,video/mp4,video/quicktime,video/webm';
@@ -56,6 +56,7 @@ export function VideoUpload({ compact = false, showPreview = true }: VideoUpload
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const metadata = useMemo(() => {
     if (!video) {
@@ -117,6 +118,9 @@ export function VideoUpload({ compact = false, showPreview = true }: VideoUpload
             : 'rounded-3xl border-2 border-dashed bg-gray-950/70 p-8 text-center transition-colors',
           isDragging ? 'border-brand-400 bg-brand-600/10' : 'border-gray-700 hover:border-brand-500/70',
         ].join(' ')}
+        role="group"
+        aria-label="Upload a video file"
+        aria-busy={isLoading}
         onDragEnter={() => setIsDragging(true)}
         onDragLeave={() => setIsDragging(false)}
         onDragOver={(event) => {
@@ -125,9 +129,19 @@ export function VideoUpload({ compact = false, showPreview = true }: VideoUpload
         }}
         onDrop={(event) => void handleDrop(event)}
       >
-        <input accept={ACCEPTED_VIDEO_TYPES} className="hidden" id="video-upload" type="file" onChange={(event) => void handleInputChange(event)} />
+        <input
+          ref={inputRef}
+          accept={ACCEPTED_VIDEO_TYPES}
+          className="hidden"
+          type="file"
+          aria-label="Choose a video file"
+          onChange={(event) => void handleInputChange(event)}
+        />
 
-        <div className={compact ? 'mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-control bg-hover text-xl' : 'mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl'}>
+        <div
+          className={compact ? 'mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-control bg-hover text-xl' : 'mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl'}
+          aria-hidden="true"
+        >
           🎬
         </div>
 
@@ -135,15 +149,20 @@ export function VideoUpload({ compact = false, showPreview = true }: VideoUpload
         <p className="mt-1 text-xs text-secondary">or click to browse</p>
         <p className="mt-2 text-[11px] text-muted">MP4 · MOV · WEBM</p>
 
-        <label
-          className={compact ? 'studio-primary-button mt-4 cursor-pointer' : 'mt-6 inline-flex cursor-pointer items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700'}
-          htmlFor="video-upload"
+        <button
+          type="button"
+          className={compact ? 'studio-primary-button mt-4' : 'mt-6 inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700'}
+          onClick={() => inputRef.current?.click()}
+          disabled={isLoading}
         >
           {isLoading ? 'Loading...' : 'Browse Video'}
-        </label>
+        </button>
 
         {error ? (
-          <div className="mt-5 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+          <div
+            role="alert"
+            className="mt-5 rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200"
+          >
             {error}
           </div>
         ) : null}
