@@ -8,10 +8,13 @@ import {
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { ClipWaveform } from './ClipWaveform';
 import {
+  computeTrimGeometry,
   formatTimelineTime,
   getMarkerStep,
   getTrackPalette,
+  MIN_TRIM_DURATION,
   snapTimelineTime,
+  TRIM_COMMIT_TOLERANCE,
 } from './timelineHelpers';
 
 function TrackInspector({ track }: { track: TimelineTrack }) {
@@ -83,9 +86,23 @@ function TrackInspector({ track }: { track: TimelineTrack }) {
 interface TrimDragState {
   trackId: string;
   edge: 'left' | 'right';
-  initialMouseX: number;
+  pointerId: number;
+  initialPointerX: number;
   initialOffset: number;
   initialDuration: number;
+  initialSourceStartOffset: number;
+  /** Maximum known source extent: initialSourceStartOffset + initialDuration. */
+  knownSourceEnd: number;
+  /** Source URL at drag start — used to detect source replacement. */
+  sourceUrl: string;
+}
+
+/** Local preview override during a trim gesture (not yet committed to store). */
+interface TrimPreview {
+  trackId: string;
+  offset: number;
+  duration: number;
+  sourceStartOffset: number;
 }
 
 interface ContextMenuState {
@@ -98,6 +115,7 @@ function TimelineClip({
   track,
   zoom,
   isSelected,
+  trimPreview,
   onSelect,
   onContextMenu,
   onTrimStart,
@@ -105,11 +123,15 @@ function TimelineClip({
   track: TimelineTrack;
   zoom: number;
   isSelected: boolean;
+  trimPreview: TrimPreview | null;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
-  onTrimStart: (edge: 'left' | 'right', e: React.MouseEvent) => void;
+  onTrimStart: (edge: 'left' | 'right', e: React.PointerEvent) => void;
 }) {
-  const clipWidth = Math.max(track.duration * zoom, 48);
+  const displayOffset = trimPreview ? trimPreview.offset : track.startOffset;
+  const displayDuration = trimPreview ? trimPreview.duration : track.duration;
+  const displaySourceStartOffset = trimPreview ? trimPreview.sourceStartOffset : track.sourceStartOffset;
+  const clipWidth = Math.max(displayDuration * zoom, 48);
   const clipHeight = 36;
   const palette = getTrackPalette(track);
 
@@ -133,7 +155,7 @@ function TimelineClip({
           : 'hover:brightness-125',
       ].join(' ')}
       style={{
-        left: track.startOffset * zoom,
+        left: displayOffset * zoom,
         width: clipWidth,
         opacity: track.muted ? 0.45 : 1,
       }}
@@ -162,8 +184,8 @@ function TimelineClip({
       {track.sourceUrl && (
         <ClipWaveform
           sourceUrl={track.sourceUrl}
-          sourceStartOffset={track.sourceStartOffset}
-          duration={track.duration}
+          sourceStartOffset={displaySourceStartOffset}
+          duration={displayDuration}
           width={clipWidth}
           height={clipHeight}
           color={palette.waveform}
@@ -177,7 +199,7 @@ function TimelineClip({
           'absolute left-0 top-0 z-10 h-full w-1.5 cursor-col-resize transition-colors',
           isSelected ? 'bg-white' : 'bg-white/20 group-hover:bg-white/70',
         ].join(' ')}
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
           e.stopPropagation();
           onTrimStart('left', e);
         }}
@@ -190,7 +212,7 @@ function TimelineClip({
           'absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize transition-colors',
           isSelected ? 'bg-white' : 'bg-white/20 group-hover:bg-white/70',
         ].join(' ')}
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
           e.stopPropagation();
           onTrimStart('right', e);
         }}
@@ -202,7 +224,7 @@ function TimelineClip({
         </p>
       </div>
       <span className="pointer-events-none relative z-[5] ml-2 shrink-0 text-xs text-white/80 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-        {formatTimelineTime(track.duration, true)}
+        {formatTimelineTime(displayDuration, true)}
       </span>
     </div>
   );
@@ -225,11 +247,18 @@ export function Timeline() {
   const [newTrackType, setNewTrackType] = useState<TrackType>('audio');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [trimDrag, setTrimDrag] = useState<TrimDragState | null>(null);
+  const [trimPreview, setTrimPreview] = useState<TrimPreview | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const trimElementRef = useRef<Element | null>(null);
+  const trimPreviewRef = useRef<TrimPreview | null>(null);
+  const trimDragRef = useRef<TrimDragState | null>(null);
+  const gestureCleanupRef = useRef<(() => void) | null>(null);
+  /** Ref to always-current compute function so listeners pick up zoom/snap changes. */
+  const computeRef = useRef<((drag: TrimDragState, clientX: number) => TrimPreview | null) | null>(null);
   useFocusTrap(showDeleteConfirm !== null, deleteDialogRef, () => setShowDeleteConfirm(null));
 
   const totalDuration = useMemo(
@@ -243,45 +272,139 @@ export function Timeline() {
     (_, index) => index * markerStep,
   );
 
-  // Handle trim drag
-  const handleTrimMouseMove = useCallback(
-    (e: MouseEvent) => {
-      if (!trimDrag) return;
-
-      const deltaX = e.clientX - trimDrag.initialMouseX;
+  // Compute local trim preview from pointer delta — delegates to pure geometry function
+  const computeTrimPreview = useCallback(
+    (drag: TrimDragState, clientX: number): TrimPreview | null => {
+      const deltaX = clientX - drag.initialPointerX;
       const deltaTime = deltaX / zoom;
 
-      if (trimDrag.edge === 'left') {
-        const newOffset = snapTimelineTime(trimDrag.initialOffset + deltaTime, snapEnabled);
-        const initialEnd = trimDrag.initialOffset + trimDrag.initialDuration;
-        const newDuration = initialEnd - newOffset;
-        if (newDuration >= 0.5) {
-          trimTrack(trimDrag.trackId, newOffset, newDuration);
-        }
-      } else {
-        const initialEnd = trimDrag.initialOffset + trimDrag.initialDuration;
-        const newEnd = snapTimelineTime(initialEnd + deltaTime, snapEnabled);
-        const newDuration = Math.max(0.5, newEnd - trimDrag.initialOffset);
-        trimTrack(trimDrag.trackId, trimDrag.initialOffset, newDuration);
-      }
+      const result = computeTrimGeometry({
+        edge: drag.edge,
+        initialOffset: drag.initialOffset,
+        initialDuration: drag.initialDuration,
+        initialSourceStartOffset: drag.initialSourceStartOffset,
+        knownSourceEnd: drag.knownSourceEnd,
+        deltaTime,
+        snapEnabled,
+      });
+
+      if (!result) return null;
+      return { trackId: drag.trackId, ...result };
     },
-    [snapEnabled, trimDrag, zoom, trimTrack],
+    [zoom, snapEnabled],
   );
 
-  const handleTrimMouseUp = useCallback(() => {
-    setTrimDrag(null);
+  // Keep compute ref current so gesture listeners always use latest zoom/snap
+  computeRef.current = computeTrimPreview;
+
+  // Cleanup on component unmount — always discard (never commit)
+  useEffect(() => {
+    return () => {
+      gestureCleanupRef.current?.();
+    };
   }, []);
 
+  // Cancel gesture if track disappears or source identity changes
   useEffect(() => {
-    if (trimDrag) {
-      window.addEventListener('mousemove', handleTrimMouseMove);
-      window.addEventListener('mouseup', handleTrimMouseUp);
-      return () => {
-        window.removeEventListener('mousemove', handleTrimMouseMove);
-        window.removeEventListener('mouseup', handleTrimMouseUp);
-      };
+    const drag = trimDragRef.current;
+    if (!drag) return;
+    const track = tracks.find((t) => t.id === drag.trackId);
+    if (!track || track.sourceUrl !== drag.sourceUrl) {
+      gestureCleanupRef.current?.();
     }
-  }, [trimDrag, handleTrimMouseMove, handleTrimMouseUp]);
+  }, [tracks]);
+
+  /** Start an imperative trim gesture. Listeners are on window (tolerates capture loss). */
+  const startTrimGesture = useCallback(
+    (drag: TrimDragState, element: Element) => {
+      // Finalize any prior gesture (safety / re-entry)
+      gestureCleanupRef.current?.();
+
+      trimDragRef.current = drag;
+      trimPreviewRef.current = null;
+      trimElementRef.current = element;
+
+      let finalized = false;
+
+      const finalize = (action: 'commit' | 'discard') => {
+        if (finalized) return; // idempotent: multiple finalizers produce at most one commit
+        finalized = true;
+
+        // Remove all listeners
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onDiscard);
+        window.removeEventListener('blur', onDiscard);
+        element.removeEventListener('lostpointercapture', onDiscard);
+
+        // Release pointer capture if held (tolerate failure)
+        try {
+          if (element.hasPointerCapture(drag.pointerId)) {
+            element.releasePointerCapture(drag.pointerId);
+          }
+        } catch {
+          /* tolerate capture already lost */
+        }
+
+        // Commit only on pointerup with material change
+        if (action === 'commit') {
+          const preview = trimPreviewRef.current;
+          if (preview) {
+            const offsetDelta = Math.abs(preview.offset - drag.initialOffset);
+            const durationDelta = Math.abs(preview.duration - drag.initialDuration);
+            if (offsetDelta > TRIM_COMMIT_TOLERANCE || durationDelta > TRIM_COMMIT_TOLERANCE) {
+              // Verify track still exists with same source
+              const currentTracks = useProjectStore.getState().tracks;
+              const t = currentTracks.find((tr) => tr.id === drag.trackId);
+              if (t && t.sourceUrl === drag.sourceUrl) {
+                trimTrack(drag.trackId, preview.offset, preview.duration);
+              }
+            }
+          }
+        }
+
+        // Reset all state
+        trimDragRef.current = null;
+        trimPreviewRef.current = null;
+        trimElementRef.current = null;
+        gestureCleanupRef.current = null;
+        setTrimDrag(null);
+        setTrimPreview(null);
+      };
+
+      const onMove = (e: PointerEvent) => {
+        if (e.pointerId !== drag.pointerId) return;
+        const preview = computeRef.current?.(drag, e.clientX);
+        if (preview) {
+          trimPreviewRef.current = preview;
+          setTrimPreview(preview);
+        }
+      };
+
+      const onUp = (e: PointerEvent) => {
+        if (e.pointerId !== drag.pointerId) return;
+        finalize('commit');
+      };
+
+      const onDiscard = () => {
+        finalize('discard');
+      };
+
+      // Register window-level listeners (work even if capture is lost)
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onDiscard);
+      window.addEventListener('blur', onDiscard);
+      element.addEventListener('lostpointercapture', onDiscard);
+
+      // Store discard-cleanup for external callers (unmount, track removal)
+      gestureCleanupRef.current = () => finalize('discard');
+
+      // Set state to trigger render
+      setTrimDrag(drag);
+    },
+    [trimTrack],
+  );
 
   // Close context menu on click outside
   useEffect(() => {
@@ -482,18 +605,28 @@ export function Timeline() {
                     isSelected={selectedTrackId === track.id}
                     track={track}
                     zoom={zoom}
+                    trimPreview={trimPreview?.trackId === track.id ? trimPreview : null}
                     onContextMenu={(e) => {
                       setContextMenu({ trackId: track.id, x: e.clientX, y: e.clientY });
                     }}
                     onSelect={() => setSelectedTrack(track.id)}
                     onTrimStart={(edge, e) => {
-                      setTrimDrag({
-                        trackId: track.id,
-                        edge,
-                        initialMouseX: e.clientX,
-                        initialOffset: track.startOffset,
-                        initialDuration: track.duration,
-                      });
+                      const element = e.currentTarget;
+                      element.setPointerCapture(e.pointerId);
+                      startTrimGesture(
+                        {
+                          trackId: track.id,
+                          edge,
+                          pointerId: e.pointerId,
+                          initialPointerX: e.clientX,
+                          initialOffset: track.startOffset,
+                          initialDuration: track.duration,
+                          initialSourceStartOffset: track.sourceStartOffset,
+                          knownSourceEnd: track.sourceStartOffset + track.duration,
+                          sourceUrl: track.sourceUrl,
+                        },
+                        element,
+                      );
                     }}
                   />
 

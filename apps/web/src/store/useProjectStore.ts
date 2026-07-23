@@ -366,9 +366,14 @@ export const useProjectStore = create<ProjectState>()(
           removeTracksByPrefix(state.tracks, 'stem-'),
         );
 
+        const selectedStillPresent =
+          !state.selectedTrackId ||
+          nextTracks.some((t) => t.id === state.selectedTrackId);
+
         return {
           stems,
           tracks: nextTracks,
+          ...(selectedStillPresent ? {} : { selectedTrackId: null }),
         };
       }),
     toggleStemMute: (id) =>
@@ -437,19 +442,24 @@ export const useProjectStore = create<ProjectState>()(
       set((state) => {
         const recordingToRemove = state.recordings.find((recording) => recording.id === id);
         revokeUrl(recordingToRemove?.url);
+        const removedTrackId = `recording-${id}`;
 
         return {
           recordings: state.recordings.filter((recording) => recording.id !== id),
-          tracks: state.tracks.filter((track) => track.id !== `recording-${id}`),
+          tracks: state.tracks.filter((track) => track.id !== removedTrackId),
+          selectedTrackId: state.selectedTrackId === removedTrackId ? null : state.selectedTrackId,
         };
       }),
     setVideo: (video) =>
       set((state) => {
         if (!video) {
           revokeUrl(state.video?.url);
+          const removedVideoTracks = state.tracks.filter((track) => track.type === 'video');
+          const selectedCleared = removedVideoTracks.some((t) => t.id === state.selectedTrackId);
           return {
             video: null,
             tracks: state.tracks.filter((track) => track.type !== 'video'),
+            ...(selectedCleared ? { selectedTrackId: null } : {}),
           };
         }
 
@@ -471,9 +481,14 @@ export const useProjectStore = create<ProjectState>()(
           video.duration || 8,
         );
 
+        const nextTracks = [videoTrack, ...state.tracks.filter((track) => track.type !== 'video')];
+        const selectedStillPresent =
+          !state.selectedTrackId || nextTracks.some((t) => t.id === state.selectedTrackId);
+
         return {
           video,
-          tracks: [videoTrack, ...state.tracks.filter((track) => track.type !== 'video')],
+          tracks: nextTracks,
+          ...(selectedStillPresent ? {} : { selectedTrackId: null }),
         };
       }),
     addTrack: (track = {}) => {
@@ -492,6 +507,7 @@ export const useProjectStore = create<ProjectState>()(
     removeTrack: (id) =>
       set((state) => ({
         tracks: state.tracks.filter((track) => track.id !== id),
+        selectedTrackId: state.selectedTrackId === id ? null : state.selectedTrackId,
       })),
     updateTrackOffset: (id, offset) =>
       set((state) => ({
