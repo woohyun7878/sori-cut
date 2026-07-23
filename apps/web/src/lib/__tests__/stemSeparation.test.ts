@@ -1,31 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { separateStems } from '../stemSeparation';
 
-/**
- * Mock Worker that simulates the stem separation worker's message protocol.
- */
+// ─── Mock Worker helpers ───────────────────────────────────────────────────
+
 class MockWorker {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
-
   private terminated = false;
 
   postMessage(msg: unknown) {
     if (this.terminated) return;
-
     const data = msg as { type: string; channelData: Float32Array[]; sampleRate: number };
 
     if (data.type === 'separate') {
-      // Simulate async worker processing
       setTimeout(() => {
         if (this.terminated) return;
-
-        // Send progress updates
         this.onmessage?.({ data: { type: 'progress', progress: 0 } } as MessageEvent);
         this.onmessage?.({ data: { type: 'progress', progress: 50 } } as MessageEvent);
         this.onmessage?.({ data: { type: 'progress', progress: 100 } } as MessageEvent);
 
-        // Build fake stem results
         const length = data.channelData[0]?.length ?? 4410;
         const stems = [
           { name: 'vocals', label: 'Vocals', channelData: [new Float32Array(length)] },
@@ -33,7 +26,6 @@ class MockWorker {
           { name: 'bass', label: 'Bass', channelData: [new Float32Array(length)] },
           { name: 'guitar', label: 'Guitar', channelData: [new Float32Array(length)] },
         ];
-
         this.onmessage?.({ data: { type: 'result', stems } } as MessageEvent);
       }, 0);
     }
@@ -44,9 +36,6 @@ class MockWorker {
   }
 }
 
-/**
- * MockWorker variant that simulates a worker error.
- */
 class MockWorkerError {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
@@ -65,27 +54,39 @@ class MockWorkerError {
   terminate() {}
 }
 
-// Mock the Worker constructor globally
-vi.stubGlobal('Worker', MockWorker);
+/** Worker that never responds — for timeout testing. */
+class MockWorkerHanging {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  postMessage() {}
+  terminate() {}
+}
 
-// Mock URL.createObjectURL without overwriting the URL constructor
+// ─── Global mocks ───────────────────────────────────────────────────────────
+
 const originalURL = globalThis.URL;
 vi.stubGlobal('URL', class extends originalURL {
   static createObjectURL = () => 'blob:mock-stem-url';
   static revokeObjectURL = vi.fn();
 });
 
-function createMockAudioBuffer(length = 4410): AudioBuffer {
+vi.stubGlobal('Worker', MockWorker);
+
+function createMockAudioBuffer(opts: { length?: number; channels?: number; sampleRate?: number; duration?: number } = {}): AudioBuffer {
+  const length = opts.length ?? 4410;
+  const channels = opts.channels ?? 1;
+  const sampleRate = opts.sampleRate ?? 44100;
+  const duration = opts.duration ?? length / sampleRate;
   const channelData = new Float32Array(length);
-  for (let i = 0; i < channelData.length; i++) {
+  for (let i = 0; i < length; i++) {
     channelData[i] = Math.sin(i * 0.1) * 0.5;
   }
 
   return {
-    numberOfChannels: 1,
+    numberOfChannels: channels,
     length,
-    sampleRate: 44100,
-    duration: length / 44100,
+    sampleRate,
+    duration,
     getChannelData: () => channelData,
     copyFromChannel: vi.fn(),
     copyToChannel: vi.fn(),
@@ -102,91 +103,80 @@ describe('separateStems', () => {
     vi.restoreAllMocks();
   });
 
+  // ─── Happy-path tests ───
+
   it('returns 4 stems', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const stems = await separateStems(audioBuffer);
+    const stems = await separateStems(createMockAudioBuffer());
     expect(stems).toHaveLength(4);
   });
 
   it('returns stems with correct names', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const stems = await separateStems(audioBuffer);
-    const names = stems.map((s) => s.name);
-    expect(names).toContain('vocals');
-    expect(names).toContain('drums');
-    expect(names).toContain('bass');
-    expect(names).toContain('guitar');
+    const stems = await separateStems(createMockAudioBuffer());
+    expect(stems.map(s => s.name)).toEqual(['vocals', 'drums', 'bass', 'guitar']);
   });
 
   it('returns stems with English labels', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const stems = await separateStems(audioBuffer);
-    const labels = stems.map((s) => s.label);
-    expect(labels).toContain('Vocals');
-    expect(labels).toContain('Drums');
-    expect(labels).toContain('Bass');
-    expect(labels).toContain('Guitar');
+    const stems = await separateStems(createMockAudioBuffer());
+    expect(stems.map(s => s.label)).toEqual(['Vocals', 'Drums', 'Bass', 'Guitar']);
   });
 
   it('each stem has a blob and url', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const stems = await separateStems(audioBuffer);
+    const stems = await separateStems(createMockAudioBuffer());
     for (const stem of stems) {
       expect(stem.blob).toBeInstanceOf(Blob);
       expect(stem.url).toBeTruthy();
     }
   });
 
-  it('calls onProgress callback', async () => {
-    const audioBuffer = createMockAudioBuffer();
+  it('calls onProgress callback with 0 immediately', async () => {
     const onProgress = vi.fn();
-    await separateStems(audioBuffer, onProgress);
-    expect(onProgress).toHaveBeenCalled();
+    const p = separateStems(createMockAudioBuffer(), onProgress);
     expect(onProgress).toHaveBeenCalledWith(0);
+    await p;
   });
 
   it('progress reaches 100', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const progressValues: number[] = [];
-    await separateStems(audioBuffer, (p) => progressValues.push(p));
-    expect(progressValues).toContain(100);
+    const values: number[] = [];
+    await separateStems(createMockAudioBuffer(), (v) => values.push(v));
+    expect(values).toContain(100);
   });
 
   it('stems have wav blob type', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const stems = await separateStems(audioBuffer);
+    const stems = await separateStems(createMockAudioBuffer());
     for (const stem of stems) {
       expect(stem.blob.type).toBe('audio/wav');
     }
   });
 
   it('supports custom model URL via options', async () => {
-    const audioBuffer = createMockAudioBuffer();
-    const stems = await separateStems(audioBuffer, undefined, {
-      modelUrl: '/custom/model.onnx',
-    });
+    const stems = await separateStems(createMockAudioBuffer(), undefined, { modelUrl: '/custom/model.onnx' });
     expect(stems).toHaveLength(4);
   });
 
+  // ─── Error handling ───
+
   it('rejects when worker reports an error', async () => {
     vi.stubGlobal('Worker', MockWorkerError);
-    const audioBuffer = createMockAudioBuffer();
-
-    await expect(separateStems(audioBuffer)).rejects.toThrow('Model inference failed');
+    await expect(separateStems(createMockAudioBuffer())).rejects.toThrow('Model inference failed');
   });
 
-  it('terminates worker after completion', async () => {
+  it('terminates worker after success', async () => {
     const terminateSpy = vi.fn();
     class SpyWorker extends MockWorker {
-      override terminate() {
-        terminateSpy();
-        super.terminate();
-      }
+      override terminate() { terminateSpy(); super.terminate(); }
     }
     vi.stubGlobal('Worker', SpyWorker);
+    await separateStems(createMockAudioBuffer());
+    expect(terminateSpy).toHaveBeenCalledOnce();
+  });
 
-    const audioBuffer = createMockAudioBuffer();
-    await separateStems(audioBuffer);
+  it('terminates worker after error', async () => {
+    const terminateSpy = vi.fn();
+    class SpyWorkerErr extends MockWorkerError {
+      override terminate() { terminateSpy(); super.terminate(); }
+    }
+    vi.stubGlobal('Worker', SpyWorkerErr);
+    await expect(separateStems(createMockAudioBuffer())).rejects.toThrow();
     expect(terminateSpy).toHaveBeenCalledOnce();
   });
 
@@ -195,30 +185,81 @@ describe('separateStems', () => {
     let created = 0;
     const revoked: string[] = [];
 
-    vi.stubGlobal(
-      'URL',
-      class extends originalURL {
-        static createObjectURL = () => {
-          created += 1;
-          // Fail while building the third stem, after two URLs already exist.
-          if (created === 3) {
-            throw new Error('createObjectURL failed');
-          }
-          return `blob:mock-stem-${created}`;
-        };
-        static revokeObjectURL = (url: string) => {
-          revoked.push(url);
-        };
-      },
-    );
+    vi.stubGlobal('URL', class extends originalURL {
+      static createObjectURL = () => {
+        created += 1;
+        if (created === 3) throw new Error('createObjectURL failed');
+        return `blob:mock-stem-${created}`;
+      };
+      static revokeObjectURL = (url: string) => { revoked.push(url); };
+    });
 
-    try {
-      const audioBuffer = createMockAudioBuffer();
-      await expect(separateStems(audioBuffer)).rejects.toThrow('createObjectURL failed');
-      // The two URLs created before the failure must be revoked, not orphaned.
-      expect(revoked).toEqual(['blob:mock-stem-1', 'blob:mock-stem-2']);
-    } finally {
-      vi.stubGlobal('URL', savedURL);
+    await expect(separateStems(createMockAudioBuffer())).rejects.toThrow('createObjectURL failed');
+    expect(revoked).toEqual(['blob:mock-stem-1', 'blob:mock-stem-2']);
+    vi.stubGlobal('URL', savedURL);
+  });
+
+  // ─── Input validation ───
+
+  it('rejects empty audio buffer', async () => {
+    const buf = createMockAudioBuffer({ length: 0 });
+    await expect(separateStems(buf)).rejects.toThrow(/empty or invalid/i);
+  });
+
+  it('rejects too many channels', async () => {
+    const buf = createMockAudioBuffer({ channels: 8 });
+    await expect(separateStems(buf)).rejects.toThrow(/too many channels/i);
+  });
+
+  it('rejects audio longer than max duration', async () => {
+    const buf = createMockAudioBuffer({ duration: 700, length: 44100 });
+    await expect(separateStems(buf)).rejects.toThrow(/too long/i);
+  });
+
+  it('rejects invalid sample rate', async () => {
+    const buf = createMockAudioBuffer({ sampleRate: -1, duration: 0.1 });
+    await expect(separateStems(buf)).rejects.toThrow(/sample rate/i);
+  });
+
+  // ─── Cancellation ───
+
+  it('rejects immediately if signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      separateStems(createMockAudioBuffer(), undefined, { signal: controller.signal })
+    ).rejects.toThrow(/aborted/i);
+  });
+
+  it('rejects and terminates worker when signal fires mid-processing', async () => {
+    const terminateSpy = vi.fn();
+    class SlowWorker extends MockWorker {
+      override terminate() { terminateSpy(); super.terminate(); }
+      override postMessage() { /* never respond */ }
     }
+    vi.stubGlobal('Worker', SlowWorker);
+
+    const controller = new AbortController();
+    const p = separateStems(createMockAudioBuffer(), undefined, { signal: controller.signal });
+    controller.abort();
+
+    await expect(p).rejects.toThrow(/cancelled/i);
+    expect(terminateSpy).toHaveBeenCalled();
+  });
+
+  // ─── Timeout ───
+
+  it('rejects with timeout error when worker hangs', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('Worker', MockWorkerHanging);
+    const p = separateStems(createMockAudioBuffer(), undefined, { timeoutMs: 1000 });
+    vi.advanceTimersByTime(1001);
+    await expect(p).rejects.toThrow(/timed out/i);
+    vi.useRealTimers();
+  });
+
+  it('does not timeout when timeoutMs is 0', async () => {
+    const stems = await separateStems(createMockAudioBuffer(), undefined, { timeoutMs: 0 });
+    expect(stems).toHaveLength(4);
   });
 });

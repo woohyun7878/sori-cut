@@ -190,8 +190,30 @@ export function encodeWavBlob(
   channelData: Float32Array[],
   sampleRate: number,
 ): Blob {
+  if (!channelData || channelData.length === 0) {
+    throw new Error('encodeWavBlob: channelData must be a non-empty array.');
+  }
+
   const numberOfChannels = channelData.length;
   const length = channelData[0].length;
+
+  if (length === 0) {
+    throw new Error('encodeWavBlob: channel data is empty (0 samples).');
+  }
+
+  // Verify all channels have the same length
+  for (let ch = 1; ch < numberOfChannels; ch++) {
+    if (channelData[ch].length !== length) {
+      throw new Error(
+        `encodeWavBlob: channel length mismatch (ch0=${length}, ch${ch}=${channelData[ch].length}).`
+      );
+    }
+  }
+
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new Error(`encodeWavBlob: invalid sampleRate ${sampleRate}.`);
+  }
+
   const bitDepth = 16;
   const bytesPerSample = bitDepth / 8;
   const blockAlign = numberOfChannels * bytesPerSample;
