@@ -10,12 +10,18 @@ import {
   exportPresets,
   exportQualityOptions,
   formatBitrate,
-  getExportPreset,
-  getExportQuality,
+  resolveExportPreset,
+  resolveExportQuality,
   validateDuration,
   type ExportPresetId,
   type ExportQuality,
 } from '../lib/exportPresets';
+import {
+  buildInputVideoName,
+  clampProgress,
+  getExportScratchFiles,
+  resolveExportDuration,
+} from '../lib/exportPipeline';
 import { calculateProjectDuration, useProjectStore } from '../store/useProjectStore';
 
 interface ExportStats {
@@ -26,8 +32,9 @@ interface ExportStats {
 const FFMPEG_CORE_VERSION = '0.12.6';
 
 function formatDuration(duration: number) {
-  const minutes = Math.floor(duration / 60);
-  const seconds = Math.floor(duration % 60);
+  const safe = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const minutes = Math.floor(safe / 60);
+  const seconds = Math.floor(safe % 60);
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
@@ -51,11 +58,26 @@ async function loadFFmpeg(ffmpeg: FFmpeg) {
   await ffmpeg.load({ coreURL, wasmURL });
 }
 
+/** Best-effort removal of scratch files from the FFmpeg virtual FS. */
+async function cleanupScratchFiles(ffmpeg: FFmpeg, files: string[]) {
+  for (const file of files) {
+    try {
+      await ffmpeg.deleteFile(file);
+    } catch {
+      // The file may never have been written (early failure) or the worker may
+      // already be torn down — either way there is nothing to recover.
+    }
+  }
+}
+
 export function ExportPanel() {
   const video = useProjectStore((state) => state.video);
   const tracks = useProjectStore((state) => state.tracks);
   const totalDuration = useMemo(() => calculateProjectDuration(tracks, video), [tracks, video]);
   const ffmpegRef = useRef<FFmpeg | null>(null);
+  const isExportingRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const canceledRef = useRef(false);
   const [presetId, setPresetId] = useState<ExportPresetId>(DEFAULT_EXPORT_PRESET_ID);
   const [quality, setQuality] = useState<ExportQuality>(DEFAULT_EXPORT_QUALITY);
   const [progress, setProgress] = useState(0);
@@ -66,8 +88,8 @@ export function ExportPanel() {
   const [downloadName, setDownloadName] = useState('sori-cut-export.mp4');
   const [stats, setStats] = useState<ExportStats | null>(null);
 
-  const preset = getExportPreset(presetId);
-  const qualityOption = getExportQuality(quality);
+  const preset = resolveExportPreset(presetId);
+  const qualityOption = resolveExportQuality(quality);
   const durationValidation = validateDuration(preset, totalDuration);
 
   useEffect(() => {
@@ -78,23 +100,85 @@ export function ExportPanel() {
     };
   }, [downloadUrl]);
 
+  // Tear down the FFmpeg web worker if the panel unmounts mid-export so we never
+  // leak a running worker or fire state updates on an unmounted component.
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+
+      if (ffmpegRef.current) {
+        try {
+          ffmpegRef.current.terminate();
+        } catch {
+          // Worker may already be gone; nothing else to do.
+        }
+        ffmpegRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleCancel = () => {
+    const ffmpeg = ffmpegRef.current;
+
+    if (!ffmpeg || !isExportingRef.current) {
+      return;
+    }
+
+    // Mark cancellation before terminating so the in-flight export's rejected
+    // promise is not surfaced as an error.
+    canceledRef.current = true;
+
+    try {
+      ffmpeg.terminate();
+    } catch {
+      // Ignore — the worker is being discarded regardless.
+    }
+
+    // A terminated instance cannot be reused; force a fresh load next run.
+    ffmpegRef.current = null;
+    isExportingRef.current = false;
+    setIsExporting(false);
+    setProgress(0);
+    setError(null);
+    setStatus('Export canceled');
+  };
+
   const handleExport = async () => {
+    // Hard guard against overlapping runs. The disabled button alone is not
+    // enough: state updates are async, so rapid re-entry can slip through.
+    if (isExportingRef.current) {
+      return;
+    }
+
     if (!video) {
       setError('Upload a video before exporting.');
       return;
     }
 
+    isExportingRef.current = true;
+    canceledRef.current = false;
     setIsExporting(true);
     setError(null);
     setProgress(0);
     setStatus('Loading FFmpeg...');
 
-    try {
-      const ffmpeg = ffmpegRef.current ?? new FFmpeg();
+    const inputName = buildInputVideoName(video.name);
+    const audioName = 'mixed-audio.wav';
+    const outputName = buildExportFileName(video.name, preset);
+    const scratchFiles = getExportScratchFiles(inputName, audioName, outputName);
+    const exportDuration = resolveExportDuration(totalDuration, video.duration);
+    let ffmpeg: FFmpeg | null = null;
 
-      if (!ffmpegRef.current) {
+    try {
+      ffmpeg = ffmpegRef.current ?? new FFmpeg();
+
+      if (ffmpegRef.current !== ffmpeg) {
         ffmpeg.on('progress', ({ progress: nextProgress }) => {
-          setProgress(Math.round(nextProgress * 100));
+          if (isMountedRef.current) {
+            setProgress(clampProgress(nextProgress));
+          }
         });
         ffmpegRef.current = ffmpeg;
       }
@@ -113,13 +197,9 @@ export function ExportPanel() {
             sourceStartOffset: track.sourceStartOffset,
             duration: track.duration,
           })),
-        totalDuration || video.duration,
+        exportDuration,
       );
       const wavBlob = audioBufferToWavBlob(mixedAudio);
-      const extension = video.name.includes('.') ? video.name.slice(video.name.lastIndexOf('.')) : '.mp4';
-      const inputName = `input-video${extension}`;
-      const audioName = 'mixed-audio.wav';
-      const outputName = buildExportFileName(video.name, preset);
 
       setStatus('Writing files to FFmpeg FS...');
       await ffmpeg.writeFile(inputName, await fetchFile(video.blob));
@@ -147,30 +227,53 @@ export function ExportPanel() {
         throw new Error('Could not read the exported file.');
       }
 
+      const blob = new Blob([new Uint8Array(output)], { type: 'video/mp4' });
+      const nextDownloadUrl = URL.createObjectURL(blob);
+
+      await cleanupScratchFiles(ffmpeg, scratchFiles);
+
+      // If the panel unmounted while encoding, drop the freshly created URL
+      // instead of leaking it, and skip the (now invalid) state updates.
+      if (!isMountedRef.current) {
+        URL.revokeObjectURL(nextDownloadUrl);
+        return;
+      }
+
       if (downloadUrl?.startsWith('blob:')) {
         URL.revokeObjectURL(downloadUrl);
       }
 
-      const blob = new Blob([new Uint8Array(output)], { type: 'video/mp4' });
-      const nextDownloadUrl = URL.createObjectURL(blob);
-
       setDownloadUrl(nextDownloadUrl);
       setDownloadName(outputName);
       setStats({
-        duration: totalDuration || video.duration,
+        duration: exportDuration,
         fileSize: formatFileSize(blob.size),
       });
       setProgress(100);
       setStatus('Export complete');
     } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? `Export failed: ${caughtError.message}`
-          : 'An unknown error occurred during export.',
-      );
-      setStatus(null);
+      // Cancellation rejects the in-flight promise; that is expected, not an error.
+      if (!canceledRef.current) {
+        if (ffmpeg) {
+          await cleanupScratchFiles(ffmpeg, scratchFiles);
+        }
+
+        if (isMountedRef.current) {
+          setError(
+            caughtError instanceof Error
+              ? `Export failed: ${caughtError.message}`
+              : 'An unknown error occurred during export.',
+          );
+          setStatus(null);
+          setProgress(0);
+        }
+      }
     } finally {
-      setIsExporting(false);
+      isExportingRef.current = false;
+
+      if (isMountedRef.current && !canceledRef.current) {
+        setIsExporting(false);
+      }
     }
   };
 
@@ -254,14 +357,26 @@ export function ExportPanel() {
         </div>
       ) : null}
 
-      <button
-        className="mt-6 w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
-        disabled={isExporting}
-        type="button"
-        onClick={() => void handleExport()}
-      >
-        {isExporting ? 'Exporting...' : 'Start Export'}
-      </button>
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+        <button
+          className="w-full rounded-xl bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
+          disabled={isExporting}
+          type="button"
+          onClick={() => void handleExport()}
+        >
+          {isExporting ? 'Exporting...' : 'Start Export'}
+        </button>
+
+        {isExporting ? (
+          <button
+            className="w-full rounded-xl border border-gray-700 px-4 py-3 text-sm font-semibold text-gray-200 transition-colors hover:border-gray-500 hover:text-white sm:w-auto sm:whitespace-nowrap sm:px-6"
+            type="button"
+            onClick={handleCancel}
+          >
+            Cancel
+          </button>
+        ) : null}
+      </div>
 
       {(isExporting || status) && (
         <div className="mt-4">
