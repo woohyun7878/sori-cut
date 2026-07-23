@@ -1,11 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  MIN_EXPORT_DURATION_SECONDS,
-  buildInputVideoName,
-  clampProgress,
-  getExportScratchFiles,
-  resolveExportDuration,
-} from '../exportPipeline';
+import { buildInputVideoName, clampProgress, resolveExportDuration } from '../exportPipeline';
 
 describe('clampProgress', () => {
   it('converts a fraction to an integer percentage', () => {
@@ -45,29 +39,32 @@ describe('resolveExportDuration', () => {
     expect(resolveExportDuration(-5, 30)).toBe(30);
   });
 
-  it('falls back to the floor when both durations are unusable', () => {
-    expect(resolveExportDuration(0, 0)).toBe(MIN_EXPORT_DURATION_SECONDS);
-    expect(resolveExportDuration(Number.NaN, Number.NaN)).toBe(MIN_EXPORT_DURATION_SECONDS);
+  it('rejects (returns null) when neither duration is authoritative', () => {
+    // No usable length: the component must refuse to export rather than let
+    // -shortest truncate the output to a guessed fallback.
+    expect(resolveExportDuration(0, 0)).toBeNull();
+    expect(resolveExportDuration(Number.NaN, Number.NaN)).toBeNull();
+    expect(resolveExportDuration(-1, -2)).toBeNull();
   });
 
-  it('never returns Infinity even when a source reports an unknown length', () => {
-    // Streamed/unknown-length media can report Infinity; that must not reach the mixer.
-    expect(resolveExportDuration(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)).toBe(
-      MIN_EXPORT_DURATION_SECONDS,
-    );
+  it('rejects an unknown (Infinity) length instead of using it', () => {
+    // Streamed/unknown-length media can report Infinity; that must not reach the
+    // mixer or the encoder.
+    expect(resolveExportDuration(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)).toBeNull();
     expect(resolveExportDuration(Number.POSITIVE_INFINITY, 12)).toBe(12);
   });
 
-  it('always returns a finite positive number', () => {
+  it('returns a finite positive number whenever it does not reject', () => {
     for (const [total, videoDuration] of [
-      [0, 0],
       [Number.NaN, Number.POSITIVE_INFINITY],
-      [-1, -2],
       [15, 20],
+      [0, 8],
     ] as const) {
       const result = resolveExportDuration(total, videoDuration);
-      expect(Number.isFinite(result)).toBe(true);
-      expect(result).toBeGreaterThan(0);
+      if (result !== null) {
+        expect(Number.isFinite(result)).toBe(true);
+        expect(result).toBeGreaterThan(0);
+      }
     }
   });
 });
@@ -101,29 +98,5 @@ describe('buildInputVideoName', () => {
   it('defaults to .mp4 for an empty or missing name', () => {
     expect(buildInputVideoName('')).toBe('input-video.mp4');
     expect(buildInputVideoName(undefined as unknown as string)).toBe('input-video.mp4');
-  });
-});
-
-describe('getExportScratchFiles', () => {
-  it('returns the distinct set of files written to the FS', () => {
-    expect(getExportScratchFiles('input-video.mp4', 'mixed-audio.wav', 'out.mp4')).toEqual([
-      'input-video.mp4',
-      'mixed-audio.wav',
-      'out.mp4',
-    ]);
-  });
-
-  it('drops empty names', () => {
-    expect(getExportScratchFiles('input-video.mp4', '', 'out.mp4')).toEqual([
-      'input-video.mp4',
-      'out.mp4',
-    ]);
-  });
-
-  it('de-duplicates repeated names', () => {
-    expect(getExportScratchFiles('same.mp4', 'mixed-audio.wav', 'same.mp4')).toEqual([
-      'same.mp4',
-      'mixed-audio.wav',
-    ]);
   });
 });

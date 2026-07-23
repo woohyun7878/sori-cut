@@ -19,7 +19,6 @@ import {
 import {
   buildInputVideoName,
   clampProgress,
-  getExportScratchFiles,
   resolveExportDuration,
 } from '../lib/exportPipeline';
 import { calculateProjectDuration, useProjectStore } from '../store/useProjectStore';
@@ -46,27 +45,58 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-async function loadFFmpeg(ffmpeg: FFmpeg) {
+function revokeObjectUrlSafely(url: string | null | undefined) {
+  if (!url) {
+    return;
+  }
+
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    // Revocation is best-effort; never let it mask a primary export error.
+  }
+}
+
+function terminateInstance(ffmpeg: FFmpeg | null) {
+  if (!ffmpeg) {
+    return;
+  }
+
+  try {
+    ffmpeg.terminate();
+  } catch {
+    // The worker may already be gone; discarding it is all that matters.
+  }
+}
+
+/**
+ * Loads the FFmpeg core, revoking the core/WASM object URLs it creates on every
+ * path — success, failure, or an early bail-out when the run is no longer
+ * current — including when only the first URL was created. `shouldContinue` is
+ * checked after the URLs resolve so a canceled/unmounted run never spins up a
+ * worker it would immediately have to tear down.
+ */
+async function loadFFmpeg(ffmpeg: FFmpeg, shouldContinue: () => boolean) {
   if (ffmpeg.loaded) {
     return;
   }
 
   const baseUrl = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
-  const coreURL = await toBlobURL(`${baseUrl}/ffmpeg-core.js`, 'text/javascript');
-  const wasmURL = await toBlobURL(`${baseUrl}/ffmpeg-core.wasm`, 'application/wasm');
+  let coreURL: string | null = null;
+  let wasmURL: string | null = null;
 
-  await ffmpeg.load({ coreURL, wasmURL });
-}
+  try {
+    coreURL = await toBlobURL(`${baseUrl}/ffmpeg-core.js`, 'text/javascript');
+    wasmURL = await toBlobURL(`${baseUrl}/ffmpeg-core.wasm`, 'application/wasm');
 
-/** Best-effort removal of scratch files from the FFmpeg virtual FS. */
-async function cleanupScratchFiles(ffmpeg: FFmpeg, files: string[]) {
-  for (const file of files) {
-    try {
-      await ffmpeg.deleteFile(file);
-    } catch {
-      // The file may never have been written (early failure) or the worker may
-      // already be torn down — either way there is nothing to recover.
+    if (!shouldContinue()) {
+      return;
     }
+
+    await ffmpeg.load({ coreURL, wasmURL });
+  } finally {
+    revokeObjectUrlSafely(coreURL);
+    revokeObjectUrlSafely(wasmURL);
   }
 }
 
@@ -74,10 +104,16 @@ export function ExportPanel() {
   const video = useProjectStore((state) => state.video);
   const tracks = useProjectStore((state) => state.tracks);
   const totalDuration = useMemo(() => calculateProjectDuration(tracks, video), [tracks, video]);
-  const ffmpegRef = useRef<FFmpeg | null>(null);
-  const isExportingRef = useRef(false);
+  // Monotonic id assigned to each export run. `activeRunIdRef` holds the id of
+  // the run that is currently allowed to drive the worker and UI (null when
+  // idle). Together they give every run a private cancellation identity, so a
+  // superseded/canceled run can detect it is stale after any await and refuse to
+  // touch shared state. `activeFfmpegRef` exposes the active run's instance so
+  // cancel/unmount can terminate the in-flight worker.
+  const runCounterRef = useRef(0);
+  const activeRunIdRef = useRef<number | null>(null);
+  const activeFfmpegRef = useRef<FFmpeg | null>(null);
   const isMountedRef = useRef(true);
-  const canceledRef = useRef(false);
   const [presetId, setPresetId] = useState<ExportPresetId>(DEFAULT_EXPORT_PRESET_ID);
   const [quality, setQuality] = useState<ExportQuality>(DEFAULT_EXPORT_QUALITY);
   const [progress, setProgress] = useState(0);
@@ -101,44 +137,34 @@ export function ExportPanel() {
   }, [downloadUrl]);
 
   // Tear down the FFmpeg web worker if the panel unmounts mid-export so we never
-  // leak a running worker or fire state updates on an unmounted component.
+  // leak a running worker or fire state updates on an unmounted component. Also
+  // invalidate the active run so a resuming run bails out instead of touching
+  // state.
   useEffect(() => {
     isMountedRef.current = true;
 
     return () => {
       isMountedRef.current = false;
-
-      if (ffmpegRef.current) {
-        try {
-          ffmpegRef.current.terminate();
-        } catch {
-          // Worker may already be gone; nothing else to do.
-        }
-        ffmpegRef.current = null;
-      }
+      activeRunIdRef.current = null;
+      const ffmpeg = activeFfmpegRef.current;
+      activeFfmpegRef.current = null;
+      terminateInstance(ffmpeg);
     };
   }, []);
 
   const handleCancel = () => {
-    const ffmpeg = ffmpegRef.current;
-
-    if (!ffmpeg || !isExportingRef.current) {
+    if (activeRunIdRef.current === null) {
       return;
     }
 
-    // Mark cancellation before terminating so the in-flight export's rejected
-    // promise is not surfaced as an error.
-    canceledRef.current = true;
+    // Invalidating the run id is the single source of truth for cancellation:
+    // the in-flight run observes it after its next await and bails out without
+    // mutating state. Terminating rejects any pending worker call immediately.
+    activeRunIdRef.current = null;
+    const ffmpeg = activeFfmpegRef.current;
+    activeFfmpegRef.current = null;
+    terminateInstance(ffmpeg);
 
-    try {
-      ffmpeg.terminate();
-    } catch {
-      // Ignore — the worker is being discarded regardless.
-    }
-
-    // A terminated instance cannot be reused; force a fresh load next run.
-    ffmpegRef.current = null;
-    isExportingRef.current = false;
     setIsExporting(false);
     setProgress(0);
     setError(null);
@@ -146,9 +172,10 @@ export function ExportPanel() {
   };
 
   const handleExport = async () => {
-    // Hard guard against overlapping runs. The disabled button alone is not
-    // enough: state updates are async, so rapid re-entry can slip through.
-    if (isExportingRef.current) {
+    // Re-entry guard: refuse to start while a run is active. Cancellation clears
+    // the active run synchronously, so an immediate restart after cancel is
+    // allowed — and stays isolated from the canceled run via its run id.
+    if (activeRunIdRef.current !== null) {
       return;
     }
 
@@ -157,8 +184,26 @@ export function ExportPanel() {
       return;
     }
 
-    isExportingRef.current = true;
-    canceledRef.current = false;
+    // Require an authoritative, finite, positive duration. The encode uses
+    // -shortest, so a guessed fallback length would silently truncate the whole
+    // export. Reject clearly instead of guessing.
+    const exportDuration = resolveExportDuration(totalDuration, video.duration);
+
+    if (exportDuration === null) {
+      setError(
+        'Cannot export: the project has no known duration yet. Wait for the media to finish loading, then try again.',
+      );
+      return;
+    }
+
+    const runId = runCounterRef.current + 1;
+    runCounterRef.current = runId;
+    activeRunIdRef.current = runId;
+
+    const isCurrent = () => activeRunIdRef.current === runId;
+    // A run is stale once it is no longer the active run or the panel unmounted.
+    const isStale = () => activeRunIdRef.current !== runId || !isMountedRef.current;
+
     setIsExporting(true);
     setError(null);
     setProgress(0);
@@ -167,23 +212,25 @@ export function ExportPanel() {
     const inputName = buildInputVideoName(video.name);
     const audioName = 'mixed-audio.wav';
     const outputName = buildExportFileName(video.name, preset);
-    const scratchFiles = getExportScratchFiles(inputName, audioName, outputName);
-    const exportDuration = resolveExportDuration(totalDuration, video.duration);
-    let ffmpeg: FFmpeg | null = null;
+
+    // Each run owns a private FFmpeg instance and always discards it at the end.
+    // No cross-run reuse means a stale run can never touch (or leak) a live run's
+    // worker, and terminating on teardown also wipes this run's scratch FS.
+    const ffmpeg = new FFmpeg();
+    activeFfmpegRef.current = ffmpeg;
+    ffmpeg.on('progress', ({ progress: nextProgress }) => {
+      if (isCurrent() && isMountedRef.current) {
+        setProgress(clampProgress(nextProgress));
+      }
+    });
+
+    let pendingDownloadUrl: string | null = null;
 
     try {
-      ffmpeg = ffmpegRef.current ?? new FFmpeg();
-
-      if (ffmpegRef.current !== ffmpeg) {
-        ffmpeg.on('progress', ({ progress: nextProgress }) => {
-          if (isMountedRef.current) {
-            setProgress(clampProgress(nextProgress));
-          }
-        });
-        ffmpegRef.current = ffmpeg;
+      await loadFFmpeg(ffmpeg, () => !isStale());
+      if (isStale()) {
+        return;
       }
-
-      await loadFFmpeg(ffmpeg);
 
       setStatus('Preparing mixed audio...');
       const mixedAudio = await mixAudioTracks(
@@ -199,11 +246,24 @@ export function ExportPanel() {
           })),
         exportDuration,
       );
+      if (isStale()) {
+        return;
+      }
       const wavBlob = audioBufferToWavBlob(mixedAudio);
 
       setStatus('Writing files to FFmpeg FS...');
-      await ffmpeg.writeFile(inputName, await fetchFile(video.blob));
+      const videoData = await fetchFile(video.blob);
+      if (isStale()) {
+        return;
+      }
+      await ffmpeg.writeFile(inputName, videoData);
+      if (isStale()) {
+        return;
+      }
       await ffmpeg.writeFile(audioName, await fetchFile(wavBlob));
+      if (isStale()) {
+        return;
+      }
 
       setStatus('Encoding export...');
       const exitCode = await ffmpeg.exec(
@@ -216,34 +276,32 @@ export function ExportPanel() {
           encoderPreset: qualityOption.encoderPreset,
         }),
       );
-
+      if (isStale()) {
+        return;
+      }
       if (exitCode !== 0) {
         throw new Error('FFmpeg command failed.');
       }
 
       const output = await ffmpeg.readFile(outputName);
-
+      if (isStale()) {
+        return;
+      }
       if (!(output instanceof Uint8Array)) {
         throw new Error('Could not read the exported file.');
       }
 
       const blob = new Blob([new Uint8Array(output)], { type: 'video/mp4' });
-      const nextDownloadUrl = URL.createObjectURL(blob);
-
-      await cleanupScratchFiles(ffmpeg, scratchFiles);
-
-      // If the panel unmounted while encoding, drop the freshly created URL
-      // instead of leaking it, and skip the (now invalid) state updates.
-      if (!isMountedRef.current) {
-        URL.revokeObjectURL(nextDownloadUrl);
-        return;
-      }
+      // No awaits between creating and publishing the URL, so the run cannot go
+      // stale in between; publish, then hand URL ownership to component state.
+      pendingDownloadUrl = URL.createObjectURL(blob);
 
       if (downloadUrl?.startsWith('blob:')) {
         URL.revokeObjectURL(downloadUrl);
       }
 
-      setDownloadUrl(nextDownloadUrl);
+      setDownloadUrl(pendingDownloadUrl);
+      pendingDownloadUrl = null;
       setDownloadName(outputName);
       setStats({
         duration: exportDuration,
@@ -252,27 +310,31 @@ export function ExportPanel() {
       setProgress(100);
       setStatus('Export complete');
     } catch (caughtError) {
-      // Cancellation rejects the in-flight promise; that is expected, not an error.
-      if (!canceledRef.current) {
-        if (ffmpeg) {
-          await cleanupScratchFiles(ffmpeg, scratchFiles);
-        }
-
-        if (isMountedRef.current) {
-          setError(
-            caughtError instanceof Error
-              ? `Export failed: ${caughtError.message}`
-              : 'An unknown error occurred during export.',
-          );
-          setStatus(null);
-          setProgress(0);
-        }
+      // Only the current, still-mounted run may surface an error. A canceled or
+      // superseded run swallows its (often terminate-induced) rejection so it
+      // cannot corrupt the UI of whatever run replaced it.
+      if (isCurrent() && isMountedRef.current) {
+        setError(
+          caughtError instanceof Error
+            ? `Export failed: ${caughtError.message}`
+            : 'An unknown error occurred during export.',
+        );
+        setStatus(null);
+        setProgress(0);
       }
     } finally {
-      isExportingRef.current = false;
-
-      if (isMountedRef.current && !canceledRef.current) {
-        setIsExporting(false);
+      // Drop a created-but-unpublished URL (an error after createObjectURL).
+      revokeObjectUrlSafely(pendingDownloadUrl);
+      // Always discard this run's worker; safe even if already terminated.
+      terminateInstance(ffmpeg);
+      // Only the run that still owns the guard may release it. A stale run must
+      // never clear a newer run's active state or busy flag.
+      if (isCurrent()) {
+        activeRunIdRef.current = null;
+        activeFfmpegRef.current = null;
+        if (isMountedRef.current) {
+          setIsExporting(false);
+        }
       }
     }
   };

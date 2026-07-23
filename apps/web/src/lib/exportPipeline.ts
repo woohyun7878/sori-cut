@@ -3,11 +3,8 @@
  *
  * These are deliberately free of React and FFmpeg imports so the export
  * component's reliability-critical logic (progress clamping, duration
- * sanitisation, scratch-file naming/cleanup) can be unit-tested deterministically.
+ * validation, input-file naming) can be unit-tested deterministically.
  */
-
-/** Lower bound for a usable export duration, matching the audio mixer's floor. */
-export const MIN_EXPORT_DURATION_SECONDS = 0.5;
 
 /**
  * Converts an FFmpeg progress fraction (nominally 0..1) into an integer
@@ -25,22 +22,26 @@ export function clampProgress(fraction: number): number {
 }
 
 /**
- * Resolves a finite, positive export duration from the project/timeline
- * duration and the source video duration.
+ * Resolves an authoritative, finite, positive export duration from the
+ * project/timeline duration and the source video duration, or `null` when
+ * neither is usable.
  *
  * Media metadata can be `0` (not yet loaded), `NaN`, or `Infinity` (streams of
- * unknown length). Passing such values straight to the mixer would allocate a
- * degenerate or enormous buffer. This prefers the first finite, positive
- * candidate and otherwise falls back to a small non-zero floor.
+ * unknown length). Silently substituting a small fallback would let `-shortest`
+ * truncate the whole export to that bogus length, so callers must treat `null`
+ * as "duration unknown" and refuse to export rather than guess.
  */
-export function resolveExportDuration(totalDuration: number, videoDuration: number): number {
+export function resolveExportDuration(
+  totalDuration: number,
+  videoDuration: number,
+): number | null {
   for (const candidate of [totalDuration, videoDuration]) {
     if (Number.isFinite(candidate) && candidate > 0) {
       return candidate;
     }
   }
 
-  return MIN_EXPORT_DURATION_SECONDS;
+  return null;
 }
 
 /**
@@ -54,13 +55,4 @@ export function buildInputVideoName(videoName: string): string {
   const extension = match ? `.${match[1].toLowerCase()}` : '.mp4';
 
   return `input-video${extension}`;
-}
-
-/**
- * Returns the de-duplicated, non-empty list of scratch files written to the
- * FFmpeg virtual FS during an export, so they can be cleaned up after success or
- * failure and never leak stale state into a subsequent run.
- */
-export function getExportScratchFiles(inputName: string, audioName: string, outputName: string): string[] {
-  return Array.from(new Set([inputName, audioName, outputName].filter((name) => name.length > 0)));
 }
