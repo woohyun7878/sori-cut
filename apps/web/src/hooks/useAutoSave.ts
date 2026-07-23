@@ -1,62 +1,43 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useProjectStore } from '../store/useProjectStore';
-import { saveProject } from '../lib/projectStorage';
+import {
+  enqueue,
+  flushAll,
+  flushNow,
+  onStatus,
+  captureSnapshot,
+  type SaveStatus,
+} from '../lib/autosaveCoordinator';
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+export type { SaveStatus } from '../lib/autosaveCoordinator';
 
-const DEBOUNCE_MS = 2000;
-
+/**
+ * Thin hook that subscribes to store changes and delegates to the global
+ * autosave coordinator. The coordinator owns queue state, write serialization,
+ * and generation ordering — hook mount/unmount lifetime does not affect
+ * write ordering or queue contents.
+ */
 export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isSavingRef = useRef(false);
-  const statusRef = useRef<SaveStatus>('idle');
+  const mountedRef = useRef(true);
 
-  const setStatus = useCallback(
-    (status: SaveStatus) => {
-      statusRef.current = status;
-      onStatusChange?.(status);
-    },
-    [onStatusChange],
-  );
+  // Forward coordinator status to the component
+  useEffect(() => {
+    mountedRef.current = true;
+    const unsub = onStatus((status) => {
+      if (mountedRef.current) {
+        onStatusChange?.(status);
+      }
+    });
+    return () => {
+      mountedRef.current = false;
+      unsub();
+    };
+  }, [onStatusChange]);
 
-  const performSave = useCallback(async () => {
-    const state = useProjectStore.getState();
-    if (!state.projectId) return;
-    if (isSavingRef.current) return;
-
-    isSavingRef.current = true;
-    setStatus('saving');
-
-    try {
-      await saveProject(state.projectId, state.projectName, {
-        originalAudio: state.originalAudio,
-        stems: state.stems,
-        recordings: state.recordings,
-        video: state.video,
-        tracks: state.tracks,
-      });
-      setStatus('saved');
-    } catch (err) {
-      console.error('[useAutoSave] Save failed:', err);
-      setStatus('error');
-    } finally {
-      isSavingRef.current = false;
-    }
-  }, [setStatus]);
-
-  const scheduleSave = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    timerRef.current = setTimeout(() => {
-      performSave();
-    }, DEBOUNCE_MS);
-  }, [performSave]);
-
-  // Subscribe to store changes
+  // Subscribe to store changes → enqueue snapshots in the coordinator
   useEffect(() => {
     const unsub = useProjectStore.subscribe((state, prev) => {
-      // Only save on data-bearing changes, ignore transient playback state
+      // Only persist on data-bearing changes, ignore transient playback state
       if (
         state.originalAudio !== prev.originalAudio ||
         state.stems !== prev.stems ||
@@ -65,40 +46,27 @@ export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
         state.tracks !== prev.tracks ||
         state.projectName !== prev.projectName
       ) {
-        scheduleSave();
+        enqueue(captureSnapshot(state));
       }
     });
+    return () => { unsub(); };
+  }, []);
 
-    return () => {
-      unsub();
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [scheduleSave]);
-
-  // Save on beforeunload
+  // Best-effort flush all queued projects on beforeunload
   useEffect(() => {
     const handleUnload = () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
-      // Synchronous best-effort save — not guaranteed but helps
+      // Also capture the very latest state for the current project
       const state = useProjectStore.getState();
       if (state.projectId) {
-        // Use sendBeacon with a flag or just attempt sync save
-        // IndexedDB writes are async but the browser may complete short ops before closing
-        saveProject(state.projectId, state.projectName, {
-          originalAudio: state.originalAudio,
-          stems: state.stems,
-          recordings: state.recordings,
-          video: state.video,
-          tracks: state.tracks,
-        }).catch(() => {});
+        enqueue(captureSnapshot(state));
       }
+      flushAll();
     };
-
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, []);
 
-  return { saveNow: performSave };
+  const saveNow = useCallback(() => flushNow(), []);
+
+  return { saveNow };
 }

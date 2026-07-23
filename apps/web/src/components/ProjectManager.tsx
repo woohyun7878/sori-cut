@@ -6,6 +6,7 @@ import {
   loadProject,
   type ProjectSummary,
 } from '../lib/projectStorage';
+import { cancelProject } from '../lib/autosaveCoordinator';
 import type { SaveStatus } from '../hooks/useAutoSave';
 
 interface ProjectManagerProps {
@@ -19,7 +20,6 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
   const projectName = useProjectStore((s) => s.projectName);
   const setProjectName = useProjectStore((s) => s.setProjectName);
   const loadFromSaved = useProjectStore((s) => s.loadFromSaved);
-  const reset = useProjectStore((s) => s.reset);
 
   const refreshList = useCallback(async () => {
     const list = await listProjects();
@@ -31,11 +31,15 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
   }, [isOpen, refreshList]);
 
   const handleNewProject = () => {
-    reset();
-    // Store will generate a new projectId on reset via loadFromSaved
+    // Atomic switch: loadFromSaved handles revoking old URLs.
     loadFromSaved({
       projectId: crypto.randomUUID(),
       projectName: 'New Project',
+      originalAudio: null,
+      stems: [],
+      recordings: [],
+      video: null,
+      tracks: [],
     });
     refreshList();
   };
@@ -49,7 +53,8 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
     const loaded = await loadProject(id);
     if (!loaded) return;
 
-    reset();
+    // Atomic load — loadFromSaved handles revoking old URLs internally.
+    // No intermediate reset() call so autosave never sees a transient empty state.
     loadFromSaved({
       projectId: loaded.metadata.id,
       projectName: loaded.metadata.name,
@@ -65,6 +70,9 @@ export function ProjectManager({ saveStatus }: ProjectManagerProps) {
   const handleDelete = async (id: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this project?');
     if (!confirmed) return;
+    // Tombstone in coordinator BEFORE delete — prevents queued/in-flight saves
+    // from resurrecting the project.
+    cancelProject(id);
     await deleteProject(id);
     if (id === projectId) {
       handleNewProject();
