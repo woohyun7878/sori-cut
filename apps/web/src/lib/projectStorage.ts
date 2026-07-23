@@ -209,8 +209,8 @@ export async function saveProject(
     await projectStore.put(project);
     await tx.done;
   } catch (e) {
-    // Transaction auto-aborts on throw; no partial writes persist.
-    tx.abort();
+    // Transaction may have already auto-aborted; suppress secondary InvalidStateError.
+    try { tx.abort(); } catch { /* already aborted/completed */ }
     throw new ProjectStorageError(
       `Failed to save project "${projectName}" (${projectId})`,
       'SAVE_FAILED',
@@ -416,7 +416,8 @@ export async function deleteProject(id: string): Promise<void> {
     await tx.objectStore('projects').delete(id);
     await tx.done;
   } catch (e) {
-    tx.abort();
+    // Transaction may have already auto-aborted; suppress secondary InvalidStateError.
+    try { tx.abort(); } catch { /* already aborted/completed */ }
     throw new ProjectStorageError(`Failed to delete project (${id})`, 'DELETE_FAILED', e);
   }
 }
@@ -436,13 +437,23 @@ export async function exportProject(id: string): Promise<Blob> {
   }
 
   try {
+    // Phase 1: Read all blob entries within the IDB transaction — no non-IDB
+    // awaits here, so the transaction cannot auto-complete underneath us.
     const blobIndex = tx.objectStore('blobs').index('by-project');
-    const blobs: Record<string, string> = {};
+    const rawEntries: { id: string; blob: Blob }[] = [];
 
     let cursor = await blobIndex.openCursor(id);
     while (cursor) {
-      const entry = cursor.value;
-      // Use Response as a universal way to read blob data (works in all environments)
+      rawEntries.push({ id: cursor.value.id, blob: cursor.value.blob });
+      cursor = await cursor.continue();
+    }
+
+    await tx.done;
+
+    // Phase 2: Encode blob bytes outside the transaction to avoid interleaving
+    // non-IDB async work (Blob.arrayBuffer / Response) with cursor iteration.
+    const blobs: Record<string, string> = {};
+    for (const entry of rawEntries) {
       const arrayBuffer = typeof entry.blob.arrayBuffer === 'function'
         ? await entry.blob.arrayBuffer()
         : await new Response(entry.blob).arrayBuffer();
@@ -450,7 +461,6 @@ export async function exportProject(id: string): Promise<Blob> {
         new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''),
       );
       blobs[entry.id] = `data:${entry.blob.type};base64,${base64}`;
-      cursor = await cursor.continue();
     }
 
     const archive = JSON.stringify({ version: CURRENT_SCHEMA_VERSION, project, blobs });

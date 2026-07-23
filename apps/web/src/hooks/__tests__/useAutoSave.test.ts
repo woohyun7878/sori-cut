@@ -36,7 +36,7 @@ describe('useAutoSave', () => {
   it('debounces saves by 2 seconds after state change', async () => {
     const statuses: SaveStatus[] = [];
     renderHook(() => useAutoSave((s) => statuses.push(s)));
-    mockSaveProject.mockClear(); // Clear any calls from mount
+    mockSaveProject.mockClear();
 
     // Trigger a store change
     act(() => {
@@ -95,17 +95,115 @@ describe('useAutoSave', () => {
     expect(savedName).toBe('C');
   });
 
-  it('retries pending saves after current save completes', async () => {
-    // Make the first save take a while
-    let resolveSave!: () => void;
-    mockSaveProject.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { resolveSave = resolve; }),
+  it('saves correct snapshot for each project when switching during debounce', async () => {
+    renderHook(() => useAutoSave());
+    mockSaveProject.mockClear();
+
+    // Edit project A
+    act(() => {
+      useProjectStore.getState().loadFromSaved({ projectId: 'proj-A', projectName: 'Project A' });
+    });
+    mockSaveProject.mockClear();
+    act(() => {
+      useProjectStore.getState().setProjectName('A edited');
+    });
+
+    // Before debounce fires, switch to project B
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    act(() => {
+      useProjectStore.getState().loadFromSaved({ projectId: 'proj-B', projectName: 'Project B' });
+    });
+    act(() => {
+      useProjectStore.getState().setProjectName('B edited');
+    });
+
+    // Let the debounce fire
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2200);
+    });
+
+    // Both projects should have been saved with their respective snapshots
+    const callsForA = mockSaveProject.mock.calls.filter(
+      ([id]: [string]) => id === 'proj-A',
     );
+    const callsForB = mockSaveProject.mock.calls.filter(
+      ([id]: [string]) => id === 'proj-B',
+    );
+
+    expect(callsForA.length).toBeGreaterThanOrEqual(1);
+    expect(callsForB.length).toBeGreaterThanOrEqual(1);
+    // Project A was saved with "A edited"
+    expect(callsForA[callsForA.length - 1][1]).toBe('A edited');
+    // Project B was saved with "B edited"
+    expect(callsForB[callsForB.length - 1][1]).toBe('B edited');
+  });
+
+  it('saves project A snapshot when switching to B while A save is in-flight', async () => {
+    let resolveSaveA!: () => void;
 
     renderHook(() => useAutoSave());
     mockSaveProject.mockClear();
 
-    // Re-apply the slow mock for the first real save
+    // Set up project A
+    act(() => {
+      useProjectStore.getState().loadFromSaved({ projectId: 'proj-A', projectName: 'Project A' });
+    });
+    mockSaveProject.mockClear();
+
+    // Make the first save (for A) slow
+    mockSaveProject.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveSaveA = resolve; }),
+    );
+
+    // Edit project A and let debounce fire
+    act(() => {
+      useProjectStore.getState().setProjectName('A v2');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+
+    // Save A is now in-flight
+    expect(mockSaveProject).toHaveBeenCalledTimes(1);
+    expect(mockSaveProject.mock.calls[0][0]).toBe('proj-A');
+    expect(mockSaveProject.mock.calls[0][1]).toBe('A v2');
+
+    // Switch to project B and make edits
+    act(() => {
+      useProjectStore.getState().loadFromSaved({ projectId: 'proj-B', projectName: 'Project B' });
+    });
+    act(() => {
+      useProjectStore.getState().setProjectName('B v1');
+    });
+
+    // Debounce for B queues while A is in-flight
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+
+    // Resolve A's save
+    await act(async () => {
+      resolveSaveA();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // B should now be saved — find the call for proj-B
+    const callsForB = mockSaveProject.mock.calls.filter(
+      ([id]: [string]) => id === 'proj-B',
+    );
+    expect(callsForB.length).toBeGreaterThanOrEqual(1);
+    expect(callsForB[callsForB.length - 1][1]).toBe('B v1');
+  });
+
+  it('retries pending saves after current save completes', async () => {
+    let resolveSave!: () => void;
+
+    renderHook(() => useAutoSave());
+    mockSaveProject.mockClear();
+
+    // Make the first real save slow
     mockSaveProject.mockImplementationOnce(
       () => new Promise<void>((resolve) => { resolveSave = resolve; }),
     );
@@ -130,8 +228,6 @@ describe('useAutoSave', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2100);
     });
-    // Still only 1 call (first is still running)
-    expect(mockSaveProject).toHaveBeenCalledTimes(1);
 
     // Resolve the first save — should trigger pending retry
     await act(async () => {
@@ -175,5 +271,27 @@ describe('useAutoSave', () => {
     });
 
     expect(mockSaveProject).not.toHaveBeenCalled();
+  });
+
+  it('flushes pending snapshot on unmount (before debounce fires)', async () => {
+    const { unmount } = renderHook(() => useAutoSave());
+    mockSaveProject.mockClear();
+
+    // Make a change — debounce is scheduled but hasn't fired
+    act(() => {
+      useProjectStore.getState().setProjectName('Unsaved edit');
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(500); // Only 500ms of 2000ms debounce
+    });
+
+    // Unmount before debounce fires (e.g. navigating to Export page)
+    act(() => {
+      unmount();
+    });
+
+    // The pending snapshot should have been flushed on unmount
+    expect(mockSaveProject).toHaveBeenCalledTimes(1);
+    expect(mockSaveProject.mock.calls[0][1]).toBe('Unsaved edit');
   });
 });

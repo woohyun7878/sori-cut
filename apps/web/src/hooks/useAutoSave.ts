@@ -1,54 +1,87 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { useProjectStore } from '../store/useProjectStore';
+import { useProjectStore, type ProjectState } from '../store/useProjectStore';
 import { saveProject } from '../lib/projectStorage';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 const DEBOUNCE_MS = 2000;
 
+/** Immutable snapshot of the data needed to persist a single project. */
+interface SaveSnapshot {
+  projectId: string;
+  projectName: string;
+  originalAudio: ProjectState['originalAudio'];
+  stems: ProjectState['stems'];
+  recordings: ProjectState['recordings'];
+  video: ProjectState['video'];
+  tracks: ProjectState['tracks'];
+}
+
+function captureSnapshot(state: ProjectState): SaveSnapshot {
+  return {
+    projectId: state.projectId,
+    projectName: state.projectName,
+    originalAudio: state.originalAudio,
+    stems: state.stems,
+    recordings: state.recordings,
+    video: state.video,
+    tracks: state.tracks,
+  };
+}
+
 export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSavingRef = useRef(false);
-  const pendingRef = useRef(false);
+  /** Per-project pending snapshots — ensures each project gets its own final state. */
+  const pendingSnapshotsRef = useRef<Map<string, SaveSnapshot>>(new Map());
   const statusRef = useRef<SaveStatus>('idle');
+  const mountedRef = useRef(true);
 
   const setStatus = useCallback(
     (status: SaveStatus) => {
       statusRef.current = status;
-      onStatusChange?.(status);
+      if (mountedRef.current) {
+        onStatusChange?.(status);
+      }
     },
     [onStatusChange],
   );
 
-  const performSave = useCallback(async () => {
-    // If already saving, mark as pending so we re-save when current save completes
-    if (isSavingRef.current) {
-      pendingRef.current = true;
-      return;
-    }
+  const flushSnapshot = useCallback(
+    async (snapshot: SaveSnapshot): Promise<void> => {
+      await saveProject(snapshot.projectId, snapshot.projectName, {
+        originalAudio: snapshot.originalAudio,
+        stems: snapshot.stems,
+        recordings: snapshot.recordings,
+        video: snapshot.video,
+        tracks: snapshot.tracks,
+      });
+    },
+    [],
+  );
 
-    // Snapshot projectId at the moment of save to guard against race conditions
-    // where the user switches projects while a debounced save is in flight.
-    const state = useProjectStore.getState();
-    if (!state.projectId) return;
-    const targetProjectId = state.projectId;
+  const drainQueue = useCallback(async () => {
+    if (isSavingRef.current) return;
+    const pending = pendingSnapshotsRef.current;
+    if (pending.size === 0) return;
 
     isSavingRef.current = true;
-    pendingRef.current = false;
     setStatus('saving');
 
     try {
-      await saveProject(targetProjectId, state.projectName, {
-        originalAudio: state.originalAudio,
-        stems: state.stems,
-        recordings: state.recordings,
-        video: state.video,
-        tracks: state.tracks,
-      });
+      // Process all queued project snapshots
+      while (pending.size > 0) {
+        const entries = [...pending.entries()];
+        pending.clear();
 
-      // Only report success if we're still on the same project
+        for (const [, snapshot] of entries) {
+          await flushSnapshot(snapshot);
+        }
+      }
+
+      // Report success relative to the current project
       const currentId = useProjectStore.getState().projectId;
-      if (currentId === targetProjectId) {
+      if (!pending.has(currentId)) {
         setStatus('saved');
       }
     } catch (err) {
@@ -56,25 +89,32 @@ export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
       setStatus('error');
     } finally {
       isSavingRef.current = false;
-      // If changes came in while we were saving, schedule another save
-      if (pendingRef.current) {
-        pendingRef.current = false;
-        performSave();
+      // Re-drain in case new snapshots arrived while we were saving
+      if (pending.size > 0) {
+        drainQueue();
       }
     }
-  }, [setStatus]);
+  }, [setStatus, flushSnapshot]);
 
-  const scheduleSave = useCallback(() => {
+  const enqueueAndSchedule = useCallback(() => {
+    // Capture an immutable snapshot at the moment of the change
+    const snapshot = captureSnapshot(useProjectStore.getState());
+    if (!snapshot.projectId) return;
+    pendingSnapshotsRef.current.set(snapshot.projectId, snapshot);
+
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
     timerRef.current = setTimeout(() => {
-      performSave();
+      drainQueue();
     }, DEBOUNCE_MS);
-  }, [performSave]);
+  }, [drainQueue]);
 
   // Subscribe to store changes
   useEffect(() => {
+    mountedRef.current = true;
+    const pending = pendingSnapshotsRef.current;
+
     const unsub = useProjectStore.subscribe((state, prev) => {
       // Only save on data-bearing changes, ignore transient playback state
       if (
@@ -85,15 +125,36 @@ export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
         state.tracks !== prev.tracks ||
         state.projectName !== prev.projectName
       ) {
-        scheduleSave();
+        enqueueAndSchedule();
       }
     });
 
     return () => {
       unsub();
-      if (timerRef.current) clearTimeout(timerRef.current);
+      mountedRef.current = false;
+
+      // Flush any pending snapshot on unmount to avoid losing edits
+      // when navigating away (e.g. Studio→Export).
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (pending.size > 0 && !isSavingRef.current) {
+        // Fire-and-forget flush (no state updates post-unmount)
+        const entries = [...pending.entries()];
+        pending.clear();
+        for (const [, snapshot] of entries) {
+          saveProject(snapshot.projectId, snapshot.projectName, {
+            originalAudio: snapshot.originalAudio,
+            stems: snapshot.stems,
+            recordings: snapshot.recordings,
+            video: snapshot.video,
+            tracks: snapshot.tracks,
+          }).catch(() => {});
+        }
+      }
     };
-  }, [scheduleSave]);
+  }, [enqueueAndSchedule]);
 
   // Save on beforeunload
   useEffect(() => {
@@ -101,15 +162,15 @@ export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
       }
-      const state = useProjectStore.getState();
-      if (state.projectId) {
-        // Best-effort async save — browser may complete short IDB writes before close
-        saveProject(state.projectId, state.projectName, {
-          originalAudio: state.originalAudio,
-          stems: state.stems,
-          recordings: state.recordings,
-          video: state.video,
-          tracks: state.tracks,
+      // Flush the latest snapshot for the current project
+      const snapshot = captureSnapshot(useProjectStore.getState());
+      if (snapshot.projectId) {
+        saveProject(snapshot.projectId, snapshot.projectName, {
+          originalAudio: snapshot.originalAudio,
+          stems: snapshot.stems,
+          recordings: snapshot.recordings,
+          video: snapshot.video,
+          tracks: snapshot.tracks,
         }).catch(() => {});
       }
     };
@@ -118,5 +179,5 @@ export function useAutoSave(onStatusChange?: (status: SaveStatus) => void) {
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, []);
 
-  return { saveNow: performSave };
+  return { saveNow: drainQueue };
 }
