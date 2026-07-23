@@ -6,10 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel superseded runs on the same ref, but let pushes to the default
-# branch finish so every main commit keeps a complete status history.
+# Each push to the default branch gets its own SHA-keyed concurrency group so
+# every main commit runs to completion; PR and branch runs share a per-ref
+# group and cancel superseded runs to save CI minutes.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Least-privilege token: CI only needs to read the repository.
