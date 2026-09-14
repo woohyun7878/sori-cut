@@ -1,0 +1,15 @@
+# Normalize all text files to LF in the repository and in working trees.
+# Without this, contributors on Windows (core.autocrlf=true) and the
+# agent tooling that writes these files disagree about line endings.
+* text=auto eol=lf
+
+# Helix presets are UTF-8 JSON but are byte-sensitive: Bender's round-trip
+# guarantee depends on the exact bytes. Never let git rewrite them.
+*.hlx -text
+*.hls -text
+*.hlb -text
+*.hxb -text binary
+
+# Lockfiles are generated; keep diffs quiet.
+pnpm-lock.yaml linguist-generated=true -diff
+package-lock.json linguist-generated=true -diff
