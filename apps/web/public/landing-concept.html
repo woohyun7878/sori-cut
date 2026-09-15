@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bender landing concept</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #090b0b;
+        --surface: #111414;
+        --surface-raised: #171b1a;
+        --line: #2a302e;
+        --line-strong: #454c49;
+        --ink: #f3efe5;
+        --ink-soft: #b4bbb7;
+        --ink-muted: #747c78;
+        --amber: #f2a62b;
+        --amber-soft: #ffd27a;
+        --mint: #79d8b2;
+        --danger: #d76b64;
+        --radius: 5px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--canvas);
+      }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        color: var(--ink);
+        font-family: Bahnschrift, "Aptos Display", "Segoe UI Variable", sans-serif;
+        letter-spacing: 0;
+        background-color: var(--canvas);
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+        background-size: 32px 32px;
+      }
+
+      button {
+        color: inherit;
+        font: inherit;
+      }
+
+      button:focus-visible,
+      [tabindex]:focus-visible {
+        outline: 2px solid var(--amber);
+        outline-offset: 3px;
+      }
+
+      .shell {
+        min-height: 100vh;
+      }
+
+      .topbar {
+        height: 64px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(9, 11, 11, 0.94);
+      }
+
+      .topbar-inner,
+      main {
+        width: min(1180px, calc(100% - 48px));
+        margin: 0 auto;
+      }
+
+      .topbar-inner {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+      }
+
+      .brand-mark {
+        width: 17px;
+        height: 17px;
+        border: 2px solid var(--amber);
+        box-shadow: inset 0 0 0 3px var(--canvas), 0 0 14px rgba(242, 166, 43, 0.38);
+      }
+
+      .brand-name {
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .brand-tag {
+        margin-left: 2px;
+        color: var(--ink-muted);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.13em;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        color: var(--ink-soft);
+        font-size: 13px;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status::before {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--mint);
+        box-shadow: 0 0 10px rgba(121, 216, 178, 0.65);
+        content: "";
+      }
+
+      .icon-button {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: transparent;
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+
+      main {
+        padding: 58px 0 64px;
+      }
+
+      .intro {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 390px;
+        gap: 72px;
+        align-items: end;
+      }
+
+      .kicker,
+      .section-label,
+      .meta-label {
+        margin: 0;
+        color: var(--amber-soft);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 14px 0 0;
+        font-size: clamp(44px, 5vw, 70px);
+        font-weight: 620;
+        line-height: 0.98;
+        letter-spacing: 0;
+      }
+
+      .intro-copy {
+        margin: 0 0 5px;
+        color: var(--ink-soft);
+        font-size: 16px;
+        line-height: 1.6;
+      }
+
+      .mode-switch {
+        display: inline-grid;
+        grid-template-columns: 1fr 1fr;
+        margin-top: 38px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: #0d0f0f;
+      }
+
+      .mode-button {
+        min-width: 190px;
+        padding: 12px 20px;
+        border: 0;
+        border-radius: 3px;
+        background: transparent;
+        color: var(--ink-muted);
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .mode-button[aria-selected="true"] {
+        background: var(--ink);
+        color: #101212;
+      }
+
+      .mode-panel {
+        margin-top: 26px;
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 14px;
+      }
+
+      .section-heading h2 {
+        margin: 5px 0 0;
+        font-size: 23px;
+        font-weight: 600;
+      }
+
+      .rail-controls {
+        display: flex;
+        gap: 8px;
+      }
+
+      .rail-button {
+        width: 38px;
+        height: 38px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--ink-soft);
+        cursor: pointer;
+        font-size: 20px;
+      }
+
+      .tone-viewport {
+        overflow: hidden;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        padding: 18px 0;
+      }
+
+      .tone-rail {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 318px;
+        gap: 14px;
+        transition: transform 240ms ease;
+      }
+
+      .tone-card {
+        position: relative;
+        min-height: 190px;
+        overflow: hidden;
+        padding: 0;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        background: var(--surface);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .tone-card::before {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 5px;
+        background: var(--tone);
+        content: "";
+      }
+
+      .tone-card[aria-pressed="true"] {
+        border-color: var(--tone);
+        box-shadow: inset 0 0 0 1px var(--tone);
+      }
+
+      .tone-face {
+        display: block;
+        height: 118px;
+        padding: 18px 18px 14px 22px;
+        background-color: color-mix(in srgb, var(--tone) 18%, var(--surface));
+        background-image: linear-gradient(120deg, rgba(255,255,255,0.05), transparent 55%);
+      }
+
+      .tone-index {
+        color: color-mix(in srgb, var(--tone) 70%, white);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        letter-spacing: 0.12em;
+      }
+
+      .tone-name {
+        display: block;
+        margin-top: 22px;
+        color: var(--ink);
+        font-size: 21px;
+        font-weight: 650;
+      }
+
+      .tone-foot {
+        height: 71px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px 12px 22px;
+      }
+
+      .tone-character {
+        color: var(--ink-soft);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .footswitch {
+        width: 30px;
+        height: 30px;
+        border: 5px solid #4b504d;
+        border-radius: 50%;
+        background: #aeb3af;
+        box-shadow: inset 0 0 0 2px #1a1d1c;
+      }
+
+      .preview {
+        display: grid;
+        grid-template-columns: 310px minmax(0, 1fr) 190px;
+        gap: 28px;
+        align-items: center;
+        margin-top: 18px;
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(17, 20, 20, 0.92);
+      }
+
+      .preview h3 {
+        margin: 7px 0 8px;
+        font-size: 22px;
+        font-weight: 620;
+      }
+
+      .preview-copy {
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .signal-wrap {
+        min-width: 0;
+      }
+
+      .signal-chain {
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+      }
+
+      .block {
+        min-width: 72px;
+        padding: 11px 8px;
+        border: 1px solid var(--block-color, var(--line-strong));
+        border-radius: 3px;
+        background: #0d1010;
+        color: var(--ink-soft);
+        text-align: center;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 9px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .cable {
+        min-width: 17px;
+        height: 1px;
+        flex: 1;
+        background: var(--line-strong);
+      }
+
+      .chain-meta {
+        margin-top: 10px;
+        color: var(--ink-muted);
+        font-size: 11px;
+      }
+
+      .primary-action {
+        width: 100%;
+        min-height: 48px;
+        border: 1px solid var(--amber);
+        border-radius: var(--radius);
+        background: var(--amber);
+        color: #14110a;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 750;
+      }
+
+      .action-note {
+        margin: 9px 0 0;
+        color: var(--ink-muted);
+        font-size: 10px;
+        line-height: 1.4;
+        text-align: center;
+      }
+
+      .upload-panel {
+        display: none;
+        min-height: 390px;
+        place-items: center;
+        border: 1px dashed var(--line-strong);
+        background: rgba(17, 20, 20, 0.65);
+      }
+
+      .upload-panel.visible {
+        display: grid;
+      }
+
+      .upload-inner {
+        max-width: 420px;
+        text-align: center;
+      }
+
+      .upload-icon {
+        width: 56px;
+        height: 56px;
+        display: grid;
+        place-items: center;
+        margin: 0 auto 20px;
+        border: 1px solid var(--line-strong);
+        color: var(--amber);
+      }
+
+      .upload-inner h2 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .upload-inner p {
+        margin: 10px 0 20px;
+        color: var(--ink-soft);
+        line-height: 1.5;
+      }
+
+      .upload-note {
+        margin-top: 18px;
+        color: var(--ink-muted);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+      }
+
+      .why-line {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 22px;
+        color: var(--ink-muted);
+        font-size: 11px;
+      }
+
+      .why-line::before {
+        width: 22px;
+        height: 1px;
+        background: var(--mint);
+        content: "";
+      }
+
+      @media (max-width: 820px) {
+        .topbar-inner,
+        main {
+          width: min(100% - 32px, 620px);
+        }
+
+        .brand-tag,
+        .status {
+          display: none;
+        }
+
+        main {
+          padding-top: 38px;
+        }
+
+        .intro {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+
+        h1 {
+          font-size: 44px;
+        }
+
+        .mode-switch {
+          width: 100%;
+        }
+
+        .mode-button {
+          min-width: 0;
+          padding-inline: 10px;
+        }
+
+        .preview {
+          grid-template-columns: 1fr;
+        }
+
+        .tone-rail {
+          grid-auto-columns: min(82vw, 300px);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          scroll-behavior: auto !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-name">Bender</span>
+            <span class="brand-tag">Helix tone workspace</span>
+          </div>
+          <div class="top-actions">
+            <span class="status">Model ready</span>
+            <span>How it works</span>
+            <button class="icon-button" type="button" aria-label="Open help">?</button>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="intro" aria-labelledby="page-title">
+          <div>
+            <p class="kicker">Line 6 Helix · safe preset editing</p>
+            <h1 id="page-title">Shape your Helix tone.</h1>
+          </div>
+          <p class="intro-copy">
+            Begin with a player-approved foundation or bring the preset already on your rig.
+            Bender shows every edit before you download it.
+          </p>
+        </section>
+
+        <div class="mode-switch" role="tablist" aria-label="Choose how to begin">
+          <button class="mode-button" id="tone-tab" type="button" role="tab" aria-selected="true">
+            Start with a tone
+          </button>
+          <button class="mode-button" id="upload-tab" type="button" role="tab" aria-selected="false">
+            Upload a preset
+          </button>
+        </div>
+
+        <section class="mode-panel" id="tone-panel" role="tabpanel" aria-labelledby="tone-tab">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">Player-approved foundations · 03</p>
+              <h2>Choose where your sound begins</h2>
+            </div>
+            <div class="rail-controls" aria-label="Browse starter tones">
+              <button class="rail-button" type="button" id="previous-tone" aria-label="Previous tones">←</button>
+              <button class="rail-button" type="button" id="next-tone" aria-label="Next tones">→</button>
+            </div>
+          </div>
+
+          <div class="tone-viewport">
+            <div class="tone-rail" id="tone-rail">
+              <button class="tone-card" type="button" aria-pressed="true" data-tone="Edge of Breakup" style="--tone:#b44e3f">
+                <span class="tone-face">
+                  <span class="tone-index">TONE 01 · RHYTHM</span>
+                  <span class="tone-name">Edge of Breakup</span>
+                </span>
+                <span class="tone-foot">
+                  <span class="tone-character">Warm attack<br />touch responsive</span>
+                  <span class="footswitch" aria-hidden="true"></span>
+                </span>
+              </button>
+              <button class="tone-card" type="button" aria-pressed="false" data-tone="Glass & Air" style="--tone:#337e86">
+                <span class="tone-face">
+                  <span class="tone-index">TONE 02 · CLEAN</span>
+                  <span class="tone-name">Glass &amp; Air</span>
+                </span>
+                <span class="tone-foot">
+                  <span class="tone-character">Wide shimmer<br />clear transients</span>
+                  <span class="footswitch" aria-hidden="true"></span>
+                </span>
+              </button>
+              <button class="tone-card" type="button" aria-pressed="false" data-tone="Modern Lead" style="--tone:#9a7a35">
+                <span class="tone-face">
+                  <span class="tone-index">TONE 03 · LEAD</span>
+                  <span class="tone-name">Modern Lead</span>
+                </span>
+                <span class="tone-foot">
+                  <span class="tone-character">Focused mids<br />singing sustain</span>
+                  <span class="footswitch" aria-hidden="true"></span>
+                </span>
+              </button>
+              <button class="tone-card" type="button" aria-pressed="false" data-tone="Tight Machine" style="--tone:#687d4c">
+                <span class="tone-face">
+                  <span class="tone-index">TONE 04 · HEAVY</span>
+                  <span class="tone-name">Tight Machine</span>
+                </span>
+                <span class="tone-foot">
+                  <span class="tone-character">Fast low end<br />controlled gain</span>
+                  <span class="footswitch" aria-hidden="true"></span>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div class="preview">
+            <div>
+              <p class="meta-label">Selected foundation</p>
+              <h3 id="preview-title">Edge of Breakup</h3>
+              <p class="preview-copy" id="preview-copy">
+                A dynamic British-style rhythm tone that cleans up from your guitar volume.
+              </p>
+            </div>
+            <div class="signal-wrap">
+              <div class="signal-chain" aria-label="Signal chain preview">
+                <span class="block" style="--block-color:#55776b">Gate</span><span class="cable"></span>
+                <span class="block" style="--block-color:#a96243">Drive</span><span class="cable"></span>
+                <span class="block" style="--block-color:#b44e3f">Brit Amp</span><span class="cable"></span>
+                <span class="block" style="--block-color:#927843">4×12 Cab</span><span class="cable"></span>
+                <span class="block" style="--block-color:#39767e">Room</span>
+              </div>
+              <div class="chain-meta">5 blocks · Helix Floor / LT · firmware 3.80+</div>
+            </div>
+            <div>
+              <button class="primary-action" type="button">Use this tone →</button>
+              <p class="action-note">Next: tell Bender what you want to change</p>
+            </div>
+          </div>
+
+          <p class="why-line">Every starter tone is a real .hlx preset dialled and approved by a player.</p>
+        </section>
+
+        <section class="mode-panel upload-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab">
+          <div class="upload-inner">
+            <div class="upload-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 16V4M12 4L8 8M12 4L16 8M5 15V19C5 20.1 5.9 21 7 21H17C18.1 21 19 20.1 19 19V15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <h2>Drop your Helix preset</h2>
+            <p>Bender will validate the file, map its signal chain, and ask what you want to change.</p>
+            <button class="primary-action" type="button">Browse .hlx files</button>
+            <div class="upload-note">.HLX · MAX 2 MB · YOUR ORIGINAL STAYS UNCHANGED</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const toneTab = document.querySelector('#tone-tab');
+      const uploadTab = document.querySelector('#upload-tab');
+      const tonePanel = document.querySelector('#tone-panel');
+      const uploadPanel = document.querySelector('#upload-panel');
+      const rail = document.querySelector('#tone-rail');
+      let railOffset = 0;
+
+      function selectMode(mode) {
+        const isTone = mode === 'tone';
+        toneTab.setAttribute('aria-selected', String(isTone));
+        uploadTab.setAttribute('aria-selected', String(!isTone));
+        tonePanel.style.display = isTone ? 'block' : 'none';
+        uploadPanel.classList.toggle('visible', !isTone);
+      }
+
+      toneTab.addEventListener('click', () => selectMode('tone'));
+      uploadTab.addEventListener('click', () => selectMode('upload'));
+
+      document.querySelector('#next-tone').addEventListener('click', () => {
+        railOffset = Math.max(railOffset - 332, -332);
+        rail.style.transform = `translateX(${railOffset}px)`;
+      });
+
+      document.querySelector('#previous-tone').addEventListener('click', () => {
+        railOffset = Math.min(railOffset + 332, 0);
+        rail.style.transform = `translateX(${railOffset}px)`;
+      });
+
+      const descriptions = {
+        'Edge of Breakup': 'A dynamic British-style rhythm tone that cleans up from your guitar volume.',
+        'Glass & Air': 'A spacious clean foundation with articulate attack and room for modulation.',
+        'Modern Lead': 'A focused lead voice with singing sustain and controlled upper mids.',
+        'Tight Machine': 'A fast, controlled high-gain foundation built for precise low-string work.'
+      };
+
+      document.querySelectorAll('.tone-card').forEach((card) => {
+        card.addEventListener('click', () => {
+          document.querySelectorAll('.tone-card').forEach((item) => item.setAttribute('aria-pressed', 'false'));
+          card.setAttribute('aria-pressed', 'true');
+          document.querySelector('#preview-title').textContent = card.dataset.tone;
+          document.querySelector('#preview-copy').textContent = descriptions[card.dataset.tone];
+        });
+      });
+    </script>
+  </body>
+</html>
