@@ -12,7 +12,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "eval": "pnpm --filter @bender/evals eval",
-    "eval:mock": "pnpm --filter @bender/evals eval -- --mock",
+    "eval:mock": "pnpm --filter @bender/evals eval --mock",
     "helix:scan": "pnpm --filter @bender/helix scan",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

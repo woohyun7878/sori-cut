@@ -27,7 +27,10 @@ function parseArgs(argv: string[]): Args {
   const args: Args = { ids: [], mock: false, record: false, verbose: false, list: false };
 
   for (const arg of argv) {
-    if (arg === '--mock') args.mock = true;
+    // `pnpm run eval -- --mock` is the idiomatic npm form and forwards a bare
+    // `--` through to us. Treat it as a separator rather than an error.
+    if (arg === '--') continue;
+    else if (arg === '--mock') args.mock = true;
     else if (arg === '--record') args.record = true;
     else if (arg === '--verbose' || arg === '-v') args.verbose = true;
     else if (arg === '--list') args.list = true;

@@ -1,117 +1,204 @@
-# 소리컷 / sori-cut
+# Bender
 
-> The all-in-one short-form editor for music cover creators
+> Your AI guitar tone engineer.
 
-**sori** (sound) + **cut** — trim, layer, and publish your covers.
+Bender reads a Line 6 Helix preset, shows you its signal chain, and turns a plain-English request into safe, reviewable edits.
 
-## Vision
-
-sori-cut replaces the fragmented workflow of music short-form content creators (Reels/Shorts/TikTok) with a single browser-based editor:
-
-1. **Stem Splitting** — Separate vocals, drums, bass, and guitar from existing tracks
-2. **Recording Studio** — Capture guitar/instrument audio via Web Audio API
-3. **Video Sync** — Align recorded audio to filmed video
-4. **Timeline Editor** — Trim, arrange, add effects
-5. **Export** — Optimized for vertical 9:16 formats
-
-## Tech Stack
-
-- **TypeScript + React** (Vite)
-- **TailwindCSS** for styling
-- **Web Audio API** for recording & audio processing
-- **Mediabunny** for bounded browser-side media metadata inspection
-- **FFmpeg.wasm** for video/audio manipulation
-- **pnpm workspaces** monorepo
-
-## Project Structure
+You say what is wrong with the tone. Bender inspects the chain, works out what is causing it, changes the parameters that matter, and tells you what it did. You see every change, undo anything you disagree with, and download a working `.hlx`.
 
 ```
-sori-cut/
-├── apps/
-│   └── web/              # Vite + React web app
-├── packages/
-│   ├── ui/               # Shared UI components
-│   ├── audio-engine/     # Web Audio API recording & processing
-│   ├── video-engine/     # FFmpeg.wasm video pipeline
-│   └── editor-core/      # Timeline & editor state management
-├── pnpm-workspace.yaml
-└── package.json
+My tapped notes are too transient and die too quickly.
+Give them more body and sustain without making the preset noisy.
 ```
 
-## Getting Started
+From a real run against the live model:
 
-### Prerequisites
+> Inspected the preset and three blocks, then raised `Sag` 0.5→0.58, `Master` 0.36→0.48 and `BiasX` 0.5→0.6.
+>
+> *"I gave the amp more power-section bloom and a softer response... I left the preamp gain and bypassed drive untouched, so the noise floor shouldn't increase."*
 
-- [Node.js](https://nodejs.org/) >= 18
-- [pnpm](https://pnpm.io/) >= 8
+It reached for power-amp sag and bias rather than simply adding gain, and it honoured the constraint it was given. That is the whole idea: a capable model reasoning about a real signal chain, rather than a lookup table mapping words to knobs.
 
-### Setup
+---
+
+## Status
+
+A working prototype, honestly scoped.
+
+**What works:** parsing and round-tripping `.hlx` files, a typed signal-chain model, nine constrained editing tools with validation and undo, multi-turn tool-calling orchestration against Azure OpenAI, a replayable evaluation harness, and the upload → chat → diff → undo → download path end to end.
+
+**What is not claimed:** broad Helix compatibility. We have verified against a small fixture set. The next stage of this project is feeding Bender a real preset collection and fixing what breaks — the harness exists for exactly that. See [`docs/helix-format-notes.md`](docs/helix-format-notes.md) for what we actually established versus what we are still guessing at.
+
+---
+
+## How it works
+
+```
+  Browser                     Backend                      Azure OpenAI
+  ───────                     ───────                      ────────────
+  upload .hlx  ──────────▶  parse, open session
+  see chain    ◀──────────  signal chain
+  "more sustain,
+   less noise"  ──────────▶  build context  ──────────────▶  reason
+                             ◀──────────────────────────────  call tools
+                             validate + apply
+                             ────────────────────────────▶  tool results
+                             ◀──────────────────────────────  (loop)
+  explanation  ◀──────────  reply + diff  ◀────────────────  explain
+  + diff
+  undo / download ────────▶  serialize
+```
+
+The model never writes Helix JSON. It gets nine deterministic operations and nothing else.
+
+### The parts
+
+| Package | What it does |
+|---|---|
+| [`packages/helix`](packages/helix) | Parse, serialize, validate and round-trip `.hlx` files |
+| [`packages/tone-tools`](packages/tone-tools) | The nine tools the model may invoke, with validation, audit trail and undo |
+| [`apps/server`](apps/server) | Azure OpenAI orchestration, session state, HTTP API |
+| [`apps/web`](apps/web) | The workspace UI |
+| [`evals`](evals) | Replayable regression harness for real presets |
+
+Full detail in [`docs/architecture.md`](docs/architecture.md).
+
+---
+
+## Running it
+
+Requires Node 20+ and pnpm 9.
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Start development server
-pnpm dev
-
-# Build for production
-pnpm build
 ```
 
-The dev server will start at `http://localhost:3000`.
+### Configure Azure OpenAI
 
-## Auto-sync media limits
+```bash
+cp apps/server/.env.example apps/server/.env
+```
 
-Auto-sync accepts audio tracks from MP4/MOV/M4A, WebM/MKV, AAC/ADTS, Ogg
-(Opus or Vorbis), FLAC, MP3, and WAV inputs. After the bounded download,
-Mediabunny selects the container's primary audio track and decodes it as
-incremental `AudioSample` resources. Video tracks do not disqualify a
-container. Ogg uses the primary audio track; chained Ogg logical streams are
-rejected before decoding.
+> [!IMPORTANT]
+> **Key authentication is disabled on the R&D resource.** An `api-key` header returns
+> `403 AuthenticationTypeDisabled`. Use Entra ID, which is the default:
+>
+> ```bash
+> az login
+> ```
+>
+> Key auth is still supported in code for when the resource setting changes — set
+> `AZURE_OPENAI_API_KEY` and it will be used. If you see a 403, this is why, and the
+> server's error message will tell you so.
 
-Each emitted sample is validated and charged to the 128 MiB cumulative decoded
-work budget before its data is copied. Samples are downmixed and linearly
-resampled into bounded 8 kHz mono analysis chunks, then closed immediately.
-Abort and limit failures return the decoder iterator so queued resources are
-released. Auto-sync does not construct an `AudioContext` or
-`OfflineAudioContext`.
+One more trap worth knowing: `AZURE_OPENAI_DEPLOYMENT` must be a **deployment** name, not a model name. A model name returns `404 DeploymentNotFound`.
 
-Each accepted encoded input is capped at 48 MiB and requires a streaming
-response body. The advertised encoded peak for accepted inputs is 96 MiB
-without relying on BYOB readers, fetch chunk sizing, or garbage collection:
+### Run
 
-- With `Content-Length`, a destination of at most 48 MiB can coexist with one
-  ordinary reader backing buffer only after that complete owner is admitted
-  against the peak.
-- Without `Content-Length`, retained chunks total at most 48 MiB and can coexist
-  with the final assembled copy of at most 48 MiB. Sliced reader views are
-  copied into exact-size storage only after their full backing owners are
-  admitted.
+```bash
+pnpm dev:server    # backend on :8787
+pnpm dev           # frontend on :5173
+```
 
-Declared byte streams may use a 64 KiB BYOB scratch buffer opportunistically,
-copying each returned view by its own buffer, offset, and length into the
-bounded destination. Correctness does not depend on BYOB support or caller
-buffer identity; ordinary readers remain the bounded fallback and account for
-already-retained analysis samples before destination allocation.
+Then open http://localhost:5173 and drop in a `.hlx`.
 
-The reference and target are fetched and decoded sequentially. The encoded
-buffer reference is explicitly released before the next input fetch; only the
-bounded 8 kHz mono analysis array is retained.
+### Verify
 
-## Deployment (GitHub Pages)
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test          # 256 tests
+pnpm build
+pnpm eval --mock   # deterministic evaluation cases, no network
+pnpm eval          # full suite against the live model
+```
 
-- This repository deploys `apps/web` to GitHub Pages via `.github/workflows/deploy-pages.yml`.
-- The deployed artifact includes `apps/web/public/CNAME` with `soricut.studio`.
-- Public reachability for `https://soricut.studio/` and `https://www.soricut.studio/` is monitored every 30 minutes by `.github/workflows/pages-uptime-check.yml`.
+---
 
-## Design
+## Helix presets
 
-See the [Studio redesign references](./docs/design/README.md).
+A `.hlx` file is plain UTF-8 JSON, but there are enough sharp edges that it is worth reading [`docs/helix-format-notes.md`](docs/helix-format-notes.md) before touching the parser. Three that cause real bugs:
 
-## Target Audience
+- **Values are not normalized.** `HighCut` is in Hz (`20100`), `threshold` in dB (`-48.0`), `@tempo` in BPM. Assuming 0–1 and writing `0.5` into a `HighCut` sets a 0.5 Hz filter.
+- **Snapshot data is stored twice**, in `snapshotN.blocks` and again in `snapshotN.controllers`. Write one without the other and the preset becomes quietly inconsistent — which is worse than one that fails to load.
+- **A block's key is independent of its position.** Routing is `@path` plus `@position` *within that branch*; `block0` can sit third in the chain.
 
-Guitar/music cover creators who film themselves playing — starting with the workflow of [@junewoomusic](https://instagram.com/junewoomusic).
+The parser is deliberately defensive. It preserves the raw text of every value it does not change, so a preset round-trips byte-for-byte regardless of which tool wrote it, and fields we do not understand survive edits to fields we do.
 
-## License
+### Adding your own presets
 
-[MIT](./LICENSE)
+```
+presets/user/fixtures/     # presets to test Bender against
+presets/user/templates/    # starter tones offered to beginners
+```
+
+Both are gitignored — your presets stay on your machine unless you deliberately commit them. See the READMEs in each directory.
+
+`presets/user/templates/` is **empty on purpose.** A starter tone is only useful if it actually sounds good, and that is not something we can establish from a schema. Generating plausible-looking JSON would produce a preset nobody has ever heard through an amp. The infrastructure is built; the content needs a real player.
+
+---
+
+## Safe editing
+
+Preset corruption is the failure mode that matters, so the safety lives in code rather than in the prompt.
+
+The model gets nine operations: four inspection tools, `set_parameter`, `adjust_parameter`, `enable_block`, `disable_block`, and `undo_last_change`. There is deliberately **no whole-document write, no block add/remove, and no routing change** — adding a block means choosing a position, a DSP assignment, a model identifier and a full default parameter set, and getting any of them wrong produces a file that will not load on hardware.
+
+Every edit is transactional: clone, mutate, validate, then keep or discard. Parameter types and ranges are checked against the preset's own controller definitions, which are the only in-file source of real ranges. Unknown values are preserved untouched. Undo restores a serialized snapshot rather than applying an inverse operation, so it stays correct even for edits with side effects.
+
+Asked to do something outside that envelope, Bender says so. Told to swap a Brit 2204 for a Dual Rectifier, it declines and points you at HX Edit rather than approximating one with tone controls.
+
+---
+
+## The evaluation harness
+
+The next stage of this project is real presets, in volume. [`evals/`](evals/README.md) makes that loop fast:
+
+```bash
+pnpm eval --list
+pnpm eval tapping-sustain     # one case, live model
+pnpm eval --mock              # deterministic cases only, CI-safe
+```
+
+A case pairs a preset with a request and the invariants that must hold afterwards. Runs capture the fixture hash, the full model/tool transcript, every before/after value and the round-trip verdict, so two runs can be diffed when something regresses.
+
+Cases assert what must **not** change more than what must. Almost any edit produces a tone change; the question that matters is whether Bender respected the constraint. "More sustain without more noise" is only answered correctly if the gain really did not move.
+
+---
+
+## Copilot agent system
+
+This repository carries a set of reusable GitHub Copilot CLI agents ported from an internal Claude agent collection — 24 agents covering frontend, backend, testing, security, infrastructure and review work.
+
+```bash
+copilot --agent typescript-pro "tighten the types in packages/helix"
+```
+
+See [`docs/copilot-agents.md`](docs/copilot-agents.md) for the full list, how to invoke them, how to add one, and what did not map cleanly from the Claude setup.
+
+---
+
+## Deployment
+
+The frontend deploys to GitHub Pages on every push to `main`, serving https://soricut.studio/ — a name inherited from this repository's previous life, and one of the open questions below.
+
+**The backend is not deployed yet.** It cannot move into the browser, because the Azure credential must never enter a public bundle (the production build is verified free of it). Hosting is an open decision; see the deployment issue.
+
+---
+
+## Limitations
+
+- Compatibility is verified against a small fixture set, not a broad corpus.
+- Sessions are held in memory, so the server is single-instance.
+- Bender cannot add, remove, reorder or replace blocks, or change routing.
+- No audio. Bender reasons about the signal chain, not about sound.
+- Model names come from identifier splitting, so `Cab4x121960T75` renders as "Cab4x121960 T75" rather than "4x12 1960 Trem 75". A real catalogue is a known gap.
+- `@type` category codes are treated as a hypothesis — two public sources contradict each other, and we never depend on them for correctness.
+
+Open design questions are tracked as [GitHub issues](https://github.com/woohyun7878/sori-cut/issues?q=is%3Aissue+label%3Adesign-decision).
+
+---
+
+## Licence
+
+MIT.

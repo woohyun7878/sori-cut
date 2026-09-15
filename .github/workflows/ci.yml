@@ -48,5 +48,12 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+      # Only the mockable cases. They replay a recorded transcript instead of
+      # calling a model, so they need no credentials and cannot flake. Live
+      # eval cases are run by hand -- a real model legitimately varies between
+      # runs, and a flaky red build teaches people to ignore failures.
+      - name: Evaluation cases (mock)
+        run: pnpm run eval:mock
+
       - name: Build
         run: pnpm run build
