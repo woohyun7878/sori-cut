@@ -250,6 +250,45 @@ describe('parameter edits', () => {
     expect(value).toBeCloseTo(0.46, 10);
   });
 
+  // Found by running a real request through the live model: "soften the pick
+  // attack" produced `Presence 0.6 -> 0.5499999999999999`, and that sixteen
+  // decimal number was serialized straight into the user's preset in place of a
+  // value the original file wrote as `0.6`.
+  //
+  // Asserted exactly rather than with toBeCloseTo, because toBeCloseTo is what
+  // let the artifact through in the first place.
+  it('does not leak floating-point noise into the preset', () => {
+    const session = openSession();
+    run(session, 'adjust_parameter', {
+      block: 'dsp0/block1',
+      parameter: 'Presence',
+      amount: -0.05,
+    });
+
+    const value = session.preset.findParameter({ dsp: 'dsp0', slot: 'block1' }, 'Presence')
+      ?.value as number;
+
+    expect(value).toBe(0.55);
+    expect(session.serialize()).toContain('"Presence":0.55');
+    expect(session.serialize()).not.toContain('0.5499999999999999');
+  });
+
+  it('keeps precision on large-magnitude parameters while cleaning noise', () => {
+    const session = openSession();
+    run(session, 'adjust_parameter', {
+      block: 'dsp0/cab0',
+      parameter: 'HighCut',
+      amount: -0.1,
+    });
+
+    const value = session.preset.findParameter({ dsp: 'dsp0', slot: 'cab0' }, 'HighCut')
+      ?.value as number;
+
+    // 20100 Hz is the real value in this fixture. Rounding to a fixed number of
+    // decimal places would be wrong here; rounding to significant digits is not.
+    expect(value).toBe(20099.9);
+  });
+
   it('treats a no-op write as a no-op instead of logging a fake change', () => {
     const session = openSession();
     const outcome = run(session, 'set_parameter', {

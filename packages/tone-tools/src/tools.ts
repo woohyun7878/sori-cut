@@ -367,13 +367,31 @@ const adjustParameter: ToolDefinition = {
       'adjust_parameter',
       args.block as string,
       args.parameter as string,
-      (current) => current + (args.amount as number),
+      (current) => cleanFloat(current + (args.amount as number)),
       (before, after, block) =>
         `${block.label}: ${args.parameter} ${before} -> ${after} (${
           (args.amount as number) >= 0 ? '+' : ''
         }${args.amount})`,
     ),
 };
+
+/**
+ * Strip IEEE-754 noise from a relative adjustment.
+ *
+ * `0.6 - 0.05` is `0.5499999999999999`, and that value was being written
+ * straight into the user's preset -- a sixteen-decimal number replacing a value
+ * the original file wrote as `0.6`. It is numerically fine and it looks broken,
+ * both in the diff we show the user and in the file they open in HX Edit.
+ *
+ * Twelve significant digits is far beyond any control's real resolution while
+ * still being wide enough for the large-magnitude parameters in this format
+ * (`HighCut` runs to 20100 Hz), so it removes the artifact without rounding
+ * away anything a model could legitimately have asked for.
+ */
+function cleanFloat(value: number): number {
+  if (!Number.isFinite(value)) return value;
+  return Number.parseFloat(value.toPrecision(12));
+}
 
 function setBypass(session: ToneSession, blockRef: string, enabled: boolean): ToolResult<EditRecord | null> {
   const resolved = resolve(session, blockRef);
