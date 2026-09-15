@@ -10,6 +10,7 @@
     "build": "pnpm --filter @sori-cut/web build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "helix:scan": "pnpm --filter @bender/helix scan",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

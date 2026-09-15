@@ -1,0 +1,25 @@
+{
+  "name": "@bender/helix",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Line 6 Helix .hlx preset parsing, inspection and round-trip-safe serialization",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "scan": "tsx scripts/scan.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.3",
+    "vitest": "^2.1.8"
+  }
+}

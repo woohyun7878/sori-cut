@@ -7,3 +7,15 @@ dist
 !.env.example
 .DS_Store
 *.tsbuildinfo
+
+# Presets you own stay on your machine. The directory structure and its
+# READMEs are tracked; the preset files themselves never are.
+presets/user/**/*.hlx
+presets/user/**/*.hls
+presets/user/**/*.hlb
+presets/user/**/*.hxb
+presets/user/**/*.json
+
+# Evaluation output is a record of a local run, not a source artifact.
+evals/results/**
+!evals/results/.gitkeep
