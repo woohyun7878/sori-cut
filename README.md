@@ -192,9 +192,12 @@ See [`docs/copilot-agents.md`](docs/copilot-agents.md) for the full list, how to
 
 ## Deployment
 
-The frontend deploys to GitHub Pages on every push to `main`, serving https://soricut.studio/ — a name inherited from this repository's previous life, and one of the open questions below.
+The frontend deploys to GitHub Pages on every push to `main`, serving https://soricut.studio/. The backend is deployed separately to Azure App Service at
+https://bender-backend-cvdxhaaubjdmb4c3.westus3-01.azurewebsites.net.
 
-**The backend is not deployed yet**, but it is packaged and ready to be. It cannot move into the browser, because the Azure credential must never enter a public bundle (the production build is verified free of it). Where it should run is still an open decision — see [#72](https://github.com/woohyun7878/sori-cut/issues/72).
+The Azure credential stays in App Service application settings and never enters
+the public frontend bundle. Set the GitHub Actions repository variable
+`BENDER_API_URL` to the backend URL before deploying Pages.
 
 ### Building the backend artifact
 
@@ -208,11 +211,43 @@ This produces `apps/server/dist/`:
 | --- | --- |
 | `server.mjs` | The whole server and both `@bender/*` packages in one 96 KB ESM file |
 | `server.mjs.map` | Source map, for readable stack traces |
-| `package.json` | Generated. Lists only the four published runtime dependencies |
+| `package.json` | Generated. Lists only the four published runtime dependencies and starts the bundle with `npm start` |
 
 `tsc` cannot produce this. The workspace packages export raw TypeScript, so compiled output resolves `@bender/helix` to a `.ts` file that Node refuses to load. Bundling removes the workspace from the deployment picture entirely.
 
 The generated `package.json` exists because the server's own manifest declares those packages as `workspace:*` — a pnpm-only protocol that npm rejects with `EUNSUPPORTEDPROTOCOL`. The generated one is derived from the same dependency list that decides what stays external, so it cannot drift from what the bundle imports.
+
+### Azure App Service
+
+`apps/server/dist/` is the complete backend deployment unit; the web app is not
+included. The production App Service uses the Node 20 Linux runtime, runs
+`npm start`, and checks `/api/health`.
+
+Required application settings are:
+
+```text
+AZURE_OPENAI_ENDPOINT
+AZURE_OPENAI_DEPLOYMENT
+AZURE_OPENAI_API_VERSION
+AZURE_OPENAI_AUTH_MODE=api-key
+AZURE_OPENAI_API_KEY
+HOST=0.0.0.0
+ALLOWED_ORIGINS=https://soricut.studio
+SCM_DO_BUILD_DURING_DEPLOYMENT=true
+```
+
+Build the artifact, ZIP the **contents** of `apps/server/dist/`, and deploy it:
+
+```bash
+pnpm --filter @bender/server build
+az webapp deploy \
+  --resource-group acruzsalamn-test \
+  --name bender-backend \
+  --src-path bender-backend.zip \
+  --type zip \
+  --clean true \
+  --restart true
+```
 
 ### Container
 

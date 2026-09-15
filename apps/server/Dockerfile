@@ -72,8 +72,8 @@ EXPOSE 8787
 # No credentials are baked in. Supply at deploy time:
 #   AZURE_OPENAI_ENDPOINT    (required)
 #   AZURE_OPENAI_DEPLOYMENT  (required)
-#   AZURE_OPENAI_AUTH        entra (default) | key
-#   AZURE_OPENAI_API_KEY     only when AZURE_OPENAI_AUTH=key
+#   AZURE_OPENAI_AUTH_MODE   entra (default) | api-key
+#   AZURE_OPENAI_API_KEY     only when AZURE_OPENAI_AUTH_MODE=api-key
 #   ALLOWED_ORIGINS          comma-separated browser origins, e.g. https://soricut.studio
 #
 # Entra is the default because key auth is disabled on the R&D resource

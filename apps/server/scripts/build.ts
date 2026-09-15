@@ -87,10 +87,15 @@ writeFileSync(
       private: true,
       type: 'module',
       main: 'server.mjs',
+      scripts: {
+        start: 'node server.mjs',
+      },
+      engines: {
+        node: '>=20',
+      },
       dependencies: externalDeps,
     },
     null,
     2,
   )}\n`,
 );
-
