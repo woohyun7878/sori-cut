@@ -15,13 +15,20 @@ dist
 package-lock.json
 yarn.lock
 
-# Presets you own stay on your machine. The directory structure and its
-# READMEs are tracked; the preset files themselves never are.
+# Preset files are private by default: someone else's presets, or your own
+# scratch corpus for testing, should not land in a public repository.
 presets/user/**/*.hlx
 presets/user/**/*.hls
 presets/user/**/*.hlb
 presets/user/**/*.hxb
 presets/user/**/*.json
+
+# Templates are the deliberate exception. They are the starter tones the app
+# offers to users who arrive without a preset, so they have to ship -- but only
+# add presets here that we own and are willing to publish. Everything dropped
+# into fixtures/ stays private.
+!presets/user/templates/*.hlx
+!presets/user/templates/*.json
 
 # Evaluation output is a record of a local run, not a source artifact.
 evals/results/**

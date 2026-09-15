@@ -3,9 +3,10 @@
 Drop `.hlx` files you personally own into the directories below. Bender reads
 them from here for local testing and evaluation.
 
-**Nothing in this directory is committed.** `.gitignore` excludes every `.hlx`,
-`.hls`, `.hlb` and `.hxb` file under `presets/user/`, so your presets stay on
-your machine. Only the READMEs and `.gitkeep` files are tracked.
+**Your presets stay on your machine by default.** `.gitignore` excludes every
+`.hlx`, `.hls`, `.hlb` and `.hxb` file under `presets/user/`, with one
+deliberate exception: `templates/` is committed, because starter tones are part
+of the shipped product. Anything you drop into `fixtures/` stays private.
 
 ## Directories
 
@@ -13,10 +14,12 @@ your machine. Only the READMEs and `.gitkeep` files are tracked.
 
 Starter presets offered to users who arrive without a preset of their own — the
 "I don't know anything about amps, make this a good modern rock lead" case.
+Currently 37 presets from Michael's HX Stomp; see
+[`templates/README.md`](templates/README.md).
 
 A template is an `.hlx` file plus a sibling `.json` metadata file of the same
-name describing what it is for. See [`templates/README.md`](templates/README.md)
-for the schema.
+name describing what it is for. **Templates are committed**, so only add
+presets we own and are willing to publish.
 
 ### `fixtures/`
 
@@ -32,7 +35,7 @@ Point an eval case at a fixture by filename; see [`../../evals/README.md`](../..
 3. Run the parser across everything to see what Bender does not yet understand:
 
    ```bash
-   pnpm --filter @bender/helix exec tsx scripts/scan.ts presets/user/fixtures
+   pnpm helix:scan presets/user/fixtures
    ```
 
 4. Anything that fails is a bug worth filing, and usually a one-line regression

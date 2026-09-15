@@ -1,0 +1,12 @@
+{
+  "id": "swim",
+  "name": "Swim",
+  "category": "High Gain",
+  "summary": "Line6 Badonk with a Minotaur and a custom Chrome wah into a Greenback 4x12, with compression, a volume/pan block, delay and reverb.",
+  "bestFor": [
+    "expressive leads",
+    "wah riffs"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

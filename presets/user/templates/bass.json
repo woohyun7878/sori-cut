@@ -1,0 +1,13 @@
+{
+  "id": "bass",
+  "name": "Bass",
+  "category": "Bass",
+  "summary": "SVT-4 Pro bass rig into a 1x15 Ampeg B15 cab, with a Horizon Drive, compression, EQ and an FX loop.",
+  "bestFor": [
+    "bass guitar",
+    "fingerstyle bass"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "The only bass preset in the library, and the only one using an FX loop block."
+}

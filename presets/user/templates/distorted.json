@@ -1,0 +1,12 @@
+{
+  "id": "distorted",
+  "name": "Distorted",
+  "category": "High Gain",
+  "summary": "Archetype Lead with a Minotaur in front, into a 1x12 open-back cream, with compression, delay and reverb.",
+  "bestFor": [
+    "high gain rhythm",
+    "leads"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

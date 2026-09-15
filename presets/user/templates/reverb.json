@@ -1,0 +1,12 @@
+{
+  "id": "reverb",
+  "name": "Reverb",
+  "category": "Ambient Lead",
+  "summary": "Solo Lead Clean with pitch, modulation, compression and EQ into a Cali V30 — a reverb-forward ambient texture.",
+  "bestFor": [
+    "ambient",
+    "textures"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

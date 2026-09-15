@@ -1,0 +1,12 @@
+{
+  "id": "blues",
+  "name": "Blues",
+  "category": "Crunch",
+  "summary": "Essex A30 with a Minotaur overdrive, compression, EQ, delay and reverb. Sits at edge-of-breakup.",
+  "bestFor": [
+    "blues leads",
+    "edge-of-breakup rhythm"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "eb-metal",
+  "name": "Eb Metal",
+  "category": "High Gain",
+  "summary": "Line6 Badonk with a DM4 Heavy Distortion, pitch, compression, EQ, modulation and delay into an XXL V30. Written for Eb tuning.",
+  "bestFor": [
+    "metal rhythm",
+    "downtuned riffs"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "Eb tuning."
+}

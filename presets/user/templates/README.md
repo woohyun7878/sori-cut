@@ -4,15 +4,35 @@ Presets offered to users who arrive without one. This covers the second MVP
 user type: someone who knows what they want to *sound* like but not which
 knobs produce it.
 
-## Why this directory is empty
+## What is in here
 
-Bender ships no starter presets. A convincing starter tone has to come from a
-real preset someone made and owns — anything Bender generated from first
-principles would be a plausible-looking arrangement of blocks that nobody has
-ever heard. The UI says so plainly rather than presenting invented presets as
-curated ones.
+37 presets from Michael's HX Stomp, covering Clean, Crunch, High Gain, Lead,
+Ambient Lead and one Bass tone. They are real presets that were played, not
+arrangements of blocks Bender assembled from first principles — which is the
+only way a starter tone is worth offering. All 37 are owned by us and safe to
+publish; no commercial or third-party preset packs are included.
 
-Drop in presets you own and they appear as starting points automatically.
+Every file is copied **byte for byte** from the device export. Nothing in this
+directory has been through Bender's serializer. That is deliberate: it keeps
+the library usable as a compatibility corpus, because a round-trip test against
+these files is testing the parser against genuine device output rather than
+against Bender's own idea of what a preset looks like.
+
+Current state, from `pnpm helix:scan presets/user/templates`:
+
+| | |
+|---|---|
+| Presets | 37 |
+| Parse clean | 37 / 37, no warnings |
+| Byte-exact round-trip | 37 / 37 |
+| Devices | 1 (HX Stomp, `2162694`) |
+| Firmware | 1 (3.80) |
+
+Thirty-seven presets on **one device and one firmware** is evidence about that
+device, not about Helix generally. Floor, Rack, LT, HX Effects and Pod Go are
+all still unproven. See issue #75, decision 4.
+
+Drop in more presets you own and they appear as starting points automatically.
 
 ## Adding a template
 
@@ -33,7 +53,7 @@ presets/user/templates/
   "category": "Lead",
   "summary": "Mid-forward high-gain lead with moderate compression and a short slap delay.",
   "bestFor": ["solos", "melodic lines", "tapping"],
-  "device": 2162689,
+  "device": 2162694,
   "owner": "Michael Johnson",
   "notes": "Built from the Brit 2204. Gate is set conservatively; tighten it for higher-output pickups."
 }

@@ -1,0 +1,12 @@
+{
+  "id": "no-pain-acoustic",
+  "name": "No Pain Acoustic",
+  "category": "Clean",
+  "summary": "Brit J45 (normal) with EQ, delay and a Dyn Plate reverb, voiced for acoustic-like clean parts.",
+  "bestFor": [
+    "clean arpeggios",
+    "acoustic-style parts"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

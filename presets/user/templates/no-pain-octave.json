@@ -1,0 +1,12 @@
+{
+  "id": "no-pain-octave",
+  "name": "No Pain Octave",
+  "category": "Lead",
+  "summary": "Archetype Lead with a Minotaur and a pitch/octave block into a 1x12 open-back, with compression, delay and reverb.",
+  "bestFor": [
+    "octave leads",
+    "melodic solos"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "sakura-long-tap",
+  "name": "Sakura Long Tap",
+  "category": "Lead",
+  "summary": "Line6 Badonk with a Minotaur, pitch, compression, EQ, delay and reverb — built for long tapped passages.",
+  "bestFor": [
+    "tapping",
+    "legato",
+    "sustain"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "Tapping-focused preset. Directly relevant to the sustain/tapping demo story."
+}

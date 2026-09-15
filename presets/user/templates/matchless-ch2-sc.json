@@ -1,0 +1,14 @@
+{
+  "id": "matchless-ch2-sc",
+  "name": "Matchless CH2 SC",
+  "category": "Clean",
+  "summary": "Matchstick Ch2 into two different 1x12 cabs, with compression, EQ, delay and reverb.",
+  "bestFor": [
+    "boutique clean",
+    "chime",
+    "clean rhythm"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "Uses two cab blocks."
+}

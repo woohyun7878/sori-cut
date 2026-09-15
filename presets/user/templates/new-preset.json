@@ -1,0 +1,13 @@
+{
+  "id": "new-preset",
+  "name": "New Preset",
+  "category": "Clean",
+  "summary": "Jazz Rivet 120 with a Scream 808, modulation, compression, delay and reverb.",
+  "bestFor": [
+    "clean chorus",
+    "80s clean"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "Carries the device default name; kept as the author saved it."
+}

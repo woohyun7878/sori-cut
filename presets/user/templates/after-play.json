@@ -1,0 +1,13 @@
+{
+  "id": "after-play",
+  "name": "After Play",
+  "category": "Ambient Lead",
+  "summary": "SV Beast (bright) with compression, EQ, modulation, an FM4 envelope filter, delay and reverb — a wide, heavily effected lead voice.",
+  "bestFor": [
+    "atmospheric leads",
+    "post-rock",
+    "textures"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "ichika-nito",
+  "name": "Ichika Nito",
+  "category": "Clean",
+  "summary": "No amp block at all: a Vintage Preamp with two LA Studio compressors, parametric EQ and a Dyn Room reverb. Every drive in the chain is bypassed.",
+  "bestFor": [
+    "fingerstyle",
+    "tapping",
+    "clean melodic playing"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "Ampless/direct preset. Good test of how Bender reasons about a chain with no amp to adjust."
+}

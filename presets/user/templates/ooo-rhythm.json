@@ -1,0 +1,13 @@
+{
+  "id": "ooo-rhythm",
+  "name": "OOO Rhythm",
+  "category": "Clean",
+  "summary": "No amp block: Vintage Preamp, two LA Studio compressors, parametric EQ, Retro Reel and reverb, with the Minotaur bypassed.",
+  "bestFor": [
+    "clean rhythm",
+    "direct recording"
+  ],
+  "device": 2162694,
+  "owner": "Michael Jo",
+  "notes": "Ampless/direct preset."
+}
