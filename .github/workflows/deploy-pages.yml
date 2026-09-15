@@ -37,7 +37,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build web app
-        run: pnpm --filter @sori-cut/web build
+        run: pnpm --filter @bender/web build
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

@@ -1,29 +1,22 @@
 import { useRef, useState, type DragEvent } from 'react';
-import { useProjectStore, type AudioFile } from '../store/useProjectStore';
+import { usePresetStore } from '../store/usePresetStore';
 
-const ACCEPTED_AUDIO_TYPES = '.mp3,.wav,.ogg,.flac,.m4a,audio/*';
+const ACCEPTED_PRESET_TYPES = '.hlx,application/json';
 
-async function getAudioDuration(url: string): Promise<number> {
-  return new Promise((resolve) => {
-    const audio = document.createElement('audio');
-    audio.preload = 'metadata';
-    audio.src = url;
-
-    const finalize = (duration: number) => {
-      audio.removeAttribute('src');
-      audio.load();
-      resolve(Number.isFinite(duration) ? duration : 0);
-    };
-
-    audio.onloadedmetadata = () => finalize(audio.duration);
-    audio.onerror = () => finalize(0);
-  });
-}
-
+/**
+ * Bender's preset intake.
+ *
+ * Accepts a Line 6 Helix `.hlx` file, reads it as text and hands it to the
+ * preset store, which parses it with `@bender/helix`. On success the store
+ * exposes the preset's real metadata (name, device, block count), which this
+ * component surfaces so the upload is honestly confirmed rather than mocked.
+ */
 export function DropZone() {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const setOriginalAudio = useProjectStore((state) => state.setOriginalAudio);
-  const originalAudio = useProjectStore((state) => state.originalAudio);
+  const loadPreset = usePresetStore((state) => state.loadPreset);
+  const clearPreset = usePresetStore((state) => state.clearPreset);
+  const preset = usePresetStore((state) => state.preset);
+  const error = usePresetStore((state) => state.error);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -33,21 +26,9 @@ export function DropZone() {
     }
 
     setIsLoading(true);
-    const url = URL.createObjectURL(file);
-
     try {
-      const duration = await getAudioDuration(url);
-      const audioFile: AudioFile = {
-        id: crypto.randomUUID(),
-        name: file.name,
-        blob: file,
-        url,
-        duration,
-      };
-
-      setOriginalAudio(audioFile);
-    } catch {
-      URL.revokeObjectURL(url);
+      const text = await file.text();
+      loadPreset(file.name, text);
     } finally {
       setIsLoading(false);
     }
@@ -69,19 +50,21 @@ export function DropZone() {
       }}
       onDrop={(event) => void handleDrop(event)}
       role="group"
-      aria-label="Audio file upload"
+      aria-label="Helix preset upload"
       aria-busy={isLoading}
       className={[
-        'rounded-3xl border-2 border-dashed bg-gray-900/80 p-8 text-center transition-colors',
-        isDragging ? 'border-brand-400 bg-brand-600/10' : 'border-gray-700 hover:border-brand-600/60',
+        'rounded-editor border-2 border-dashed bg-surface/60 p-8 text-center transition-colors',
+        isDragging
+          ? 'border-brand-500 bg-brand-500/5'
+          : 'border-editor-border hover:border-brand-600/60',
       ].join(' ')}
     >
       <input
         ref={inputRef}
         type="file"
-        accept={ACCEPTED_AUDIO_TYPES}
+        accept={ACCEPTED_PRESET_TYPES}
         className="hidden"
-        aria-label="Choose an audio file"
+        aria-label="Choose a Helix .hlx preset file"
         onChange={(event) => {
           void handleFileSelection(event.target.files?.item(0) ?? null);
           event.currentTarget.value = '';
@@ -89,32 +72,63 @@ export function DropZone() {
       />
 
       <div
-        className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 text-3xl"
+        className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-panel border border-editor-border bg-surface-raised text-secondary"
         aria-hidden="true"
       >
-        🎵
+        <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M12 16V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+          />
+        </svg>
       </div>
 
-      <h3 className="text-xl font-semibold text-white">Drop your audio file here</h3>
-      <p className="mt-2 text-sm text-gray-400">or click to browse</p>
-      <p className="mt-4 text-xs text-gray-500">MP3 · WAV · OGG · FLAC · M4A</p>
+      <h3 className="text-lg font-semibold text-primary">Drop your .hlx preset here</h3>
+      <p className="mt-1 text-sm text-secondary">or click to browse</p>
+      <p className="mt-4 text-xs text-muted">Line 6 Helix preset · .hlx</p>
 
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
         disabled={isLoading}
-        className="mt-6 inline-flex items-center justify-center rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-brand-900"
+        className="btn-primary mt-6"
       >
-        {isLoading ? 'Loading...' : 'Browse Files'}
+        {isLoading ? 'Reading…' : 'Browse files'}
       </button>
 
       <div role="status" aria-live="polite">
-        {originalAudio ? (
-          <div className="mt-6 rounded-2xl border border-gray-800 bg-gray-950/70 p-4 text-left">
-            <p className="text-sm font-medium text-white">{originalAudio.name}</p>
-            <p className="mt-1 text-xs text-gray-400">
-              {originalAudio.duration.toFixed(1)}s · Ready to split
-            </p>
+        {error ? (
+          <p className="mx-auto mt-6 max-w-md rounded-control border border-danger/40 bg-danger/10 p-3 text-left text-xs text-danger">
+            {error}
+          </p>
+        ) : null}
+
+        {preset ? (
+          <div className="mx-auto mt-6 max-w-md rack-panel p-4 text-left">
+            <div className="flex items-center gap-2">
+              <span className="led" aria-hidden="true" />
+              <p className="truncate text-sm font-medium text-primary">
+                {preset.name ?? preset.fileName}
+              </p>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+              <dt className="text-muted">Device</dt>
+              <dd className="text-secondary">{preset.deviceName ?? 'Unknown'}</dd>
+              <dt className="text-muted">Firmware</dt>
+              <dd className="text-secondary">{preset.firmware ?? '—'}</dd>
+              <dt className="text-muted">Blocks</dt>
+              <dd className="text-secondary">{preset.blockCount}</dd>
+              <dt className="text-muted">File</dt>
+              <dd className="truncate text-secondary">{preset.fileName}</dd>
+            </dl>
+            <button
+              type="button"
+              onClick={clearPreset}
+              className="btn-secondary mt-4 w-full"
+            >
+              Remove preset
+            </button>
           </div>
         ) : null}
       </div>

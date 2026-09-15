@@ -3,28 +3,30 @@
 @tailwind utilities;
 
 :root {
-  --color-canvas: #0b0d10;
-  --color-surface: #12161b;
-  --color-surface-raised: #161b21;
-  --color-hover: #1a2027;
-  --color-border: #29313a;
-  --color-border-strong: #3a4652;
-  --color-text-primary: #f7f8fa;
-  --color-text-secondary: #a7b0ba;
-  --color-text-muted: #818c97;
-  --color-brand: #8b5cf6;
-  --color-brand-strong: #7c3aed;
-  --color-brand-expression: #d946ef;
+  /*
+   * Bender rack-hardware dark theme.
+   *
+   * These token NAMES are a stable contract shared with tailwind.config.js and
+   * used across the app. Retune the values freely toward the anodised-metal /
+   * amber-LED aesthetic, but keep the names so nothing downstream breaks.
+   */
+  --color-canvas: #0a0b0d;
+  --color-surface: #121519;
+  --color-surface-raised: #191d23;
+  --color-hover: #20252d;
+  --color-border: #2a3038;
+  --color-border-strong: #3c444f;
+  --color-text-primary: #f3f5f7;
+  --color-text-secondary: #a6afba;
+  --color-text-muted: #79828d;
+  /* Single restrained accent: an amber "tube glow" / LED. */
+  --color-brand: #f59e0b;
+  --color-brand-strong: #d97706;
   --color-success: #4ade80;
-  --color-warning: #f59e0b;
+  --color-warning: #eab308;
   --color-danger: #f87171;
-  --color-stem-vocals: #8b5cf6;
-  --color-stem-drums: #3b82f6;
-  --color-stem-bass: #14b8a6;
-  --color-stem-other: #f97316;
-  --color-stem-guitar: #eab308;
   --radius-control: 8px;
-  --radius-panel: 10px;
+  --radius-panel: 12px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -33,11 +35,6 @@
   --space-8: 32px;
   --control-height: 32px;
   --primary-control-height: 36px;
-  --command-height: 52px;
-  --tool-rail-width: 56px;
-  --panel-width: 300px;
-  --timeline-header-width: 208px;
-  --timeline-row-height: 48px;
   --focus-ring: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-brand);
   color-scheme: dark;
 }
@@ -61,7 +58,8 @@
   button,
   a,
   input,
-  select {
+  select,
+  textarea {
     @apply focus-visible:outline-none;
   }
 
@@ -69,11 +67,12 @@
   a:focus-visible,
   input:focus-visible,
   select:focus-visible,
+  textarea:focus-visible,
   [tabindex]:focus-visible {
     box-shadow: var(--focus-ring);
   }
 
-  /* Safe area insets for notched phones */
+  /* Safe-area insets for notched phones. */
   .safe-top {
     padding-top: env(safe-area-inset-top);
   }
@@ -89,572 +88,58 @@
 }
 
 @layer components {
-  /* Prevent double-tap zoom on interactive controls */
+  /* Prevent double-tap zoom on interactive controls. */
   .touch-control {
     touch-action: manipulation;
   }
 
-  .studio-shell {
-    @apply flex h-screen min-h-0 flex-col overflow-hidden bg-canvas text-primary;
-  }
-
-  .studio-command-bar {
-    @apply z-50 flex shrink-0 items-center justify-between gap-3 border-b border-editor-border bg-surface;
-    height: var(--command-height);
-    padding-inline: var(--space-3);
-  }
-
-  .studio-command-group {
-    @apply flex items-center gap-2;
-  }
-
-  .studio-command-divider {
-    @apply hidden h-5 w-px bg-editor-border sm:block;
-  }
-
-  .studio-logo {
-    @apply shrink-0 text-[17px] font-bold tracking-tight text-primary;
-  }
-
-  .studio-logo span {
-    @apply bg-gradient-to-r from-brand-400 to-fuchsia-400 bg-clip-text text-transparent;
-  }
-
-  .studio-primary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-control bg-brand-600 px-3 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-brand-700;
-    height: var(--primary-control-height);
-  }
-
-  .studio-secondary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-control border border-editor-border bg-surface-raised px-3 text-[13px] font-medium text-secondary transition-colors duration-150 hover:border-gray-500 hover:bg-hover hover:text-primary;
-    height: var(--control-height);
-  }
-
-  .studio-icon-button {
-    @apply inline-flex shrink-0 items-center justify-center rounded-control text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
+  /* Square icon button used by dialogs and toolbars. */
+  .icon-button {
+    @apply inline-flex shrink-0 items-center justify-center rounded-control text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-40;
     width: var(--control-height);
     height: var(--control-height);
   }
 
-  .studio-main {
-    @apply flex min-h-0 flex-1 flex-col overflow-hidden;
+  /* Amber "LED" indicator — a small lit dot for status / branding. */
+  .led {
+    @apply inline-block h-2 w-2 rounded-full;
+    background: var(--color-brand);
+    box-shadow: 0 0 6px 0 var(--color-brand);
   }
 
-  .studio-upper {
-    @apply relative grid min-h-[300px] flex-1 overflow-hidden;
-    grid-template-columns: var(--tool-rail-width) minmax(0, 1fr);
+  /* Bevelled rack-panel surface: a subtle top highlight over a soft drop. */
+  .rack-panel {
+    @apply rounded-editor border border-editor-border bg-surface;
+    box-shadow:
+      inset 0 1px 0 0 rgb(255 255 255 / 0.03),
+      0 1px 2px 0 rgb(0 0 0 / 0.4);
   }
 
-  .studio-tool-rail {
-    @apply z-30 flex min-h-0 flex-col items-center gap-1 border-r border-editor-border bg-surface py-2;
+  /* Amber primary action — an illuminated button with a dark label. */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-control bg-brand-500 px-4 text-[13px] font-semibold text-canvas transition-colors duration-150 hover:bg-brand-400 disabled:cursor-not-allowed disabled:opacity-50;
+    height: var(--primary-control-height);
   }
 
-  .studio-tool-button {
-    @apply relative flex h-[54px] w-12 flex-col items-center justify-center gap-1 rounded-control text-[10px] font-medium text-muted transition-colors duration-150 hover:bg-hover hover:text-primary;
+  /* Neutral secondary action on a bevelled surface. */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-control border border-editor-border bg-surface-raised px-3 text-[13px] font-medium text-secondary transition-colors duration-150 hover:border-gray-500 hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-50;
+    height: var(--control-height);
   }
 
-  .studio-tool-button::before {
-    content: '';
-    @apply absolute inset-y-2 left-0 w-0.5 rounded-full bg-transparent;
-  }
-
-  .studio-tool-button.is-active {
-    @apply bg-brand-500/10 text-brand-300;
-  }
-
-  .studio-tool-button.is-active::before {
-    @apply bg-gradient-to-b from-brand-400 to-fuchsia-400;
-  }
-
-  .studio-tool-badge {
-    @apply absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-500 px-1 text-[9px] font-bold text-white;
-  }
-
-  .studio-context-panel,
-  .studio-inspector {
-    @apply fixed bottom-0 z-40 flex flex-col overflow-hidden border-editor-border bg-surface shadow-2xl transition-transform duration-150;
-    top: var(--command-height);
-    width: min(320px, calc(100vw - var(--tool-rail-width)));
-  }
-
-  .studio-context-panel {
-    @apply -translate-x-full border-r;
-    left: var(--tool-rail-width);
-  }
-
-  .studio-inspector {
-    @apply right-0 translate-x-full border-l;
-  }
-
-  .studio-context-panel.is-open,
-  .studio-inspector.is-open {
-    @apply translate-x-0;
-    visibility: visible;
-  }
-
-  .studio-context-panel:not(.is-open),
-  .studio-inspector:not(.is-open) {
-    visibility: hidden;
-  }
-
-  .studio-pane-body {
-    @apply flex min-h-0 flex-1 flex-col;
-  }
-
-  .studio-pane-collapse,
-  .studio-pane-expand,
-  .studio-splitter {
-    display: none;
-  }
-
-  .studio-drawer-scrim {
-    @apply fixed inset-0 z-[35] bg-black/60;
-    top: var(--command-height);
-  }
-
-  .studio-panel-header {
-    @apply flex h-12 shrink-0 items-center justify-between border-b border-editor-border px-3;
-  }
-
-  .studio-panel-header h2 {
-    @apply mt-0.5 text-[15px] font-semibold text-primary;
-  }
-
-  .studio-eyebrow {
+  /* Eyebrow label for a placeholder / section heading. */
+  .eyebrow {
     @apply text-[10px] font-semibold uppercase tracking-[0.16em] text-muted;
-  }
-
-  .studio-panel-scroll {
-    @apply min-h-0 flex-1 space-y-2 overflow-y-auto p-3;
-  }
-
-  .studio-panel-section {
-    @apply space-y-2.5 border-b border-editor-border pb-3 last:border-0;
-  }
-
-  .studio-section-label {
-    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-secondary;
-  }
-
-  .studio-muted-copy {
-    @apply text-xs leading-5 text-muted;
-  }
-
-  .studio-status-row,
-  .studio-property-grid {
-    @apply grid grid-cols-[1fr_auto] gap-2 text-xs;
-  }
-
-  .studio-status-row span,
-  .studio-property-grid span {
-    @apply text-secondary;
-  }
-
-  .studio-status-row strong,
-  .studio-property-grid strong {
-    @apply font-medium capitalize text-primary;
-  }
-
-  .studio-preview {
-    @apply flex min-h-0 flex-col overflow-hidden bg-canvas;
-  }
-
-  .studio-preview-toolbar {
-    @apply flex h-10 shrink-0 items-center justify-between border-b border-editor-border px-3 text-xs font-medium text-secondary;
-  }
-
-  .studio-preview-format {
-    @apply text-[11px] text-muted;
-  }
-
-  .studio-preview-stage {
-    @apply flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_center,#151a20_0,#0b0d10_68%)] p-3;
-  }
-
-  .studio-device-frame {
-    @apply relative aspect-[9/16] h-full max-h-full max-w-full overflow-hidden rounded-control border border-gray-600 bg-black shadow-2xl transition-transform duration-150;
-  }
-
-  .studio-preview-tool {
-    @apply h-7 rounded-control px-2 text-[11px] font-medium text-muted transition-colors hover:bg-hover hover:text-primary;
-  }
-
-  .studio-preview-tool.is-active {
-    @apply bg-brand-500/15 text-brand-300;
-  }
-
-  .studio-preview-zoom {
-    @apply h-7 rounded-control border border-editor-border bg-surface-raised px-2 text-[11px] text-secondary outline-none focus:border-brand-500;
-  }
-
-  .studio-safe-area {
-    @apply pointer-events-none absolute inset-[7%_8%_11%] z-10 border border-dashed border-white/55;
-  }
-
-  .studio-safe-area::before,
-  .studio-safe-area::after {
-    content: '';
-    @apply absolute border-white/25;
-  }
-
-  .studio-safe-area::before {
-    @apply bottom-0 left-1/3 top-0 w-1/3 border-x;
-  }
-
-  .studio-safe-area::after {
-    @apply left-0 right-0 top-1/3 h-1/3 border-y;
-  }
-
-  .studio-safe-area span {
-    @apply absolute left-1 top-1 bg-black/55 px-1 py-0.5 text-[8px] uppercase tracking-wide text-white/75;
-  }
-
-  .studio-preview-empty {
-    @apply flex h-full flex-col items-center justify-center gap-2 px-5 text-center text-muted;
-  }
-
-  .studio-preview-empty strong {
-    @apply mt-1 text-sm font-medium leading-5 text-secondary;
-  }
-
-  .studio-preview-empty span {
-    @apply text-xs;
-  }
-
-  .studio-transport {
-    @apply shrink-0 border-t border-editor-border bg-surface;
-  }
-
-  .studio-timeline-region {
-    @apply flex h-[38vh] min-h-[280px] max-h-[430px] shrink-0 flex-col border-t border-editor-border bg-surface;
-  }
-
-  .studio-timeline-title {
-    @apply flex h-10 shrink-0 items-center justify-between border-b border-editor-border px-4 text-xs font-semibold text-primary;
-  }
-
-  .studio-timeline-title div {
-    @apply flex items-baseline gap-2;
-  }
-
-  .studio-timeline-title small {
-    @apply text-[11px] font-normal text-muted;
-  }
-
-  .studio-timeline-status {
-    @apply text-[11px] font-normal text-success;
-  }
-
-  .studio-timeline-content {
-    @apply min-h-0 flex-1 overflow-hidden;
-  }
-
-  .studio-inspector-empty {
-    @apply flex flex-1 flex-col items-center justify-center gap-2 px-8 text-center text-muted;
-  }
-
-  .studio-inspector-tabs {
-    @apply -mx-3 -mt-3 mb-3 flex h-9 items-end border-b border-editor-border px-3;
-  }
-
-  .studio-inspector-tabs button {
-    @apply h-9 border-b-2 border-transparent px-3 text-xs font-medium text-muted transition-colors hover:text-primary;
-  }
-
-  .studio-inspector-tabs button.is-active {
-    @apply border-brand-400 text-brand-300;
-  }
-
-  .studio-inspector-empty strong {
-    @apply mt-1 text-sm font-medium text-secondary;
-  }
-
-  .studio-inspector-empty span {
-    @apply text-xs leading-5;
-  }
-
-  .studio-field {
-    @apply grid grid-cols-[1fr_auto] gap-2 text-xs text-secondary;
-  }
-
-  .studio-field input:not([type='range']) {
-    @apply col-span-2 h-8 rounded-control border border-editor-border bg-canvas px-2.5 text-[13px] text-primary;
-  }
-
-  .studio-field input[type='range'] {
-    @apply col-span-2 h-1.5 w-full cursor-pointer appearance-none rounded-full bg-hover accent-brand-500;
-  }
-
-  .studio-context > section,
-  .studio-context > div > section,
-  .studio-context .rounded-3xl {
-    @apply rounded-editor border-editor-border bg-transparent p-0;
-  }
-
-  .studio-context h2 {
-    @apply text-base;
-  }
-
-  .studio-context h3 {
-    @apply text-sm;
-  }
-
-  .studio-context .grid {
-    @apply grid-cols-1;
-  }
-
-  .studio-transport > section {
-    @apply rounded-none border-0 bg-transparent px-3 py-2;
-  }
-
-  .studio-transport > section > div:first-child {
-    @apply justify-center;
-  }
-
-  .studio-transport > section > div:first-child > div:first-child {
-    @apply hidden;
-  }
-
-  .studio-transport > section > div:first-child > div:last-child {
-    @apply rounded-control border-0 bg-transparent p-0;
-  }
-
-  .studio-transport > section > div:first-child button {
-    @apply h-8 rounded-control px-3 py-0 text-xs;
-  }
-
-  .studio-transport > section > div:first-child button:nth-child(3) {
-    @apply h-9 w-9 rounded-full p-0;
-  }
-
-  .studio-transport > section > div:last-child {
-    @apply mt-2;
-  }
-
-  .studio-transport > section > div:last-child > div {
-    @apply mb-1 text-[11px];
-  }
-
-  .studio-transport > section > div:last-child > button {
-    @apply h-2;
-  }
-
-  .studio-timeline-content > section {
-    @apply min-h-full rounded-none border-0 bg-transparent p-0;
-  }
-
-  .timeline-editor {
-    @apply flex h-full min-h-full flex-col bg-canvas;
-  }
-
-  .timeline-toolbar {
-    @apply flex h-9 shrink-0 items-center justify-between gap-2 overflow-x-auto border-b border-editor-border bg-surface px-2;
-  }
-
-  .timeline-timecode {
-    @apply rounded bg-brand-500/15 px-2 py-1 font-mono text-[11px] tabular-nums text-brand-200;
-  }
-
-  .timeline-tool-button {
-    @apply inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-secondary transition-colors hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-35;
-  }
-
-  .timeline-tool-button.is-active {
-    @apply bg-brand-500/15 text-brand-300;
-  }
-
-  .timeline-track-select {
-    @apply h-7 rounded border border-editor-border bg-surface-raised px-1.5 text-[11px] text-secondary outline-none focus:border-brand-500;
-  }
-
-  .timeline-zoom-button {
-    @apply flex h-7 w-7 items-center justify-center rounded text-sm text-secondary hover:bg-hover hover:text-primary;
-  }
-
-  .timeline-scroll {
-    @apply min-h-0 flex-1 overflow-auto bg-canvas;
-    scrollbar-color: #3b4652 #0b0d10;
-    scrollbar-width: thin;
-  }
-
-  .timeline-grid {
-    display: grid;
-    min-width: max-content;
-    grid-template-columns: var(--timeline-header-width) minmax(720px, 1fr);
-  }
-
-  .timeline-track-corner {
-    @apply sticky left-0 z-30 flex h-7 items-center justify-between border-b border-r border-editor-border bg-surface px-2 text-[10px] font-semibold uppercase tracking-wider text-muted;
-  }
-
-  .timeline-track-header {
-    @apply sticky left-0 z-20 flex items-center justify-between gap-2 border-b border-r border-editor-border bg-surface px-2;
-    height: var(--timeline-row-height);
-  }
-
-  .timeline-type-badge {
-    @apply flex h-5 min-w-7 shrink-0 items-center justify-center rounded bg-hover px-1 text-[9px] font-bold tracking-wide text-secondary;
-  }
-
-  .timeline-track-toggle {
-    @apply flex h-6 w-6 items-center justify-center rounded border border-editor-border text-[10px] font-bold text-muted transition-colors hover:bg-hover hover:text-primary;
-  }
-
-  .timeline-track-toggle.is-active {
-    @apply border-red-400/50 bg-red-500/15 text-red-300;
-  }
-
-  .timeline-track-toggle.is-solo {
-    @apply border-yellow-400/50 bg-yellow-500/15 text-yellow-300;
-  }
-
-  .timeline-volume {
-    @apply flex w-12 items-center;
-  }
-
-  .timeline-volume input {
-    @apply h-1 w-full cursor-pointer appearance-none rounded-full bg-hover accent-brand-500;
-  }
-
-  .timeline-playhead {
-    @apply pointer-events-none absolute inset-y-0 z-10 w-px bg-brand-400 shadow-[0_0_0_1px_rgba(139,92,246,0.18)];
-  }
-
-  .timeline-playhead.ruler::before {
-    content: '';
-    @apply absolute -left-[3px] top-0 h-1.5 w-[7px] rounded-b-sm bg-brand-400;
-  }
-
-  .timeline-footer {
-    @apply flex h-6 shrink-0 items-center justify-between border-t border-editor-border bg-surface px-2 text-[10px] text-muted;
-  }
-
-  @media (min-width: 1360px) {
-    .studio-upper {
-      grid-template-columns:
-        var(--tool-rail-width) var(--left-pane-column) var(--left-splitter-width)
-        minmax(var(--min-preview-width, 480px), 1fr) var(--right-splitter-width)
-        var(--right-pane-column);
-    }
-
-    .studio-context-panel,
-    .studio-inspector {
-      position: static;
-      z-index: 20;
-      width: auto;
-      transform: translateX(0);
-      box-shadow: none;
-    }
-
-    .studio-tool-rail {
-      grid-column: 1;
-    }
-
-    .studio-context-panel {
-      grid-column: 2;
-    }
-
-    .studio-splitter.is-left {
-      grid-column: 3;
-    }
-
-    .studio-preview {
-      grid-column: 4;
-    }
-
-    .studio-splitter.is-right {
-      grid-column: 5;
-    }
-
-    .studio-inspector {
-      grid-column: 6;
-    }
-
-    .studio-pane-collapse {
-      display: inline-flex;
-    }
-
-    .studio-pane-expand {
-      @apply m-auto h-10 w-7 items-center justify-center rounded-control text-muted transition-colors hover:bg-hover hover:text-primary;
-    }
-
-    .studio-context-panel.is-collapsed,
-    .studio-inspector.is-collapsed {
-      @apply border-editor-border bg-surface;
-    }
-
-    .studio-context-panel.is-collapsed .studio-pane-body,
-    .studio-inspector.is-collapsed .studio-pane-body {
-      display: none;
-    }
-
-    .studio-context-panel.is-collapsed .studio-pane-expand,
-    .studio-inspector.is-collapsed .studio-pane-expand {
-      display: inline-flex;
-    }
-
-    .studio-splitter {
-      @apply relative z-30 flex cursor-col-resize touch-none items-center justify-center bg-surface transition-colors hover:bg-brand-500/15;
-    }
-
-    .studio-splitter::before {
-      content: '';
-      @apply absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-editor-border;
-    }
-
-    .studio-splitter span {
-      @apply relative z-10 h-8 w-[3px] rounded-full bg-gray-600 transition-colors;
-    }
-
-    .studio-splitter:hover span,
-    .studio-splitter:focus-visible span {
-      @apply bg-brand-400;
-    }
-
-    .studio-context-panel {
-      left: auto;
-    }
-
-    .studio-context-panel:not(.is-open),
-    .studio-inspector:not(.is-open) {
-      visibility: visible;
-      transform: translateX(0);
-    }
-  }
-}
-
-@media (max-height: 700px) {
-  .studio-upper {
-    min-height: 220px;
-  }
-
-  .studio-timeline-region {
-    height: 34vh;
-    min-height: 220px;
-  }
-}
-
-@media (max-height: 560px) {
-  .studio-upper {
-    min-height: 180px;
-  }
-
-  .studio-timeline-region {
-    min-height: 180px;
-  }
-
-  .studio-preview-toolbar {
-    display: none;
   }
 }
 
 @layer utilities {
-  /* Horizontal scroll with momentum scrolling */
+  /* Horizontal scroll with momentum on touch. */
   .scroll-touch {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
-    scrollbar-color: theme('colors.gray.700') transparent;
+    scrollbar-color: var(--color-border-strong) transparent;
   }
 
   .scroll-touch::-webkit-scrollbar {
@@ -666,7 +151,7 @@
   }
 
   .scroll-touch::-webkit-scrollbar-thumb {
-    background: theme('colors.gray.700');
+    background: var(--color-border-strong);
     border-radius: 9999px;
   }
 }

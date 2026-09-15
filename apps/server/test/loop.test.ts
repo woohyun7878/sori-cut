@@ -270,7 +270,7 @@ describe('model failures', () => {
   });
 
   it('backs off between retries', async () => {
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_ms: number) => {});
     const provider = new ScriptedProvider([
       { throws: new ModelError('server', 'a', { retryable: true }) },
       { throws: new ModelError('server', 'b', { retryable: true }) },

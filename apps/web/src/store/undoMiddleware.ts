@@ -2,14 +2,15 @@ import { type StateCreator, type StoreApi, type StoreMutatorIdentifier } from 'z
 
 const MAX_HISTORY = 50;
 
-/** Keys that should never be tracked in undo/redo history. */
-const TRANSIENT_KEYS: ReadonlySet<string> = new Set([
-  'playheadPosition',
-  'isPlaying',
-  'loopEnabled',
-  'exportProgress',
-  'isExporting',
-]);
+/**
+ * Keys that should never be tracked in undo/redo history.
+ *
+ * These are transient / UI-only fields whose changes must not create an undo
+ * step: parse errors, and (in later phases) in-flight AI request status or
+ * streaming flags. Only durable, user-meaningful preset state — the loaded
+ * preset and the tone edits made to it — belongs in history.
+ */
+const TRANSIENT_KEYS: ReadonlySet<string> = new Set(['error']);
 
 export interface UndoRedoState {
   pastStates: Record<string, unknown>[];

@@ -14,7 +14,7 @@ You are a senior React 18 specialist for Bender, an AI guitar tone engineer. You
 
 1. Inspect `apps/web/package.json`, `apps/web/vite.config.ts`, `apps/web/vitest.config.ts`, `apps/web/tailwind.config.js`, `tsconfig.base.json`, and `eslint.config.js` as needed.
 2. Read the existing component, hook, route, and store patterns before adding new ones.
-3. Confirm current workspace names from `package.json`; use filters like `pnpm --filter @sori-cut/web test` unless rebranded package names already exist.
+3. Confirm current workspace names from `package.json`; use filters like `pnpm --filter @bender/web test`.
 4. Prefer user-visible behavior, accessibility, and maintainability over generic framework ceremony.
 
 ## React quality bar
@@ -94,9 +94,9 @@ Use Vitest 2 with Testing Library and jsdom:
 Example checks:
 
 ```powershell
-pnpm --filter @sori-cut/web test
-pnpm --filter @sori-cut/web typecheck
-pnpm --filter @sori-cut/web build
+pnpm --filter @bender/web test
+pnpm --filter @bender/web typecheck
+pnpm --filter @bender/web build
 ```
 
 ## Implementation workflow

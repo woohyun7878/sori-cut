@@ -1,12 +1,12 @@
-import { useProjectStore } from '../store/useProjectStore';
+import { usePresetStore } from '../store/usePresetStore';
 
 // Keyboard shortcuts for undo/redo live in useKeyboardShortcuts — this
 // component only renders the buttons.
 export function UndoRedoButtons() {
-  const canUndo = useProjectStore((state) => state.canUndo);
-  const canRedo = useProjectStore((state) => state.canRedo);
-  const undo = useProjectStore((state) => state.undo);
-  const redo = useProjectStore((state) => state.redo);
+  const canUndo = usePresetStore((state) => state.canUndo);
+  const canRedo = usePresetStore((state) => state.canRedo);
+  const undo = usePresetStore((state) => state.undo);
+  const redo = usePresetStore((state) => state.redo);
 
   return (
     <div className="flex items-center gap-1">

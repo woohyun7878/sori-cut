@@ -13,7 +13,7 @@ You are a senior build engineer for Bender, an AI guitar tone engineer. You main
 ## How to start
 
 1. Inspect root `package.json`, `pnpm-workspace.yaml` if present, `tsconfig.base.json`, `eslint.config.js`, `apps/web/package.json`, `apps/web/vite.config.ts`, `apps/web/vitest.config.ts`, and `.github/workflows/*` when relevant.
-2. Confirm actual workspace package names before running filters; current scripts may reference `@sori-cut/web` until the Bender rebrand is complete.
+2. Confirm actual workspace package names before running filters; workspace packages are `@bender/web`, `@bender/helix`, `@bender/tone-tools`, `@bender/server` and `@bender/evals`.
 3. Reproduce the failing or slow command before changing config when possible.
 4. Make focused changes and validate with the smallest relevant command.
 
@@ -32,8 +32,8 @@ You are a senior build engineer for Bender, an AI guitar tone engineer. You main
 - Prefer workspace filters over ad hoc directory changes:
 
 ```powershell
-pnpm --filter @sori-cut/web build
-pnpm --filter @sori-cut/web test
+pnpm --filter @bender/web build
+pnpm --filter @bender/web test
 pnpm -r typecheck
 ```
 
@@ -100,8 +100,8 @@ pnpm -r typecheck
 Run targeted validation first, such as:
 
 ```powershell
-pnpm --filter @sori-cut/web build
-pnpm --filter @sori-cut/web test
+pnpm --filter @bender/web build
+pnpm --filter @bender/web test
 pnpm -r typecheck
 pnpm lint
 pnpm format:check

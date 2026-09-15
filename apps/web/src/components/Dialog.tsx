@@ -1,7 +1,7 @@
 import { useId, useRef, type ReactNode } from 'react';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
-interface StudioDialogProps {
+interface DialogProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
@@ -9,7 +9,7 @@ interface StudioDialogProps {
   children: ReactNode;
 }
 
-export function StudioDialog({ isOpen, onClose, title, icon, children }: StudioDialogProps) {
+export function Dialog({ isOpen, onClose, title, icon, children }: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -43,7 +43,7 @@ export function StudioDialog({ isOpen, onClose, title, icon, children }: StudioD
               {title}
             </h2>
           </div>
-          <button onClick={onClose} type="button" className="studio-icon-button" aria-label="Close">
+          <button onClick={onClose} type="button" className="icon-button" aria-label="Close">
             <svg
               className="h-5 w-5"
               fill="none"

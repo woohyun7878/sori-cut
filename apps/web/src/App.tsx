@@ -1,13 +1,12 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { Studio } from './pages/Studio';
-import { Export } from './pages/Export';
+import { Routes, Route } from 'react-router-dom';
+import { Workspace } from './pages/Workspace';
 
 export function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/studio" replace />} />
-      <Route path="/studio" element={<Studio />} />
-      <Route path="/export" element={<Export />} />
+      <Route path="/" element={<Workspace />} />
+      {/* Bender is single-screen for now; a second route (e.g. /about) can slot
+          in here later without disturbing the shell. */}
     </Routes>
   );
 }

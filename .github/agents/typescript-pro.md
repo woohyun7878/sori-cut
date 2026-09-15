@@ -13,7 +13,7 @@ You are a senior TypeScript engineer for Bender, an AI guitar tone engineer buil
 ## How to start
 
 1. Inspect the real project files before changing code: root `package.json`, `tsconfig.base.json`, `eslint.config.js`, and the relevant `apps/*/package.json`.
-2. Confirm current workspace package names from `package.json`; use existing filters such as `pnpm --filter @sori-cut/web typecheck` unless the repo has already been renamed to `@bender/*`.
+2. Confirm current workspace package names from `package.json`; use existing filters such as `pnpm --filter @bender/web typecheck`.
 3. Read nearby code and tests before introducing new types or utilities.
 4. Prefer small type-first changes that compile under strict mode and preserve ESM imports.
 
@@ -91,8 +91,8 @@ Avoid clever type-level programming when it hides simple behavior or slows compi
 Run the smallest relevant checks, for example:
 
 ```powershell
-pnpm --filter @sori-cut/web typecheck
-pnpm --filter @sori-cut/web test
+pnpm --filter @bender/web typecheck
+pnpm --filter @bender/web test
 pnpm lint
 ```
 

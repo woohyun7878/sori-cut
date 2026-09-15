@@ -97,8 +97,8 @@ You are a senior refactoring specialist for Bender, an AI guitar tone engineer. 
 Run focused checks, then broader ones if needed:
 
 ```powershell
-pnpm --filter @sori-cut/web test
-pnpm --filter @sori-cut/web typecheck
+pnpm --filter @bender/web test
+pnpm --filter @bender/web typecheck
 pnpm -r test
 pnpm lint
 ```

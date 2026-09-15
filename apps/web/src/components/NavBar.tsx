@@ -1,85 +1,58 @@
-import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { UndoRedoButtons } from './UndoRedoButtons';
 
-const navLinks = [
-  { to: '/', label: 'Home' },
-  { to: '/studio', label: 'Studio' },
-  { to: '/export', label: 'Export' },
-] as const;
+interface NavBarProps {
+  /** Opens the keyboard-shortcuts overlay, when the host provides one. */
+  onOpenHelp?: () => void;
+}
 
-export function NavBar() {
-  const [isOpen, setIsOpen] = useState(false);
-  const location = useLocation();
-
+/**
+ * Bender's top bar: the brand on the left, global actions on the right.
+ *
+ * Bender is a single-screen app, so this is a brand + action bar rather than a
+ * multi-page nav. The brand still links to `/` so a future second route (e.g.
+ * `/about`) has an obvious way home.
+ */
+export function NavBar({ onOpenHelp }: NavBarProps) {
   return (
-    <nav
-      className="sticky top-0 z-50 border-b border-gray-800 bg-gray-950/95 backdrop-blur-sm safe-top"
-      aria-label="Primary"
+    <header
+      className="sticky top-0 z-50 flex items-center justify-between gap-3 border-b border-editor-border bg-surface/95 px-4 py-3 backdrop-blur-sm safe-top"
+      role="banner"
     >
-      <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4">
-        <Link to="/" className="text-xl font-bold" onClick={() => setIsOpen(false)} aria-label="소리컷 home">
-          <span className="text-brand-400">소리</span>컷
-        </Link>
+      <Link to="/" className="flex items-center gap-2.5" aria-label="Bender home">
+        <span className="led" aria-hidden="true" />
+        <span className="text-lg font-bold tracking-tight text-primary">Bender</span>
+        <span className="hidden text-xs text-muted sm:inline">AI guitar tone engineer</span>
+      </Link>
 
-        {/* Desktop nav */}
-        <div className="hidden items-center gap-1 md:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.to}
-              to={link.to}
-              aria-current={location.pathname === link.to ? 'page' : undefined}
-              className={[
-                'rounded-lg px-4 py-2 text-sm font-medium transition-colors',
-                location.pathname === link.to
-                  ? 'bg-brand-600/20 text-brand-300'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white',
-              ].join(' ')}
+      <div className="flex items-center gap-1">
+        <UndoRedoButtons />
+        {onOpenHelp ? (
+          <button
+            type="button"
+            onClick={onOpenHelp}
+            className="icon-button"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+          >
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden="true"
             >
-              {link.label}
-            </Link>
-          ))}
-        </div>
-
-        {/* Mobile hamburger */}
-        <button
-          type="button"
-          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-gray-800 hover:text-white md:hidden"
-          onClick={() => setIsOpen(!isOpen)}
-          aria-label="Toggle navigation menu"
-          aria-expanded={isOpen}
-          aria-controls="mobile-nav-menu"
-        >
-          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-            {isOpen ? (
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            ) : (
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            )}
-          </svg>
-        </button>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093v1M12 17h.01"
+              />
+              <circle cx="12" cy="12" r="9" />
+            </svg>
+          </button>
+        ) : null}
       </div>
-
-      {/* Mobile menu */}
-      {isOpen && (
-        <div id="mobile-nav-menu" className="border-t border-gray-800 px-4 pb-4 pt-2 md:hidden">
-          {navLinks.map((link) => (
-            <Link
-              key={link.to}
-              to={link.to}
-              onClick={() => setIsOpen(false)}
-              aria-current={location.pathname === link.to ? 'page' : undefined}
-              className={[
-                'block rounded-xl px-4 py-3 text-base font-medium transition-colors',
-                location.pathname === link.to
-                  ? 'bg-brand-600/20 text-brand-300'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white',
-              ].join(' ')}
-            >
-              {link.label}
-            </Link>
-          ))}
-        </div>
-      )}
-    </nav>
+    </header>
   );
 }

@@ -8,6 +8,13 @@ dist
 .DS_Store
 *.tsbuildinfo
 
+# pnpm is the package manager for this workspace (see packageManager in
+# package.json) and CI installs with --frozen-lockfile. A stray npm or yarn
+# lockfile silently diverges from pnpm-lock.yaml and misleads anyone who
+# reaches for npm install out of habit.
+package-lock.json
+yarn.lock
+
 # Presets you own stay on your machine. The directory structure and its
 # READMEs are tracked; the preset files themselves never are.
 presets/user/**/*.hlx

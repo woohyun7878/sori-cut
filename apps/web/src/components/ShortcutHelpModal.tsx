@@ -7,17 +7,10 @@ interface ShortcutHelpModalProps {
 }
 
 const shortcuts = [
-  { key: 'Space', desc: 'Play / Pause' },
-  { key: 'Escape', desc: 'Stop' },
-  { key: 'R', desc: 'Toggle recording' },
-  { key: 'Ctrl+S', desc: 'Save project' },
   { key: 'Ctrl+Z', desc: 'Undo' },
   { key: 'Ctrl+Shift+Z', desc: 'Redo' },
-  { key: '[', desc: 'Back 5s' },
-  { key: ']', desc: 'Forward 5s' },
-  { key: 'M', desc: 'Toggle mute' },
-  { key: 'L', desc: 'Toggle loop' },
-  { key: '?', desc: 'This help' },
+  { key: 'Ctrl+Y', desc: 'Redo' },
+  { key: '?', desc: 'Show this help' },
 ];
 
 export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
@@ -46,7 +39,7 @@ export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
           </h2>
           <button
             onClick={onClose}
-            className="studio-icon-button"
+            className="icon-button"
             aria-label="Close keyboard shortcuts"
             type="button"
           >

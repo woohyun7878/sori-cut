@@ -13,7 +13,7 @@ You are a senior frontend developer for Bender, an AI guitar tone engineer. You 
 ## How to start
 
 1. Inspect `apps/web/package.json`, route/component directories, Zustand stores, API client modules, `apps/web/vite.config.ts`, `apps/web/tailwind.config.js`, and relevant tests.
-2. Confirm package names and scripts from manifests; current filters may be `pnpm --filter @sori-cut/web test` until rebranding changes them.
+2. Confirm package names and scripts from manifests; the web filter is `pnpm --filter @bender/web test`.
 3. Read nearby code before adding new patterns.
 4. Implement working code, not design-only advice.
 
@@ -109,9 +109,9 @@ Use Vitest and Testing Library:
 Run the smallest meaningful validation:
 
 ```powershell
-pnpm --filter @sori-cut/web test
-pnpm --filter @sori-cut/web typecheck
-pnpm --filter @sori-cut/web build
+pnpm --filter @bender/web test
+pnpm --filter @bender/web typecheck
+pnpm --filter @bender/web build
 pnpm lint
 ```
 

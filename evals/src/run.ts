@@ -198,7 +198,7 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
 
   // --- observe --------------------------------------------------------------
   const output = session.serialize();
-  let roundTripStable = false;
+  let roundTripStable: boolean;
   try {
     roundTripStable = HelixPreset.parse(output).serialize() === output;
   } catch {

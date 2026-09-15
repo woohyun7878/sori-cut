@@ -52,7 +52,7 @@ Use Vitest APIs consistently:
 
 Package-scoped validation should usually use:
 
-- `pnpm --filter @sori-cut/web test`
+- `pnpm --filter @bender/web test`
 - `pnpm --filter <future-package> test`
 - `pnpm -r test` only after targeted tests pass or when cross-package behavior changed.
 

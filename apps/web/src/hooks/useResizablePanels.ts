@@ -9,7 +9,7 @@ import {
   type PointerEvent,
 } from 'react';
 
-export const WORKSPACE_LAYOUT_STORAGE_KEY = 'sori-cut:workspace-layout:v1';
+export const WORKSPACE_LAYOUT_STORAGE_KEY = 'bender:workspace-layout:v1';
 export const WORKSPACE_LAYOUT_VERSION = 1;
 export const DESKTOP_BREAKPOINT = 1360;
 export const TOOL_RAIL_WIDTH = 56;

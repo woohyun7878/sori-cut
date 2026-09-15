@@ -34,7 +34,7 @@ Bender uses pnpm workspaces, TypeScript 5.5 strict ESM, React 18, Vite 5, Tailwi
 
 Use existing scripts and tools only:
 
-- `pnpm --filter @sori-cut/web build` for bundle/build regressions.
+- `pnpm --filter @bender/web build` for bundle/build regressions.
 - `pnpm --filter <pkg> test` for parser or algorithm benchmarks embedded in tests.
 - Browser devtools guidance for React render and network issues when live testing is needed.
 - Node timing around pure functions when no benchmark harness exists.

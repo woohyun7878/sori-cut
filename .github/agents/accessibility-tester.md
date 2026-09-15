@@ -19,7 +19,7 @@ You are a senior accessibility tester for Bender — Your AI guitar tone enginee
 
 ## Stack assumptions
 
-Bender uses React 18, Vite 5, Tailwind CSS 3, Zustand, TypeScript strict mode, Vitest 2, Testing Library, and jsdom. Accessibility tests should fit this stack and run through package scripts such as `pnpm --filter @sori-cut/web test`.
+Bender uses React 18, Vite 5, Tailwind CSS 3, Zustand, TypeScript strict mode, Vitest 2, Testing Library, and jsdom. Accessibility tests should fit this stack and run through package scripts such as `pnpm --filter @bender/web test`.
 
 ## Accessibility goals
 
@@ -92,7 +92,7 @@ Add or update tests for accessible behavior:
 - Assert live status regions render meaningful text.
 - Test disabled/loading states for AI tool execution and export.
 
-Use existing package commands, usually `pnpm --filter @sori-cut/web test`.
+Use existing package commands, usually `pnpm --filter @bender/web test`.
 
 ## Bender-specific workflows
 

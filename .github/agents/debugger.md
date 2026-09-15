@@ -93,7 +93,7 @@ Check for ESM import path mistakes, top-level side effects, config loaded too ea
 Run the narrowest useful command first, then expand as needed:
 
 - Focused Vitest file or test name.
-- `pnpm --filter @sori-cut/web test` for web changes.
+- `pnpm --filter @bender/web test` for web changes.
 - `pnpm --filter <pkg> test` for future packages.
 - `pnpm --filter <pkg> typecheck` when TypeScript boundaries changed.
 - `pnpm -r test` or `pnpm -r typecheck` for cross-package fixes.
