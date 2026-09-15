@@ -4,6 +4,7 @@
 
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import { pathToFileURL } from 'node:url';
 import { ConfigError, loadConfig, describeAzure, type ServerConfig } from './config.js';
 import { AzureOpenAIProvider } from './model/azure-openai.js';
 import type { ModelProvider } from './model/provider.js';
@@ -100,6 +101,11 @@ async function main(): Promise<void> {
 }
 
 // Only start when run directly, so importing this module in tests is safe.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+//
+// pathToFileURL rather than string concatenation: on Windows an absolute path
+// is `C:\...`, and `file://` + that yields `file://C:/...` with two slashes
+// where import.meta.url has three. The comparison silently failed, so the
+// process started, matched nothing, and exited 0 without listening.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
