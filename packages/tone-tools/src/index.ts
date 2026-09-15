@@ -9,6 +9,7 @@
  */
 
 export { ToneSession, type ParameterDiff } from './session.js';
+export { describePreset, describeChain } from './describe.js';
 export { ToolExecutor, serializeForModel, type ToolCall, type ToolCallOutcome } from './executor.js';
 export { TOOLS, TOOLS_BY_NAME } from './tools.js';
 export { validateArgs, closestNames } from './validate-args.js';

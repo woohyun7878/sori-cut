@@ -41,9 +41,10 @@ export default tseslint.config(
     },
   },
   {
-    // Shared packages run under Node, not in a browser, and none of them are
-    // React. The React rules would only ever produce noise here.
-    files: ['packages/**/*.ts'],
+    // Shared packages and the API server run under Node, not in a browser,
+    // and none of them are React. The React rules would only ever produce
+    // noise here.
+    files: ['packages/**/*.ts', 'apps/server/**/*.ts'],
     languageOptions: {
       globals: globals.node,
     },

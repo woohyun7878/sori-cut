@@ -20,9 +20,15 @@ import {
   type ValidationIssue,
 } from '@bender/helix';
 import type { ChangeSummary, EditRecord, ToolError, ToolResult } from './types.js';
+import { describeChain, describePreset } from './describe.js';
 
-interface HistoryEntry {
-  /** Document state *before* the edit that produced `record`. */
+/** Render a validation issue as one line for the UI. */
+function describeIssue(issue: ValidationIssue): string {
+  return issue.path ? `${issue.message} (${issue.path})` : issue.message;
+}
+
+
+interface HistoryEntry {  /** Document state *before* the edit that produced `record`. */
   snapshot: HelixPreset;
   record: EditRecord;
 }
@@ -51,8 +57,14 @@ export class ToneSession {
    * Presets with validation *errors* are rejected here rather than at edit
    * time. Editing an already-broken preset would make Bender look like the
    * cause of damage it merely inherited.
+   *
+   * Warnings are returned rather than swallowed. "This targets a device
+   * Bender does not recognize" is not a reason to refuse the file, but it is
+   * something the player should be told before they trust the output.
    */
-  static open(text: string): { session: ToneSession } | { error: ToolError } {
+  static open(
+    text: string,
+  ): { session: ToneSession; warnings: string[] } | { error: ToolError } {
     let preset: HelixPreset;
     try {
       preset = HelixPreset.parse(text);
@@ -80,7 +92,10 @@ export class ToneSession {
       };
     }
 
-    return { session: new ToneSession(preset) };
+    return {
+      session: new ToneSession(preset),
+      warnings: result.warnings.map(describeIssue),
+    };
   }
 
   /** Open a session without the validity precondition. Tests only. */
@@ -225,6 +240,16 @@ export class ToneSession {
   /** Serialize the current state for download. */
   serialize(): string {
     return this.current.serialize();
+  }
+
+  /** Preset identity, for the model's standing context. */
+  describe(): string {
+    return describePreset(this.current);
+  }
+
+  /** The signal chain in signal order, for the model's standing context. */
+  describeChain(): string {
+    return describeChain(this.current);
   }
 
   /**
