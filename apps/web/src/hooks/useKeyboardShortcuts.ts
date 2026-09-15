@@ -11,10 +11,9 @@ function isInputFocused(event: KeyboardEvent): boolean {
 /**
  * Global keyboard shortcuts for the Bender workspace.
  *
- * Deliberately minimal for the shell: undo/redo of preset changes plus the
- * shortcut-help overlay. Feature-specific shortcuts (accept a tone change,
- * download the edited preset, focus the request box) arrive with their
- * features in a later phase.
+ * Undo/redo act on the server-side edit history via the preset store, so they
+ * are guarded by `canUndo` / `canRedo` and only confirm with a toast when
+ * there was actually something to undo or redo.
  */
 export function useKeyboardShortcuts(onOpenHelp: () => void) {
   useEffect(() => {
@@ -24,24 +23,21 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
       // Ctrl+Shift+Z / Cmd+Shift+Z — redo
       if (meta && event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault();
-        usePresetStore.getState().redo();
-        showToast('Redo');
+        triggerRedo();
         return;
       }
 
       // Ctrl+Y / Cmd+Y — redo
       if (meta && event.key.toLowerCase() === 'y') {
         event.preventDefault();
-        usePresetStore.getState().redo();
-        showToast('Redo');
+        triggerRedo();
         return;
       }
 
       // Ctrl+Z / Cmd+Z — undo
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
-        usePresetStore.getState().undo();
-        showToast('Undo');
+        triggerUndo();
         return;
       }
 
@@ -56,4 +52,18 @@ export function useKeyboardShortcuts(onOpenHelp: () => void) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onOpenHelp]);
+}
+
+function triggerUndo() {
+  const state = usePresetStore.getState();
+  if (!state.canUndo) return;
+  void state.undo();
+  showToast('Undo');
+}
+
+function triggerRedo() {
+  const state = usePresetStore.getState();
+  if (!state.canRedo) return;
+  void state.redo();
+  showToast('Redo');
 }

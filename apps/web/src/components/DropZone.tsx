@@ -6,31 +6,32 @@ const ACCEPTED_PRESET_TYPES = '.hlx,application/json';
 /**
  * Bender's preset intake.
  *
- * Accepts a Line 6 Helix `.hlx` file, reads it as text and hands it to the
- * preset store, which parses it with `@bender/helix`. On success the store
- * exposes the preset's real metadata (name, device, block count), which this
- * component surfaces so the upload is honestly confirmed rather than mocked.
+ * Accepts a Line 6 Helix `.hlx` file and reads it as text. The store parses it
+ * locally with `@bender/helix` for instant confirmation, then opens a
+ * server-side session that becomes the source of truth. This component
+ * surfaces whichever metadata is most authoritative — the server view once it
+ * arrives, the local parse until then.
  */
 export function DropZone() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const loadPreset = usePresetStore((state) => state.loadPreset);
   const clearPreset = usePresetStore((state) => state.clearPreset);
-  const preset = usePresetStore((state) => state.preset);
-  const error = usePresetStore((state) => state.error);
+  const localPreview = usePresetStore((state) => state.localPreview);
+  const view = usePresetStore((state) => state.view);
+  const uploadError = usePresetStore((state) => state.uploadError);
+  const isUploading = usePresetStore((state) => state.isUploading);
   const [isDragging, setIsDragging] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isReading, setIsReading] = useState(false);
 
   const handleFileSelection = async (file: File | null) => {
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
-    setIsLoading(true);
+    setIsReading(true);
     try {
       const text = await file.text();
-      loadPreset(file.name, text);
+      await loadPreset(file.name, text);
     } finally {
-      setIsLoading(false);
+      setIsReading(false);
     }
   };
 
@@ -39,6 +40,15 @@ export function DropZone() {
     setIsDragging(false);
     await handleFileSelection(event.dataTransfer.files.item(0));
   };
+
+  const name = view?.name ?? localPreview?.name ?? localPreview?.fileName ?? null;
+  const deviceName = view?.device ?? localPreview?.deviceName ?? 'Unknown';
+  const firmware = view?.firmware ?? localPreview?.firmware ?? '—';
+  const blockCount = view
+    ? view.chain.filter((block) => block.role === 'block').length
+    : (localPreview?.blockCount ?? 0);
+  const fileName = view?.filename ?? localPreview?.fileName ?? '';
+  const busy = isReading || isUploading;
 
   return (
     <div
@@ -51,7 +61,7 @@ export function DropZone() {
       onDrop={(event) => void handleDrop(event)}
       role="group"
       aria-label="Helix preset upload"
-      aria-busy={isLoading}
+      aria-busy={busy}
       className={[
         'rounded-editor border-2 border-dashed bg-surface/60 p-8 text-center transition-colors',
         isDragging
@@ -91,42 +101,45 @@ export function DropZone() {
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        disabled={isLoading}
+        disabled={busy}
         className="btn-primary mt-6"
       >
-        {isLoading ? 'Reading…' : 'Browse files'}
+        {isReading ? 'Reading…' : isUploading ? 'Opening…' : 'Browse files'}
       </button>
 
       <div role="status" aria-live="polite">
-        {error ? (
+        {uploadError ? (
           <p className="mx-auto mt-6 max-w-md rounded-control border border-danger/40 bg-danger/10 p-3 text-left text-xs text-danger">
-            {error}
+            {uploadError}
           </p>
         ) : null}
 
-        {preset ? (
+        {localPreview ? (
           <div className="mx-auto mt-6 max-w-md rack-panel p-4 text-left">
             <div className="flex items-center gap-2">
               <span className="led" aria-hidden="true" />
-              <p className="truncate text-sm font-medium text-primary">
-                {preset.name ?? preset.fileName}
-              </p>
+              <p className="truncate text-sm font-medium text-primary">{name}</p>
+              {isUploading ? (
+                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted">
+                  Opening…
+                </span>
+              ) : view?.modified ? (
+                <span className="ml-auto rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-300">
+                  Modified
+                </span>
+              ) : null}
             </div>
             <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
               <dt className="text-muted">Device</dt>
-              <dd className="text-secondary">{preset.deviceName ?? 'Unknown'}</dd>
+              <dd className="text-secondary">{deviceName}</dd>
               <dt className="text-muted">Firmware</dt>
-              <dd className="text-secondary">{preset.firmware ?? '—'}</dd>
+              <dd className="text-secondary">{firmware}</dd>
               <dt className="text-muted">Blocks</dt>
-              <dd className="text-secondary">{preset.blockCount}</dd>
+              <dd className="text-secondary">{blockCount}</dd>
               <dt className="text-muted">File</dt>
-              <dd className="truncate text-secondary">{preset.fileName}</dd>
+              <dd className="truncate text-secondary">{fileName}</dd>
             </dl>
-            <button
-              type="button"
-              onClick={clearPreset}
-              className="btn-secondary mt-4 w-full"
-            >
+            <button type="button" onClick={clearPreset} className="btn-secondary mt-4 w-full">
               Remove preset
             </button>
           </div>

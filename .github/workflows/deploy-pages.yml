@@ -36,7 +36,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # VITE_BENDER_API_URL is baked in at build time, so it has to be set here
+      # rather than configured after deployment. Set the repository variable
+      # once the backend is hosted (Settings > Secrets and variables > Actions >
+      # Variables). Until then it is empty, the bundle falls back to localhost,
+      # and the app says plainly that this build has no backend rather than
+      # failing with a mixed-content error nobody can interpret.
       - name: Build web app
+        env:
+          VITE_BENDER_API_URL: ${{ vars.BENDER_API_URL }}
         run: pnpm --filter @bender/web build
 
       - name: Setup Pages
