@@ -1,12 +1,14 @@
 {
   "id": "90s-was",
-  "name": "90s WaS",
+  "name": "Modern High Gain",
   "category": "High Gain",
   "summary": "Brit 2203 into a V30 4x12 with compression, modulation, delay and reverb. The Scream 808 is parked off, so the gain is all amp.",
   "bestFor": [
-    "90s rock rhythm",
+    "heavy rhythm",
+    "palm muting",
     "alt rock"
   ],
   "device": 2162694,
-  "owner": "Michael Jo"
+  "owner": "Michael Jo",
+  "notes": "Michael's \"90s WaS\". The Scream 808 is in the chain but parked off, so there is headroom to add a boost."
 }

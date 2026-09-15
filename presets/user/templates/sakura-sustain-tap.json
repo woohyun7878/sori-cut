@@ -1,14 +1,15 @@
 {
   "id": "sakura-sustain-tap",
-  "name": "Sakura Sustain Tap",
+  "name": "Sustaining Lead",
   "category": "Lead",
   "summary": "Line6 Badonk with a Minotaur, pitch and compression ahead of delay and reverb, voiced for sustained tapped notes.",
   "bestFor": [
+    "solos",
     "tapping",
-    "sustain",
-    "legato"
+    "legato",
+    "sustain"
   ],
   "device": 2162694,
   "owner": "Michael Jo",
-  "notes": "Tapping/sustain preset. Directly relevant to the demo story."
+  "notes": "Michael's \"Sakura Sustain Tap\". This is the preset in the demo story."
 }

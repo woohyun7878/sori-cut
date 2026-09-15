@@ -23,12 +23,15 @@ presets/user/**/*.hlb
 presets/user/**/*.hxb
 presets/user/**/*.json
 
-# Templates are the deliberate exception. They are the starter tones the app
-# offers to users who arrive without a preset, so they have to ship -- but only
-# add presets here that we own and are willing to publish. Everything dropped
-# into fixtures/ stays private.
+# Templates and the owned corpus are the deliberate exceptions. Templates are
+# the starter tones the app offers to users who arrive without a preset, so
+# they have to ship. The corpus is the owned preset collection we test and
+# evaluate against, so it has to be shared. Only add presets we own to either.
+# Everything dropped into fixtures/ stays private.
 !presets/user/templates/*.hlx
 !presets/user/templates/*.json
+!presets/user/corpus/*.hlx
+!presets/user/corpus/*.json
 
 # Evaluation output is a record of a local run, not a source artifact.
 evals/results/**

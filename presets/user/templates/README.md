@@ -6,33 +6,33 @@ knobs produce it.
 
 ## What is in here
 
-37 presets from Michael's HX Stomp, covering Clean, Crunch, High Gain, Lead,
-Ambient Lead and one Bass tone. They are real presets that were played, not
-arrangements of blocks Bender assembled from first principles — which is the
-only way a starter tone is worth offering. All 37 are owned by us and safe to
-publish; no commercial or third-party preset packs are included.
+**Six presets — one per category.** They are real presets from Michael's HX
+Stomp that were played, not arrangements of blocks Bender assembled from first
+principles, which is the only way a starter tone is worth offering.
 
-Every file is copied **byte for byte** from the device export. Nothing in this
-directory has been through Bender's serializer. That is deliberate: it keeps
-the library usable as a compatibility corpus, because a round-trip test against
-these files is testing the parser against genuine device output rather than
-against Bender's own idea of what a preset looks like.
+| Category | Starting point | Original name |
+|---|---|---|
+| Clean | Boutique Clean | Matchless CH2 SC |
+| Crunch | Classic Crunch | Crunch |
+| High Gain | Modern High Gain | 90s WaS |
+| Lead | Sustaining Lead | Sakura Sustain Tap |
+| Ambient Lead | Ambient Texture | After Play |
+| Bass | Bass Rig | Bass |
 
-Current state, from `pnpm helix:scan presets/user/templates`:
+Six, not thirty-seven, on purpose. This list exists for someone who does not
+know what they want; handing that person a catalogue is the problem it is
+supposed to solve. They are renamed for that audience too — "90s WaS" tells you
+nothing unless you are the person who saved it. The original names are kept in
+each file's `notes` field so provenance is not lost.
 
-| | |
-|---|---|
-| Presets | 37 |
-| Parse clean | 37 / 37, no warnings |
-| Byte-exact round-trip | 37 / 37 |
-| Devices | 1 (HX Stomp, `2162694`) |
-| Firmware | 1 (3.80) |
+The rest of the owned collection lives in [`../corpus/`](../corpus/README.md).
+Nothing was deleted; those presets are for compatibility testing and evaluation
+rather than for showing to a beginner. A test fails if this directory grows past
+eight presets or offers two starting points in the same category.
 
-Thirty-seven presets on **one device and one firmware** is evidence about that
-device, not about Helix generally. Floor, Rack, LT, HX Effects and Pod Go are
-all still unproven. See issue #75, decision 4.
-
-Drop in more presets you own and they appear as starting points automatically.
+Every file is copied **byte for byte** from the device export. Nothing here has
+been through Bender's serializer, which is what makes these files evidence about
+the parser rather than about itself.
 
 ## Adding a template
 

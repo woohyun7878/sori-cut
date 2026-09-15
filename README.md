@@ -125,16 +125,28 @@ A `.hlx` file is plain UTF-8 JSON, but there are enough sharp edges that it is w
 
 The parser is deliberately defensive. It preserves the raw text of every value it does not change, so a preset round-trips byte-for-byte regardless of which tool wrote it, and fields we do not understand survive edits to fields we do.
 
-### Adding your own presets
+### Preset directories
 
 ```
-presets/user/fixtures/     # presets to test Bender against
-presets/user/templates/    # starter tones offered to beginners
+presets/user/templates/    # the 6 starter tones offered to beginners  (committed)
+presets/user/corpus/       # 31 more owned presets, for testing/eval    (committed)
+presets/user/fixtures/     # your own scratch presets                   (private)
 ```
 
-Both are gitignored — your presets stay on your machine unless you deliberately commit them. See the READMEs in each directory.
+Bender ships **37 real presets from an HX Stomp**, owned by us and copied byte
+for byte from the device export. Six are offered as starting points — one per
+category, because the person picking from that list does not know what they want
+and a catalogue is the problem it solves. The other 31 are not shown to users;
+they run through the parser on every commit, so a change that breaks genuine
+hardware output breaks the build.
 
-`presets/user/templates/` is **empty on purpose.** A starter tone is only useful if it actually sounds good, and that is not something we can establish from a schema. Generating plausible-looking JSON would produce a preset nobody has ever heard through an amp. The infrastructure is built; the content needs a real player.
+Anything you drop into `fixtures/` stays on your machine. See the READMEs in
+each directory.
+
+**Compatibility, stated honestly:** 37 / 37 parse clean and round-trip byte for
+byte — on **one device (HX Stomp) and one firmware (3.80)**. That is real
+evidence about that device and no evidence about Floor, Rack, LT, HX Effects or
+Pod Go.
 
 ---
 

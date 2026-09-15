@@ -1,12 +1,14 @@
 {
   "id": "crunch",
-  "name": "Crunch",
+  "name": "Classic Crunch",
   "category": "Crunch",
   "summary": "Mandarin 80 with a Minotaur overdrive into a Greenback 4x12, plus compression, delay and reverb.",
   "bestFor": [
-    "crunch rhythm",
-    "classic rock"
+    "classic rock rhythm",
+    "riffs",
+    "edge-of-breakup"
   ],
   "device": 2162694,
-  "owner": "Michael Jo"
+  "owner": "Michael Jo",
+  "notes": "Michael's \"Crunch\"."
 }

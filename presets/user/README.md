@@ -4,22 +4,40 @@ Drop `.hlx` files you personally own into the directories below. Bender reads
 them from here for local testing and evaluation.
 
 **Your presets stay on your machine by default.** `.gitignore` excludes every
-`.hlx`, `.hls`, `.hlb` and `.hxb` file under `presets/user/`, with one
-deliberate exception: `templates/` is committed, because starter tones are part
-of the shipped product. Anything you drop into `fixtures/` stays private.
+`.hlx`, `.hls`, `.hlb` and `.hxb` file under `presets/user/`, with two
+deliberate exceptions: `templates/` and `corpus/` are committed, because starter
+tones are part of the shipped product and the corpus is shared compatibility
+evidence. Anything you drop into `fixtures/` stays private.
 
 ## Directories
+
+| | Committed | Purpose |
+|---|---|---|
+| `templates/` | yes | The six starter tones the app offers |
+| `corpus/` | yes | The rest of the owned collection: compatibility testing and evaluation |
+| `fixtures/` | no | Your private scratch space |
 
 ### `templates/`
 
 Starter presets offered to users who arrive without a preset of their own — the
 "I don't know anything about amps, make this a good modern rock lead" case.
-Currently 37 presets from Michael's HX Stomp; see
-[`templates/README.md`](templates/README.md).
+
+**Six presets, one per category**, kept deliberately short: this list exists for
+someone who does not know what they want, and a catalogue is the problem it
+solves. See [`templates/README.md`](templates/README.md).
 
 A template is an `.hlx` file plus a sibling `.json` metadata file of the same
-name describing what it is for. **Templates are committed**, so only add
-presets we own and are willing to publish.
+name describing what it is for. **Templates are committed**, so only add presets
+we own and are willing to publish.
+
+### `corpus/`
+
+The other 31 owned presets. Committed, but never shown to users — they exist so
+the parser is tested against real hardware output on every commit, and so eval
+cases have real signal chains to point at. See
+[`corpus/README.md`](corpus/README.md).
+
+Promote a preset to a starter tone by moving its two files into `templates/`.
 
 ### `fixtures/`
 
