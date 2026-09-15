@@ -1,0 +1,28 @@
+{
+  "id": "mock-round-trip-guard",
+  "description": "A deterministic regression case: a single parameter edit must change exactly one value and leave the file otherwise byte-identical.",
+  "fixture": "packages/helix/test/fixtures/possum.hlx",
+  "request": "Bring the amp master up a little.",
+  "mock": [
+    {
+      "toolCalls": [
+        {
+          "name": "set_parameter",
+          "arguments": { "block": "dsp0/block1", "parameter": "Master", "value": 0.48 }
+        }
+      ]
+    },
+    { "text": "I brought the amp master up so notes hold a little longer." }
+  ],
+  "expect": {
+    "outcome": "edits",
+    "mustChange": [
+      { "block": "dsp0/block1", "parameter": "Master", "direction": "increase", "max": 1 }
+    ],
+    "blocksUntouched": ["dsp0/block0", "dsp0/block2", "dsp0/cab0"],
+    "maxEdits": 1,
+    "roundTrip": true,
+    "allToolCallsSucceed": true
+  },
+  "notes": "Runs with --mock, so it needs no network and never varies. This is the shape most regression cases should take once real presets arrive: pin the tool layer's behaviour deterministically, and leave the model's judgement to live cases."
+}

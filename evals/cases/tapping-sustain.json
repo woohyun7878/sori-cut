@@ -1,0 +1,18 @@
+{
+  "id": "tapping-sustain",
+  "description": "The demo scenario. Tapped notes lack body and sustain, and the player explicitly does not want more noise.",
+  "fixture": "packages/helix/test/fixtures/possum.hlx",
+  "request": "My tapped notes are too transient and die too quickly. Give them more body and sustain without making the preset noisy.",
+  "expect": {
+    "outcome": "edits",
+    "toolsUsed": ["inspect_block"],
+    "mustNotChange": [
+      { "block": "dsp0/block1", "parameter": "Drive" }
+    ],
+    "blocksUntouched": ["dsp0/block0"],
+    "maxEdits": 6,
+    "roundTrip": true,
+    "allToolCallsSucceed": true
+  },
+  "notes": "Drive is the preamp gain on the Brit 2204 and block0 is a bypassed distortion pedal. Raising either is the lazy route to 'more sustain' and directly contradicts 'without making it noisy', so both are forbidden. Everything else is left open on purpose: a live run raised Sag, Master and BiasX, which is a defensible power-section answer, but it is not the only one and the case should not pretend otherwise."
+}

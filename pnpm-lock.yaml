@@ -128,6 +128,31 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@26.1.1)(jsdom@25.0.1)
 
+  evals:
+    dependencies:
+      '@bender/helix':
+        specifier: workspace:*
+        version: link:../packages/helix
+      '@bender/server':
+        specifier: workspace:*
+        version: link:../apps/server
+      '@bender/tone-tools':
+        specifier: workspace:*
+        version: link:../packages/tone-tools
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.13
+      typescript:
+        specifier: ^5.5.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)
+
   packages/helix:
     devDependencies:
       '@types/node':

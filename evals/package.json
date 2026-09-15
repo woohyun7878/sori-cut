@@ -1,0 +1,23 @@
+{
+  "name": "@bender/evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bender evaluation harness — replayable real-preset regression cases",
+  "scripts": {
+    "eval": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@bender/helix": "workspace:*",
+    "@bender/server": "workspace:*",
+    "@bender/tone-tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.3",
+    "vitest": "^2.1.9"
+  }
+}

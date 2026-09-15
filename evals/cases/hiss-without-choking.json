@@ -1,0 +1,16 @@
+{
+  "id": "hiss-without-choking",
+  "description": "Noise reduction with an explicit constraint against killing sustain.",
+  "fixture": "packages/helix/test/fixtures/possum.hlx",
+  "request": "Reduce the hiss without choking the notes.",
+  "expect": {
+    "outcome": "edits",
+    "mustNotChange": [
+      { "block": "dsp0/block1", "parameter": "Master" }
+    ],
+    "maxEdits": 4,
+    "roundTrip": true,
+    "allToolCallsSucceed": true
+  },
+  "notes": "A live run rolled the cab HighCut from 20100 Hz down to 10000 Hz, which is a reasonable read: that is where hiss lives and it does not touch the envelope. Note the value is in Hz, not a normalized 0-1 -- a model that writes 0.5 here has misunderstood the format, and the range check in the tool layer should catch it."
+}

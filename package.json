@@ -1,15 +1,18 @@
 {
-  "name": "sori-cut",
+  "name": "bender",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.9",
-  "description": "소리컷 — All-in-one browser-based editor for Korean music short-form content creators",
+  "description": "Bender — your AI guitar tone engineer: inspect and safely edit Line 6 Helix .hlx presets with AI-driven, constrained tools",
   "scripts": {
-    "dev": "pnpm --filter @sori-cut/web dev",
-    "build": "pnpm --filter @sori-cut/web build",
+    "dev": "pnpm --filter @bender/web dev",
+    "dev:server": "pnpm --filter @bender/server dev",
+    "build": "pnpm --filter @bender/web build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "eval": "pnpm --filter @bender/evals eval",
+    "eval:mock": "pnpm --filter @bender/evals eval -- --mock",
     "helix:scan": "pnpm --filter @bender/helix scan",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -18,20 +21,16 @@
     "clean": "pnpm -r clean"
   },
   "keywords": [
-    "music",
-    "editor",
-    "korean",
-    "reels",
-    "shorts",
-    "tiktok",
-    "audio",
-    "video"
+    "guitar",
+    "tone",
+    "helix",
+    "line6",
+    "preset",
+    "ai",
+    "audio"
   ],
   "author": "junewoomusic",
   "license": "MIT",
-  "dependencies": {
-    "idb": "^8.0.3"
-  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.7.0",

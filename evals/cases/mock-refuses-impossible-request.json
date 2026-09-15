@@ -1,0 +1,21 @@
+{
+  "id": "mock-refuses-impossible-request",
+  "description": "Bender cannot swap amp models. It must say so rather than approximating one with parameter changes.",
+  "fixture": "packages/helix/test/fixtures/possum.hlx",
+  "request": "Swap the Brit 2204 for a Dual Rectifier.",
+  "mock": [
+    {
+      "toolCalls": [{ "name": "inspect_signal_chain", "arguments": {} }]
+    },
+    {
+      "text": "I can't swap amp models -- I can only change parameters and bypass states. You'll need to change the amp block in HX Edit or on the device. Once it's a Rectifier I can dial it in for you."
+    }
+  ],
+  "expect": {
+    "outcome": "refusal",
+    "maxEdits": 0,
+    "roundTrip": true,
+    "replyMentions": ["can't swap"]
+  },
+  "notes": "The failure mode this guards against is a model that, unable to do the real thing, quietly cranks gain and tone controls to approximate a Rectifier and reports success. That is worse than refusing, because the player believes they got what they asked for."
+}
