@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "pnpm --filter @bender/web dev",
     "dev:server": "pnpm --filter @bender/server dev",
-    "build": "pnpm --filter @bender/web build",
+  "build": "pnpm -r build",
+  "build:web": "pnpm --filter @bender/web build",
+  "build:server": "pnpm --filter @bender/server build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "eval": "pnpm --filter @bender/evals eval",

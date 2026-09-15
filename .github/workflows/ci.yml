@@ -55,5 +55,8 @@ jobs:
       - name: Evaluation cases (mock)
         run: pnpm run eval:mock
 
+      # Builds both the web bundle and the server bundle. The server build was
+      # previously outside CI entirely, which is how it came to produce output
+      # that typechecked and then crashed on startup: nothing ever ran it.
       - name: Build
         run: pnpm run build
