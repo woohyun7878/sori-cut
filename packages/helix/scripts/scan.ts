@@ -97,8 +97,16 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// `pnpm --filter @bender/helix ...` runs the script with the cwd set to this
+// package, so a path typed at the repository root would otherwise resolve to
+// packages/helix/<path> and fail. pnpm records where the user actually stood in
+// INIT_CWD, so prefer that and fall back to the real cwd when run directly.
+function resolveFromCallerCwd(path: string): string {
+  return resolve(process.env.INIT_CWD ?? process.cwd(), path);
+}
+
 function main(): void {
-  const target = resolve(process.argv[2] ?? 'presets/user/fixtures');
+  const target = resolveFromCallerCwd(process.argv[2] ?? 'presets/user/fixtures');
 
   let files: string[];
   try {
