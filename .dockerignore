@@ -1,0 +1,25 @@
+# Ignore everything, then re-add what the build stage needs. An allowlist is
+# safer here than a denylist: the alternative risks copying presets/user/,
+# .env files, or evals/results/ into a build context that gets pushed.
+*
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+
+!apps/server/**
+!apps/web/package.json
+!evals/package.json
+!packages/helix/**
+!packages/tone-tools/**
+
+# Re-exclude things that would otherwise slip in under the rules above.
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+evals/results
+presets/user

@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Bender API — Azure OpenAI orchestration and constrained Helix preset editing",
-  "main": "dist/server.js",
+  "main": "dist/server.mjs",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "start:dist": "node dist/server.js",
+    "start:dist": "node dist/server.mjs",
     "build": "tsx scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -182,7 +182,47 @@ See [`docs/copilot-agents.md`](docs/copilot-agents.md) for the full list, how to
 
 The frontend deploys to GitHub Pages on every push to `main`, serving https://soricut.studio/ — a name inherited from this repository's previous life, and one of the open questions below.
 
-**The backend is not deployed yet.** It cannot move into the browser, because the Azure credential must never enter a public bundle (the production build is verified free of it). Hosting is an open decision; see the deployment issue.
+**The backend is not deployed yet**, but it is packaged and ready to be. It cannot move into the browser, because the Azure credential must never enter a public bundle (the production build is verified free of it). Where it should run is still an open decision — see [#72](https://github.com/woohyun7878/sori-cut/issues/72).
+
+### Building the backend artifact
+
+```bash
+pnpm --filter @bender/server build
+```
+
+This produces `apps/server/dist/`:
+
+| File | Purpose |
+| --- | --- |
+| `server.mjs` | The whole server and both `@bender/*` packages in one 96 KB ESM file |
+| `server.mjs.map` | Source map, for readable stack traces |
+| `package.json` | Generated. Lists only the four published runtime dependencies |
+
+`tsc` cannot produce this. The workspace packages export raw TypeScript, so compiled output resolves `@bender/helix` to a `.ts` file that Node refuses to load. Bundling removes the workspace from the deployment picture entirely.
+
+The generated `package.json` exists because the server's own manifest declares those packages as `workspace:*` — a pnpm-only protocol that npm rejects with `EUNSUPPORTEDPROTOCOL`. The generated one is derived from the same dependency list that decides what stays external, so it cannot drift from what the bundle imports.
+
+### Container
+
+```bash
+# from the repository root — the build stage needs the workspace
+docker build -f apps/server/Dockerfile -t bender-api .
+
+docker run --rm -p 8787:8787 \
+  -e AZURE_OPENAI_ENDPOINT=https://michaeljo-playground.openai.azure.com \
+  -e AZURE_OPENAI_DEPLOYMENT=gpt-5.6-sol \
+  -e ALLOWED_ORIGINS=https://soricut.studio \
+  bender-api
+```
+
+Two things worth knowing before you deploy this anywhere:
+
+- **`HOST` must be `0.0.0.0` in a container.** It defaults to `127.0.0.1`, which is the right default for local development and means a containerised server is unreachable no matter what you publish. The Dockerfile sets it; a non-Docker host needs to.
+- **Sessions are in memory, so run exactly one instance.** Two replicas drop sessions on roughly half of all requests. Scale out only after sessions move to shared storage.
+
+For Azure Container Apps, give the app a managed identity with **Cognitive Services OpenAI User** and set no key at all — `DefaultAzureCredential` finds it. Key auth is disabled on the R&D resource (`403 AuthenticationTypeDisabled`), so Entra is the default rather than a fallback.
+
+The image was not built during development because no Docker daemon was available. The runtime stage was instead reproduced by hand — generated manifest, `npm install --omit=dev`, `node dist/server.mjs` — and the server started and served `/api/health` with no workspace, no pnpm and no dev dependencies present.
 
 ---
 

@@ -8,25 +8,35 @@
  * produced something that typechecked and then crashed on startup with
  * ERR_UNKNOWN_FILE_EXTENSION.
  *
- * Bundling resolves those imports at build time and emits one self-contained
- * file. The deployment artifact becomes `dist/server.js` plus a `node:` runtime
- * and nothing else -- no pnpm workspace to reconstruct inside a container, and
- * no hoisting behaviour to depend on.
+ * Bundling resolves those imports at build time, so the pnpm workspace does
+ * not have to be reconstructed inside a container. The published third-party
+ * dependencies stay external and are installed normally at deploy time --
+ * `@azure/identity` in particular resolves auth plugins through dynamic
+ * `require`, which a bundler cannot follow and would silently break.
  *
- * Native and optional-native dependencies stay external: bundling a package
- * that ships platform-specific binaries produces an artifact that only runs on
- * the machine that built it, which for a Linux container built on Windows is
- * exactly the wrong outcome.
+ * The artifact is therefore `dist/server.mjs` plus a production install of the
+ * four runtime dependencies. See `apps/server/Dockerfile`.
+ *
+ * The `.mjs` extension is deliberate. esbuild emits ESM here, but Node decides
+ * how to parse a `.js` file from the nearest `package.json` `type` field. That
+ * made the output run inside the repo and fail anywhere it was copied on its
+ * own -- which is exactly what a container image does -- with
+ * "Cannot use import statement outside a module". `.mjs` is unambiguous no
+ * matter what directory the file lands in.
  */
 
 import { build } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
+const externalDeps = Object.fromEntries(
+  Object.entries(pkg.dependencies ?? {}).filter(([name]) => !name.startsWith('@bender/')),
+);
+
 const result = await build({
   entryPoints: ['src/server.ts'],
-  outfile: 'dist/server.js',
+  outfile: 'dist/server.mjs',
   bundle: true,
   platform: 'node',
   target: 'node20',
@@ -36,7 +46,7 @@ const result = await build({
   // Readable stack traces matter more than bytes for a server, and an
   // unminified bundle is far easier to audit for an accidentally inlined
   // credential.
-  external: Object.keys(pkg.dependencies ?? {}).filter((name) => !name.startsWith('@bender/')),
+  external: Object.keys(externalDeps),
   banner: {
     // Some transitive CommonJS dependencies reference these, which do not
     // exist in an ESM bundle unless we provide them.
@@ -53,3 +63,34 @@ const result = await build({
 });
 
 if (result.errors.length > 0) process.exit(1);
+
+/**
+ * Emit a manifest describing what the bundle actually needs at runtime.
+ *
+ * The server's own package.json cannot be used for this. It declares
+ * `@bender/helix` and `@bender/tone-tools` as `workspace:*`, a pnpm-only
+ * protocol that npm rejects outright with EUNSUPPORTEDPROTOCOL -- so a
+ * container runtime stage that copied it and ran `npm install` would fail on
+ * dependencies that are already inlined into the bundle and do not need
+ * installing at all.
+ *
+ * Writing the manifest here keeps it honest: it is derived from the same
+ * dependency list that decided esbuild's `external`, so the file can never
+ * drift from what the bundle imports.
+ */
+writeFileSync(
+  new URL('../dist/package.json', import.meta.url),
+  `${JSON.stringify(
+    {
+      name: `${pkg.name}-dist`,
+      version: pkg.version,
+      private: true,
+      type: 'module',
+      main: 'server.mjs',
+      dependencies: externalDeps,
+    },
+    null,
+    2,
+  )}\n`,
+);
+
