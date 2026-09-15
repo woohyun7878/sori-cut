@@ -1,0 +1,26 @@
+{
+  "name": "@bender/tone-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Constrained, validated, transactional editing operations over a Helix preset",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@bender/helix": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.3",
+    "vitest": "^2.1.8"
+  }
+}
