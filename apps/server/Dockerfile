@@ -34,6 +34,7 @@ COPY tsconfig.base.json ./
 COPY packages/helix       packages/helix
 COPY packages/tone-tools  packages/tone-tools
 COPY apps/server          apps/server
+COPY presets/user/templates presets/user/templates
 
 RUN pnpm --filter @bender/server build
 

@@ -26,7 +26,7 @@
  */
 
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -63,6 +63,12 @@ const result = await build({
 });
 
 if (result.errors.length > 0) process.exit(1);
+
+const templatesDir = new URL('../dist/templates/', import.meta.url);
+rmSync(templatesDir, { recursive: true, force: true });
+cpSync(new URL('../../../presets/user/templates/', import.meta.url), templatesDir, {
+  recursive: true,
+});
 
 /**
  * Emit a manifest describing what the bundle actually needs at runtime.

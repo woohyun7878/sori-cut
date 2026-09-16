@@ -225,7 +225,7 @@ See [`docs/copilot-agents.md`](docs/copilot-agents.md) for the full list and how
 | Piece | Where | How |
 | --- | --- | --- |
 | Frontend | GitHub Pages → https://soricut.studio/ | Automatic, on every push to `main` |
-| Backend | Azure App Service (Linux container, West US 3) | **Manual**, by the App Service owner |
+| Backend | Azure App Service (Linux Node 20, West US 3) | **Manual**, by the App Service owner |
 
 ```bash
 curl https://bender-backend-cvdxhaaubjdmb4c3.westus3-01.azurewebsites.net/api/health
@@ -235,7 +235,7 @@ curl https://bender-backend-cvdxhaaubjdmb4c3.westus3-01.azurewebsites.net/api/he
 > [!IMPORTANT]
 > **The backend is deployed by hand, so `main` can be ahead of production.** A
 > green `/api/health` means a Bender server is up, not that it is *this* commit.
-> Server changes ship only when someone rebuilds the image and redeploys.
+> Server changes ship only when someone rebuilds the artifact and redeploys.
 
 The frontend bakes the backend URL in at build time from the `BENDER_API_URL`
 repository variable (Settings → Secrets and variables → Actions → Variables), so
@@ -270,15 +270,33 @@ This produces `apps/server/dist/`:
 
 | File | Purpose |
 | --- | --- |
-| `server.mjs` | The whole server and both `@bender/*` packages in one 96 KB ESM file |
+| `server.mjs` | The whole server and both `@bender/*` packages in one ESM file |
 | `server.mjs.map` | Source map, for readable stack traces |
 | `package.json` | Generated. Lists only the four published runtime dependencies and starts the bundle with `npm start` |
+| `templates/` | The six curated starter presets and their metadata |
 
 `tsc` cannot produce this: the workspace packages export raw TypeScript, so compiled output resolves `@bender/helix` to a `.ts` file Node refuses to load. The generated manifest exists because the server's own declares those packages as `workspace:*`, which npm rejects with `EUNSUPPORTEDPROTOCOL`.
 
-### Container
+### Azure App Service
 
-Production runs the image built by [`apps/server/Dockerfile`](apps/server/Dockerfile).
+Production runs the contents of `apps/server/dist/` on the App Service Node 20
+runtime. ZIP the **contents** of that directory, not the directory itself, so
+`package.json` and `server.mjs` land at the deployment root.
+
+```bash
+az webapp deploy \
+  --resource-group acruzsalamn-test \
+  --name bender-backend \
+  --src-path bender-backend.zip \
+  --type zip \
+  --clean true \
+  --restart true
+```
+
+### Container alternative
+
+The same backend can instead run from
+[`apps/server/Dockerfile`](apps/server/Dockerfile).
 
 ```bash
 # from the repository root — the build stage needs the workspace
@@ -306,6 +324,8 @@ AZURE_OPENAI_AUTH_MODE     api-key
 AZURE_OPENAI_API_KEY       <from the Foundry resource — never committed>
 HOST                       0.0.0.0
 ALLOWED_ORIGINS            https://soricut.studio
+SCM_DO_BUILD_DURING_DEPLOYMENT true
+WEBSITE_NODE_DEFAULT_VERSION  ~20
 ```
 
 `ALLOWED_ORIGINS` is the CORS allowlist, set to the Pages origin alone. It is not

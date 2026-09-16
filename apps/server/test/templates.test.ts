@@ -51,9 +51,14 @@ describe('loadTemplates', () => {
   });
 
   it('returns nothing when the directory is empty', () => {
-    // The shipped state of the repository. An empty list is correct here --
-    // inventing a starter preset would mean shipping a tone nobody has heard.
     expect(loadTemplates(dir)).toEqual([]);
+  });
+
+  it('loads the shipped starter collection from the default directory', () => {
+    const templates = loadTemplates();
+
+    expect(templates).toHaveLength(6);
+    expect(templates.every((template) => template.preset.length > 0)).toBe(true);
   });
 
   it('loads a well-formed template with its preset contents', () => {

@@ -23,3 +23,10 @@
 **/*.log
 evals/results
 presets/user
+
+# The server bundle ships the curated starter set. Keep the rest of the owned
+# and private preset directories out of the image build context.
+!presets/
+!presets/user/
+!presets/user/templates/
+!presets/user/templates/**

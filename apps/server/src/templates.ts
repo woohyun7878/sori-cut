@@ -1,12 +1,9 @@
 /**
  * Starter template loading.
  *
- * Templates are read from presets/user/templates at startup. That directory is
- * empty in the repository on purpose: a starter tone has to come from a preset
- * a real person made and owns, and anything generated from first principles
- * would be a plausible-looking arrangement of blocks nobody has ever heard.
- * Presenting that as a curated starting point would be a lie the user can only
- * detect by plugging in.
+ * During development templates are read from presets/user/templates. Production
+ * bundles copy that collection beside server.mjs so a standalone deployment
+ * does not depend on the repository layout.
  *
  * So the loader is built and documented, and the list it returns is empty until
  * someone adds presets they own. The UI says so rather than hiding the gap.
@@ -34,6 +31,8 @@ export interface Template extends TemplateMetadata {
 
 function templatesDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
+  const bundled = resolve(here, 'templates');
+  if (existsSync(bundled)) return bundled;
   return resolve(here, '../../..', 'presets/user/templates');
 }
 
