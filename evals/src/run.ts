@@ -28,6 +28,12 @@ export interface ToolRecord {
 
 export interface RunResult {
   caseId: string;
+  /**
+   * Identifies the invocation this result came from, shared by every case in
+   * it. Feedback is recorded against a run, so without this there is no way to
+   * say "that run of tapping-sustain sounded wrong" after the fact.
+   */
+  runId: string;
   request: string;
   startedAt: string;
   durationMs: number;
@@ -75,10 +81,24 @@ export interface RunResult {
 
 export interface RunOptions {
   provider: ModelProvider;
+  /** Shared across every case in one invocation. See RunResult.runId. */
+  runId?: string;
   maxIterations?: number;
   /** Keep the generated preset in the result. Defaults to on for failures only. */
   keepPreset?: boolean;
   verbose?: boolean;
+}
+
+/**
+ * A short, sortable id for one invocation of the harness.
+ *
+ * Timestamp first so runs sort chronologically in a directory listing, with a
+ * random tail because two runs started in the same second must not collide.
+ */
+export function newRunId(now = new Date()): string {
+  // YYMMDDHHMMSS from the ISO string, which is already zero-padded and UTC.
+  const stamp = now.toISOString().replace(/[-:T]/g, '').slice(2, 14);
+  return `${stamp}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function sha256(text: string): string {
@@ -96,6 +116,7 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
 
   const base: RunResult = {
     caseId: evalCase.id,
+    runId: options.runId ?? newRunId(),
     request: evalCase.request,
     startedAt,
     durationMs: 0,

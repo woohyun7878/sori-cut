@@ -26,6 +26,18 @@ export {
   type IssueSeverity,
 } from './model/validate.js';
 export * from './model/types.js';
+export {
+  catalogueEntry,
+  catalogueParameter,
+  catalogueRange,
+  catalogueCoverage,
+  describeModel,
+  CATALOGUE,
+  CATALOGUE_SOURCE,
+  type CatalogueEntry,
+  type CatalogueParameter,
+} from './model/catalogue.js';
+export { MODEL_NAMES, type ModelName } from './model/model-names.generated.js';
 
 import { HelixPreset } from './model/preset.js';
 

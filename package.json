@@ -16,6 +16,7 @@
     "eval": "pnpm --filter @bender/evals eval",
     "eval:mock": "pnpm --filter @bender/evals eval --mock",
     "helix:scan": "pnpm --filter @bender/helix scan",
+    "helix:catalogue": "pnpm --filter @bender/helix catalogue",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

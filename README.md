@@ -117,7 +117,7 @@ Then open http://localhost:5173 and drop in a `.hlx`.
 ```bash
 pnpm typecheck
 pnpm lint
-pnpm test          # 443 tests
+pnpm test          # 482 tests
 pnpm build
 pnpm eval --mock   # deterministic evaluation cases, no network
 pnpm eval          # full suite against the live model
@@ -179,6 +179,32 @@ pnpm eval --mock              # deterministic cases only, CI-safe
 A case pairs a preset with a request and the invariants that must hold afterwards. Runs capture the fixture hash, the full model/tool transcript, every before/after value and the round-trip verdict, so two runs can be diffed.
 
 Cases assert what must **not** change more than what must. Almost any edit changes the tone; the question is whether the constraint held. "More sustain without more noise" is only correct if the gain did not move.
+
+Every run prints what it cost — tokens in and out, model turns, tool calls, and tokens per edit landed. Pass/fail alone will not tell you that a case passed by burning 18k tokens on nine tool calls.
+
+Whether it *sounded* right is not decidable by a check, so it is recorded by hand after playing the preset:
+
+```bash
+pnpm eval feedback bad "harsh top end, gain went too far"
+```
+
+Verdicts are committed to `evals/feedback/`, keyed to the run and carrying the exact edits. Runs where the checks and your ears disagree are the ones worth reading.
+
+---
+
+## The model catalogue
+
+Line 6 does not publish one, and the proprietary catalogue inside HX Edit is not ours to copy. So it is derived from presets we own:
+
+```bash
+pnpm helix:catalogue
+```
+
+Walking every preset in the corpus yields which models exist, what their parameters are called, and — where a controller assignment reveals it — what range a parameter really has. It can only ever contain things a real device produced, and coverage grows by exporting more presets rather than by trusting a list.
+
+Ranges are reported only when a controller proved them. The values our corpus happens to contain are a floor, not a range, and treating them as one would have a tool reject a legitimate setting.
+
+Display names are the exception: they are hand-recorded in `packages/helix/data/model-names.json` as they are confirmed against real hardware, because no amount of parsing tells you where `4x12` ends and `1960` begins.
 
 ---
 
@@ -298,7 +324,7 @@ unset, and `DefaultAzureCredential` finds it.
 - Sessions are held in memory, so the server is single-instance.
 - Bender cannot add, remove, reorder or replace blocks, or change routing.
 - No audio. Bender reasons about the signal chain, not about sound.
-- Model names come from identifier splitting, so `Cab4x121960T75` renders as "Cab4x121960 T75" rather than "4x12 1960 Trem 75". A real catalogue is a known gap.
+- Model names come from identifier splitting unless curated in `packages/helix/data/model-names.json`, so an uncurated `Cab4x121960T75` renders as "Cab4x121960 T75" rather than "4x12 1960 Trem 75".
 - `@type` category codes are treated as a hypothesis — two public sources contradict each other, and we never depend on them for correctness.
 
 Open design questions are tracked as [GitHub issues](https://github.com/woohyun7878/sori-cut/issues?q=is%3Aissue+label%3Adesign-decision).

@@ -6,6 +6,8 @@
  * permissive rather than asserting structure we have not verified.
  */
 
+import { MODEL_NAMES } from './model-names.generated.js';
+
 /** Value of a block parameter. Helix parameters are NOT normalized 0..1. */
 export type ParamValue = number | boolean | string;
 
@@ -184,22 +186,28 @@ export function slotRole(slot: string): SlotRole {
 }
 
 /**
- * Derive a best-effort readable label from a Helix model identifier.
+ * Derive a readable label from a Helix model identifier.
  *
  * "HD2_AmpEssexA30" -> "Amp Essex A30". Identifiers that are already display
  * names (a documented minority) pass through unchanged.
  *
- * This is deliberately conservative. Splitting on case boundaries is a real
- * signal; splitting on digit boundaries is not. `Cab4x121960T75` is "4x12 1960
- * Trem 75" to a guitarist, but nothing in the identifier says where `4x12`
- * ends and `1960` begins — only Line 6's proprietary model catalog knows that.
- * Rather than guess and render something wrong, the label keeps digit runs
- * intact and the UI shows the raw identifier alongside it.
+ * A curated name wins when one exists. Line 6 does not publish a model
+ * catalogue, so names are recorded by hand in
+ * `packages/helix/data/model-names.json` as they are confirmed against real
+ * hardware, and `pnpm helix:catalogue` compiles them in.
  *
- * A real model catalog is a known gap. See docs/helix-format-notes.md.
+ * Without one, the fallback is deliberately conservative. Splitting on case
+ * boundaries is a real signal; splitting on digit boundaries is not.
+ * `Cab4x121960T75` is "4x12 1960 Trem 75" to a guitarist, but nothing in the
+ * identifier says where `4x12` ends and `1960` begins. Rather than guess and
+ * render something wrong, the label keeps digit runs intact and the UI shows
+ * the raw identifier alongside it.
  */
 export function labelForModel(model: string | undefined): string {
   if (!model) return 'Unknown';
+
+  const curated = MODEL_NAMES[model]?.label;
+  if (curated) return curated;
 
   const withoutPrefix = model.replace(
     /^(HD2|HelixStomp|HelixFx|Helix|VIC|Victoria|L6SPB|P34)_/,

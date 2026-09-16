@@ -4,15 +4,27 @@
  *   pnpm eval                 every case that can run
  *   pnpm eval tapping-sustain one case
  *   pnpm eval --mock          replay canned transcripts; no network
- *   pnpm eval --record        write full transcripts to evals/results
+ *   pnpm eval --record        keep the generated preset even when a case passes
  *   pnpm eval --verbose       show passing checks too
  *   pnpm eval --list          list cases without running anything
+ *
+ *   pnpm eval feedback tapping-sustain bad "thin and honky"
+ *   pnpm eval feedback --list
  */
 
 import { CaseError, loadCases, type EvalCase } from './case.js';
+import {
+  disagreements,
+  findRun,
+  FeedbackError,
+  loadFeedback,
+  parseVerdict,
+  recordFeedback,
+  FEEDBACK_FILE,
+} from './feedback.js';
 import { MockProvider } from './mock-provider.js';
 import { printResult, printSummary, writeResults } from './report.js';
-import { runCase, type RunResult } from './run.js';
+import { newRunId, runCase, type RunResult } from './run.js';
 import type { ModelProvider } from '../../apps/server/src/model/provider.js';
 
 interface Args {
@@ -67,8 +79,88 @@ async function providerFor(evalCase: EvalCase, mock: boolean): Promise<ModelProv
   }
 }
 
+/**
+ * `pnpm eval feedback [target] <verdict> [note]`
+ *
+ * Handled before argument parsing because its arguments are prose, not flags.
+ */
+function feedbackCommand(argv: string[]): number {
+  const args = argv.filter((arg) => arg !== '--');
+
+  if (args[0] === '--list' || args[0] === undefined) {
+    const entries = loadFeedback();
+    if (entries.length === 0) {
+      process.stdout.write(
+        'No feedback recorded yet.\n\n' +
+          '  pnpm eval feedback <case-or-run-id> good|bad|mixed "what you heard"\n',
+      );
+      return 0;
+    }
+
+    for (const entry of entries) {
+      const edits = entry.edits.length === 1 ? '1 edit' : `${entry.edits.length} edits`;
+      process.stdout.write(
+        `  ${entry.verdict.padEnd(5)} ${entry.caseId}  \x1b[2m${entry.runId}, ${edits}\x1b[0m\n` +
+          (entry.note ? `        ${entry.note}\n` : ''),
+      );
+    }
+
+    const conflicted = disagreements();
+    if (conflicted.length > 0) {
+      process.stdout.write(
+        `\n\x1b[33m${conflicted.length} run(s) where the checks and your ears disagreed:\x1b[0m ` +
+          `${conflicted.map((entry) => entry.caseId).join(', ')}\n` +
+          '\x1b[2mEither the case asserts the wrong thing or the checks are too strict.\x1b[0m\n',
+      );
+    }
+    return 0;
+  }
+
+  try {
+    // The target is optional: `feedback bad "..."` judges the most recent run,
+    // which is what you want when you just played it.
+    const looksLikeVerdict = (value: string | undefined): boolean =>
+      value !== undefined && ['good', 'bad', 'mixed'].includes(value.toLowerCase());
+
+    const [target, verdictArg, note] = looksLikeVerdict(args[0])
+      ? [undefined, args[0], args[1]]
+      : [args[0], args[1], args[2]];
+
+    if (verdictArg === undefined) {
+      process.stderr.write('Usage: pnpm eval feedback [case-or-run-id] good|bad|mixed ["note"]\n');
+      return 2;
+    }
+
+    const { result } = findRun(target);
+    const entry = recordFeedback(result, parseVerdict(verdictArg), note);
+
+    process.stdout.write(
+      `Recorded ${entry.verdict} for ${entry.caseId} (${entry.runId}), ` +
+        `${entry.edits.length} edit(s).\n`,
+    );
+    if (entry.checksPassed && entry.verdict === 'bad') {
+      process.stdout.write(
+        '\x1b[33mThe checks passed but it sounded wrong — the case is asserting the wrong thing.\x1b[0m\n',
+      );
+    }
+    process.stdout.write(`\x1b[2m${FEEDBACK_FILE}\x1b[0m\n`);
+    return 0;
+  } catch (error) {
+    if (error instanceof FeedbackError) {
+      process.stderr.write(`${error.message}\n`);
+      return 2;
+    }
+    throw error;
+  }
+}
+
 async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv[0] === 'feedback' || (argv[0] === '--' && argv[1] === 'feedback')) {
+    return feedbackCommand(argv.slice(argv[0] === 'feedback' ? 1 : 2));
+  }
+
+  const args = parseArgs(argv);
 
   let cases: EvalCase[];
   try {
@@ -111,31 +203,12 @@ async function main(): Promise<number> {
   }
 
   const results: RunResult[] = [];
+  const runId = newRunId();
 
   for (const evalCase of cases) {
     if (evalCase.skip) {
       results.push({
-        caseId: evalCase.id,
-        request: evalCase.request,
-        startedAt: new Date().toISOString(),
-        durationMs: 0,
-        fixture: evalCase.fixture,
-        fixtureSha256: '',
-        parser: { ok: false, warnings: [] },
-        model: {
-          provider: 'none',
-          requestIds: [],
-          iterations: 0,
-          truncated: false,
-          usage: {},
-          latencyMs: 0,
-        },
-        transcript: [],
-        diff: [],
-        reply: '',
-        output: { roundTripStable: false, differsFromInput: false },
-        checks: [],
-        passed: true,
+        ...(await skeleton(evalCase, runId)),
         skipped: true,
         skipReason: evalCase.skipReason,
       });
@@ -146,30 +219,39 @@ async function main(): Promise<number> {
     const provider = await providerFor(evalCase, args.mock);
     if (typeof provider === 'string') {
       process.stdout.write(`\x1b[2mskip\x1b[0m  ${evalCase.id} — ${provider}\n`);
-      results.push({ ...(await skeleton(evalCase)), skipped: true, skipReason: provider });
+      results.push({ ...(await skeleton(evalCase, runId)), skipped: true, skipReason: provider });
       continue;
     }
 
-    const result = await runCase(evalCase, { provider, verbose: args.verbose });
+    const result = await runCase(evalCase, {
+      provider,
+      runId,
+      keepPreset: args.record,
+      verbose: args.verbose,
+    });
     results.push(result);
     printResult(result, args.verbose);
   }
 
   printSummary(results);
 
-  // Failures are always written, whether or not --record was passed. A failure
-  // you cannot inspect afterwards is a failure you will have to reproduce.
-  if (args.record || results.some((r) => !r.passed && !r.skipped)) {
-    const path = writeResults(results, args.mock ? 'mock' : 'live');
-    process.stdout.write(`\nResults written to ${path}\n`);
+  // Written on every run, not just failures. Feedback attaches to a run id
+  // after the preset has been played, which can be long after the run.
+  const path = writeResults(results, args.mock ? 'mock' : 'live');
+  process.stdout.write(`\n\x1b[2mResults: ${path}\x1b[0m\n`);
+  if (results.some((r) => !r.skipped)) {
+    process.stdout.write(
+      `\x1b[2mPlayed it? pnpm eval feedback ${results.find((r) => !r.skipped)?.caseId ?? ''} good|bad|mixed "note"\x1b[0m\n`,
+    );
   }
 
   return results.some((r) => !r.passed && !r.skipped) ? 1 : 0;
 }
 
-async function skeleton(evalCase: EvalCase): Promise<RunResult> {
+async function skeleton(evalCase: EvalCase, runId: string): Promise<RunResult> {
   return {
     caseId: evalCase.id,
+    runId,
     request: evalCase.request,
     startedAt: new Date().toISOString(),
     durationMs: 0,

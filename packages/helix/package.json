@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "scan": "tsx scripts/scan.ts"
+    "scan": "tsx scripts/scan.ts",
+    "catalogue": "tsx scripts/catalogue.ts"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

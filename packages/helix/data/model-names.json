@@ -1,0 +1,10 @@
+{
+  "$comment": "Curated display names for Helix model identifiers. This is the only hand-maintained part of the catalogue: an identifier cannot tell you where '4x12' ends and '1960' begins, so a human who owns the device records it here. Everything else in packages/helix/src/model/catalogue.generated.ts is derived from presets by `pnpm helix:catalogue`, which merges this file in. Add entries as you confirm them against your own hardware or HX Edit, and leave a model out rather than guessing at it. Keys beginning with $ are ignored.",
+  "$example": {
+    "HD2_AmpEssexA30": {
+      "label": "Essex A30",
+      "basedOn": "the amp it emulates, as printed on the device",
+      "category": "amp"
+    }
+  }
+}
