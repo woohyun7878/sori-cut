@@ -678,6 +678,10 @@
       toneTab.addEventListener('click', () => selectMode('tone'));
       uploadTab.addEventListener('click', () => selectMode('upload'));
 
+      if (new URLSearchParams(window.location.search).get('mode') === 'upload') {
+        selectMode('upload');
+      }
+
       document.querySelector('#next-tone').addEventListener('click', () => {
         railOffset = Math.max(railOffset - 332, -332);
         rail.style.transform = `translateX(${railOffset}px)`;
