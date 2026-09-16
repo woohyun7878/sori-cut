@@ -95,8 +95,22 @@ describe('summarizeCost', () => {
     const summary = summarizeCost([
       runResult({
         diff: [
-          { dsp: 'dsp0', slot: 'block0', parameter: 'Drive', before: 0.5, after: 0.6 },
-          { dsp: 'dsp0', slot: 'block0', parameter: 'Bass', before: 0.5, after: 0.6 },
+          {
+            dsp: 'dsp0',
+            slot: 'block0',
+            label: 'Amp',
+            parameter: 'Drive',
+            before: 0.5,
+            after: 0.6,
+          },
+          {
+            dsp: 'dsp0',
+            slot: 'block0',
+            label: 'Amp',
+            parameter: 'Bass',
+            before: 0.5,
+            after: 0.6,
+          },
         ],
       }),
     ]);

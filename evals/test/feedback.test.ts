@@ -47,7 +47,16 @@ function runResult(overrides: Partial<RunResult> = {}): RunResult {
       latencyMs: 100,
     },
     transcript: [],
-    diff: [{ dsp: 'dsp0', slot: 'block1', parameter: 'Sustain', before: 0.4, after: 0.6 }],
+    diff: [
+      {
+        dsp: 'dsp0',
+        slot: 'block1',
+        label: 'Amp',
+        parameter: 'Sustain',
+        before: 0.4,
+        after: 0.6,
+      },
+    ],
     reply: '',
     output: { roundTripStable: true, differsFromInput: true },
     checks: [],
