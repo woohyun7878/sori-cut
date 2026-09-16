@@ -116,7 +116,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   };
 }
 
-/** A one-line description of the model path, safe to log and to show in /api/health. */
+/**
+ * A one-line description of the model path, safe to log.
+ *
+ * Logged at startup and used in local diagnostics. It is deliberately *not*
+ * served from `/api/health`: that endpoint is public, and naming the resource
+ * and deployment there points anyone holding a stray key straight at the
+ * target.
+ */
 export function describeAzure(config: AzureConfig): string {
   return `${config.endpoint} deployment=${config.deployment} api-version=${config.apiVersion} auth=${config.authMode}`;
 }

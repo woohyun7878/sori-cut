@@ -76,10 +76,12 @@ EXPOSE 8787
 #   AZURE_OPENAI_API_KEY     only when AZURE_OPENAI_AUTH_MODE=api-key
 #   ALLOWED_ORIGINS          comma-separated browser origins, e.g. https://soricut.studio
 #
-# Entra is the default because key auth is disabled on the R&D resource
-# (403 AuthenticationTypeDisabled). In Azure Container Apps, assign the app a
-# managed identity with "Cognitive Services OpenAI User" and DefaultAzureCredential
-# will pick it up with no further configuration.
+# Production supplies a key, because the Foundry resource it talks to has key
+# auth enabled and App Service holds the key in application settings. Entra
+# remains the code default: the dev resource has key auth disabled entirely
+# (403 AuthenticationTypeDisabled), and on a host that supports managed identity
+# the better configuration is no key at all -- assign an identity with
+# "Cognitive Services OpenAI User" and DefaultAzureCredential picks it up.
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

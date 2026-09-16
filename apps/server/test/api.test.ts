@@ -38,14 +38,19 @@ describe('health', () => {
     app = await makeApp(new ScriptedProvider([]));
   });
 
-  it('reports the model configuration without the credential', async () => {
+  it('reports liveness without describing the model path', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/health' });
     const body = response.json();
 
     expect(response.statusCode).toBe(200);
-    expect(body.model).toContain('test-deployment');
-    expect(body.model).toContain('auth=entra');
-    expect(JSON.stringify(body)).not.toMatch(/api[-_]?key["']?\s*[:=]\s*["'][^"']{10,}/i);
+    expect(body).toEqual({ status: 'ok', activeSessions: 0 });
+
+    // The endpoint is public, so nothing about the Azure resource may leak
+    // through it: not the host, not the deployment name, not the auth mode.
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('test-deployment');
+    expect(serialized).not.toMatch(/azure|openai|auth=|api-version/i);
+    expect(serialized).not.toMatch(/api[-_]?key["']?\s*[:=]\s*["'][^"']{10,}/i);
   });
 });
 

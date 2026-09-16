@@ -8,7 +8,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ToneSession, type ToolCallOutcome } from '@bender/tone-tools';
 import type { ServerConfig } from '../config.js';
-import { describeAzure } from '../config.js';
 import { ModelError, type ModelProvider } from '../model/provider.js';
 import { runAgentTurn } from '../agent/loop.js';
 import type { SessionStore, StoredSession } from '../store.js';
@@ -92,11 +91,15 @@ function findSession(
 export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { config, store, provider, logger } = deps;
 
+  // Deliberately says nothing about the model path. This endpoint is public --
+  // the production backend answers it on the open internet -- and the resource
+  // endpoint, deployment name and auth mode together tell an attacker exactly
+  // which Azure resource to aim a leaked or brute-forced key at. None of it is
+  // a credential, but naming the target is still a favour not worth doing.
+  // The same description is logged at startup (`server.starting`), where an
+  // operator with log access can read it and a stranger cannot.
   app.get('/api/health', async () => ({
     status: 'ok',
-    // Safe to expose: endpoint, deployment and auth mode are configuration,
-    // not credentials, and knowing them is what makes a failed demo debuggable.
-    model: describeAzure(config.azure),
     activeSessions: store.size,
   }));
 

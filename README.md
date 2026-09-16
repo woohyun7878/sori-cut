@@ -2,32 +2,27 @@
 
 > Your AI guitar tone engineer.
 
-Bender reads a Line 6 Helix preset, shows you its signal chain, and turns a plain-English request into safe, reviewable edits.
+Bender reads a Line 6 Helix preset, shows you its signal chain, and turns a plain-English request into safe, reviewable edits. Every change is shown, undoable, and downloadable as a working `.hlx`.
 
-You say what is wrong with the tone. Bender inspects the chain, works out what is causing it, changes the parameters that matter, and tells you what it did. You see every change, undo anything you disagree with, and download a working `.hlx`.
+Ask:
 
 ```
 My tapped notes are too transient and die too quickly.
 Give them more body and sustain without making the preset noisy.
 ```
 
-From a real run against the live model:
-
-> Inspected the preset and three blocks, then raised `Sag` 0.5→0.58, `Master` 0.36→0.48 and `BiasX` 0.5→0.6.
->
-> *"I gave the amp more power-section bloom and a softer response... I left the preamp gain and bypassed drive untouched, so the noise floor shouldn't increase."*
-
-It reached for power-amp sag and bias rather than simply adding gain, and it honoured the constraint it was given. That is the whole idea: a capable model reasoning about a real signal chain, rather than a lookup table mapping words to knobs.
+A real run raised `Sag` 0.5→0.58, `Master` 0.36→0.48 and `BiasX` 0.5→0.6 — power-amp
+bloom rather than more gain, with the preamp gain left alone as asked.
 
 ---
 
 ## Status
 
-A working prototype, honestly scoped.
+A working prototype.
 
-**What works:** parsing and round-tripping `.hlx` files, a typed signal-chain model, nine constrained editing tools with validation and undo, multi-turn tool-calling orchestration against Azure OpenAI, a replayable evaluation harness, and the upload → chat → diff → undo → download path end to end.
+**Works:** `.hlx` parse and round-trip, a typed signal-chain model, nine constrained editing tools with validation and undo, multi-turn tool-calling against Azure OpenAI, an eval harness, and upload → chat → diff → undo → download end to end.
 
-**What is not claimed:** broad Helix compatibility. We have verified against a small fixture set. The next stage of this project is feeding Bender a real preset collection and fixing what breaks — the harness exists for exactly that. See [`docs/helix-format-notes.md`](docs/helix-format-notes.md) for what we actually established versus what we are still guessing at.
+**Not claimed:** broad Helix compatibility. Verified against a small fixture set only. See [`docs/helix-format-notes.md`](docs/helix-format-notes.md) for what is established versus guessed.
 
 ---
 
@@ -49,7 +44,7 @@ A working prototype, honestly scoped.
   undo / download ────────▶  serialize
 ```
 
-The model never writes Helix JSON. It gets nine deterministic operations and nothing else.
+The model never writes Helix JSON. It gets nine deterministic operations, nothing else.
 
 ### The parts
 
@@ -77,21 +72,24 @@ pnpm install
 
 ```bash
 cp apps/server/.env.example apps/server/.env
+az login
 ```
 
-> [!IMPORTANT]
-> **Key authentication is disabled on the R&D resource.** An `api-key` header returns
-> `403 AuthenticationTypeDisabled`. Use Entra ID, which is the default:
->
-> ```bash
-> az login
-> ```
->
-> Key auth is still supported in code for when the resource setting changes — set
-> `AZURE_OPENAI_API_KEY` and it will be used. If you see a 403, this is why, and the
-> server's error message will tell you so.
+Two resources, on purpose:
 
-One more trap worth knowing: `AZURE_OPENAI_DEPLOYMENT` must be a **deployment** name, not a model name. A model name returns `404 DeploymentNotFound`.
+| | Local development | Production |
+|---|---|---|
+| Resource | your own dev/playground resource | a separate Azure AI Foundry resource |
+| Auth | Entra ID (`az login`) | API key, held in App Service settings |
+| Cost | dev quota | real budget |
+
+**Develop against your own resource, never production** — local turns cost the
+budget the live app runs on.
+
+Two failure modes worth knowing:
+
+- `403 AuthenticationTypeDisabled` — key auth is off on the dev resource. Use Entra ID (the default). Key auth works when a resource allows it; set `AZURE_OPENAI_API_KEY` and it is used.
+- `404 DeploymentNotFound` — `AZURE_OPENAI_DEPLOYMENT` takes a **deployment** name, not a model name.
 
 ### Run
 
@@ -107,7 +105,7 @@ Then open http://localhost:5173 and drop in a `.hlx`.
 ```bash
 pnpm typecheck
 pnpm lint
-pnpm test          # 256 tests
+pnpm test          # 436 tests
 pnpm build
 pnpm eval --mock   # deterministic evaluation cases, no network
 pnpm eval          # full suite against the live model
@@ -117,13 +115,13 @@ pnpm eval          # full suite against the live model
 
 ## Helix presets
 
-A `.hlx` file is plain UTF-8 JSON, but there are enough sharp edges that it is worth reading [`docs/helix-format-notes.md`](docs/helix-format-notes.md) before touching the parser. Three that cause real bugs:
+A `.hlx` file is plain UTF-8 JSON with sharp edges. Read [`docs/helix-format-notes.md`](docs/helix-format-notes.md) before touching the parser. Three that cause real bugs:
 
-- **Values are not normalized.** `HighCut` is in Hz (`20100`), `threshold` in dB (`-48.0`), `@tempo` in BPM. Assuming 0–1 and writing `0.5` into a `HighCut` sets a 0.5 Hz filter.
-- **Snapshot data is stored twice**, in `snapshotN.blocks` and again in `snapshotN.controllers`. Write one without the other and the preset becomes quietly inconsistent — which is worse than one that fails to load.
+- **Values are not normalized.** `HighCut` is in Hz (`20100`), `threshold` in dB (`-48.0`), `@tempo` in BPM. Writing `0.5` into a `HighCut` sets a 0.5 Hz filter.
+- **Snapshot data is stored twice**, in `snapshotN.blocks` and `snapshotN.controllers`. Write one without the other and the preset is quietly inconsistent — worse than one that fails to load.
 - **A block's key is independent of its position.** Routing is `@path` plus `@position` *within that branch*; `block0` can sit third in the chain.
 
-The parser is deliberately defensive. It preserves the raw text of every value it does not change, so a preset round-trips byte-for-byte regardless of which tool wrote it, and fields we do not understand survive edits to fields we do.
+The parser preserves the raw text of every value it does not change, so presets round-trip byte for byte and unknown fields survive edits.
 
 ### Preset directories
 
@@ -133,20 +131,14 @@ presets/user/corpus/       # 31 more owned presets, for testing/eval    (committ
 presets/user/fixtures/     # your own scratch presets                   (private)
 ```
 
-Bender ships **37 real presets from an HX Stomp**, owned by us and copied byte
-for byte from the device export. Six are offered as starting points — one per
-category, because the person picking from that list does not know what they want
-and a catalogue is the problem it solves. The other 31 are not shown to users;
-they run through the parser on every commit, so a change that breaks genuine
-hardware output breaks the build.
+37 real HX Stomp presets, owned by us, copied byte for byte from the device
+export. Six are offered as starting points, one per category. The other 31 run
+through the parser on every commit, so a change that breaks genuine hardware
+output breaks the build. Anything in `fixtures/` stays on your machine.
 
-Anything you drop into `fixtures/` stays on your machine. See the READMEs in
-each directory.
-
-**Compatibility, stated honestly:** 37 / 37 parse clean and round-trip byte for
-byte — on **one device (HX Stomp) and one firmware (3.80)**. That is real
-evidence about that device and no evidence about Floor, Rack, LT, HX Effects or
-Pod Go.
+**Compatibility:** 37 / 37 parse clean and round-trip byte for byte — on **one
+device (HX Stomp), one firmware (3.80)**. No evidence about Floor, Rack, LT, HX
+Effects or Pod Go.
 
 ---
 
@@ -154,17 +146,17 @@ Pod Go.
 
 Preset corruption is the failure mode that matters, so the safety lives in code rather than in the prompt.
 
-The model gets nine operations: four inspection tools, `set_parameter`, `adjust_parameter`, `enable_block`, `disable_block`, and `undo_last_change`. There is deliberately **no whole-document write, no block add/remove, and no routing change** — adding a block means choosing a position, a DSP assignment, a model identifier and a full default parameter set, and getting any of them wrong produces a file that will not load on hardware.
+The model gets nine operations: four inspection tools, `set_parameter`, `adjust_parameter`, `enable_block`, `disable_block`, `undo_last_change`. There is deliberately **no whole-document write, no block add/remove, and no routing change** — adding a block means choosing a position, DSP assignment, model identifier and full default parameter set, and getting any of them wrong produces a file that will not load on hardware.
 
-Every edit is transactional: clone, mutate, validate, then keep or discard. Parameter types and ranges are checked against the preset's own controller definitions, which are the only in-file source of real ranges. Unknown values are preserved untouched. Undo restores a serialized snapshot rather than applying an inverse operation, so it stays correct even for edits with side effects.
+Every edit is transactional: clone, mutate, validate, then keep or discard. Ranges are checked against the preset's own controller definitions, the only in-file source of real ranges. Undo restores a serialized snapshot rather than an inverse operation, so it stays correct for edits with side effects.
 
-Asked to do something outside that envelope, Bender says so. Told to swap a Brit 2204 for a Dual Rectifier, it declines and points you at HX Edit rather than approximating one with tone controls.
+Asked to swap a Brit 2204 for a Dual Rectifier, Bender declines and points you at HX Edit rather than approximating one with tone controls.
 
 ---
 
 ## The evaluation harness
 
-The next stage of this project is real presets, in volume. [`evals/`](evals/README.md) makes that loop fast:
+[`evals/`](evals/README.md) replays real presets against real requests:
 
 ```bash
 pnpm eval --list
@@ -172,32 +164,63 @@ pnpm eval tapping-sustain     # one case, live model
 pnpm eval --mock              # deterministic cases only, CI-safe
 ```
 
-A case pairs a preset with a request and the invariants that must hold afterwards. Runs capture the fixture hash, the full model/tool transcript, every before/after value and the round-trip verdict, so two runs can be diffed when something regresses.
+A case pairs a preset with a request and the invariants that must hold afterwards. Runs capture the fixture hash, the full model/tool transcript, every before/after value and the round-trip verdict, so two runs can be diffed.
 
-Cases assert what must **not** change more than what must. Almost any edit produces a tone change; the question that matters is whether Bender respected the constraint. "More sustain without more noise" is only answered correctly if the gain really did not move.
+Cases assert what must **not** change more than what must. Almost any edit changes the tone; the question is whether the constraint held. "More sustain without more noise" is only correct if the gain did not move.
 
 ---
 
 ## Copilot agent system
 
-This repository carries a set of reusable GitHub Copilot CLI agents ported from an internal Claude agent collection — 24 agents covering frontend, backend, testing, security, infrastructure and review work.
+24 reusable GitHub Copilot CLI agents covering frontend, backend, testing, security, infrastructure and review work.
 
 ```bash
 copilot --agent typescript-pro "tighten the types in packages/helix"
 ```
 
-See [`docs/copilot-agents.md`](docs/copilot-agents.md) for the full list, how to invoke them, how to add one, and what did not map cleanly from the Claude setup.
+See [`docs/copilot-agents.md`](docs/copilot-agents.md) for the full list and how to add one.
 
 ---
 
 ## Deployment
 
-The frontend deploys to GitHub Pages on every push to `main`, serving https://soricut.studio/. The backend is deployed separately to Azure App Service at
-https://bender-backend-cvdxhaaubjdmb4c3.westus3-01.azurewebsites.net.
+| Piece | Where | How |
+| --- | --- | --- |
+| Frontend | GitHub Pages → https://soricut.studio/ | Automatic, on every push to `main` |
+| Backend | Azure App Service (Linux container, West US 3) | **Manual**, by the App Service owner |
 
-The Azure credential stays in App Service application settings and never enters
-the public frontend bundle. Set the GitHub Actions repository variable
-`BENDER_API_URL` to the backend URL before deploying Pages.
+```bash
+curl https://bender-backend-cvdxhaaubjdmb4c3.westus3-01.azurewebsites.net/api/health
+# {"status":"ok","activeSessions":0}
+```
+
+> [!IMPORTANT]
+> **The backend is deployed by hand, so `main` can be ahead of production.** A
+> green `/api/health` means a Bender server is up, not that it is *this* commit.
+> Server changes ship only when someone rebuilds the image and redeploys.
+
+The frontend bakes the backend URL in at build time from the `BENDER_API_URL`
+repository variable (Settings → Secrets and variables → Actions → Variables), so
+moving the backend needs a Pages rebuild.
+
+### Ownership and secrets
+
+The App Service and the model resource are owned separately, which is why no key
+is in this repository:
+
+- **App Service** — hosts the API and holds the Azure OpenAI key in application settings. The only thing the browser talks to.
+- **Azure AI Foundry resource** — serves the production deployment, with key auth. The key is a bearer credential: anyone holding it can spend the budget. If it lands in a chat, screenshot, log or commit, rotate it and update the App Service setting.
+
+| Public | Never public |
+| --- | --- |
+| The Pages origin | The Azure OpenAI endpoint and deployment name |
+| The backend hostname (baked into the frontend bundle) | The API key |
+| `/api/health` — `status` and `activeSessions` only | Resource group and deployment credentials |
+
+`/api/health` reports nothing about the model path on purpose. The endpoint,
+deployment and auth mode are not credentials, but publishing them tells anyone
+holding a leaked key where to spend it. They are logged at startup
+(`server.starting`) instead, readable from the App Service log stream.
 
 ### Building the backend artifact
 
@@ -213,69 +236,53 @@ This produces `apps/server/dist/`:
 | `server.mjs.map` | Source map, for readable stack traces |
 | `package.json` | Generated. Lists only the four published runtime dependencies and starts the bundle with `npm start` |
 
-`tsc` cannot produce this. The workspace packages export raw TypeScript, so compiled output resolves `@bender/helix` to a `.ts` file that Node refuses to load. Bundling removes the workspace from the deployment picture entirely.
-
-The generated `package.json` exists because the server's own manifest declares those packages as `workspace:*` — a pnpm-only protocol that npm rejects with `EUNSUPPORTEDPROTOCOL`. The generated one is derived from the same dependency list that decides what stays external, so it cannot drift from what the bundle imports.
-
-### Azure App Service
-
-`apps/server/dist/` is the complete backend deployment unit; the web app is not
-included. The production App Service uses the Node 20 Linux runtime, runs
-`npm start`, and checks `/api/health`.
-
-Required application settings are:
-
-```text
-AZURE_OPENAI_ENDPOINT
-AZURE_OPENAI_DEPLOYMENT
-AZURE_OPENAI_API_VERSION
-AZURE_OPENAI_AUTH_MODE=api-key
-AZURE_OPENAI_API_KEY
-HOST=0.0.0.0
-ALLOWED_ORIGINS=https://soricut.studio
-SCM_DO_BUILD_DURING_DEPLOYMENT=true
-```
-
-Build the artifact, ZIP the **contents** of `apps/server/dist/`, and deploy it:
-
-```bash
-pnpm --filter @bender/server build
-az webapp deploy \
-  --resource-group acruzsalamn-test \
-  --name bender-backend \
-  --src-path bender-backend.zip \
-  --type zip \
-  --clean true \
-  --restart true
-```
+`tsc` cannot produce this: the workspace packages export raw TypeScript, so compiled output resolves `@bender/helix` to a `.ts` file Node refuses to load. The generated manifest exists because the server's own declares those packages as `workspace:*`, which npm rejects with `EUNSUPPORTEDPROTOCOL`.
 
 ### Container
+
+Production runs the image built by [`apps/server/Dockerfile`](apps/server/Dockerfile).
 
 ```bash
 # from the repository root — the build stage needs the workspace
 docker build -f apps/server/Dockerfile -t bender-api .
 
 docker run --rm -p 8787:8787 \
-  -e AZURE_OPENAI_ENDPOINT=https://michaeljo-playground.openai.azure.com \
-  -e AZURE_OPENAI_DEPLOYMENT=gpt-5.6-sol \
+  -e AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com \
+  -e AZURE_OPENAI_DEPLOYMENT=<your-deployment> \
   -e ALLOWED_ORIGINS=https://soricut.studio \
   bender-api
 ```
 
-Two things worth knowing before you deploy this anywhere:
+- **`HOST` must be `0.0.0.0` in a container.** It defaults to `127.0.0.1`, which is right locally and makes a container unreachable. The Dockerfile sets it; other hosts need to.
+- **Sessions are in memory, so run exactly one instance.** Two replicas drop sessions on roughly half of all requests.
 
-- **`HOST` must be `0.0.0.0` in a container.** It defaults to `127.0.0.1`, which is the right default for local development and means a containerised server is unreachable no matter what you publish. The Dockerfile sets it; a non-Docker host needs to.
-- **Sessions are in memory, so run exactly one instance.** Two replicas drop sessions on roughly half of all requests. Scale out only after sessions move to shared storage.
+### Host settings
 
-For Azure Container Apps, give the app a managed identity with **Cognitive Services OpenAI User** and set no key at all — `DefaultAzureCredential` finds it. Key auth is disabled on the R&D resource (`403 AuthenticationTypeDisabled`), so Entra is the default rather than a fallback.
+Names only; values belong in the host's configuration store.
 
-The image was not built during development because no Docker daemon was available. The runtime stage was instead reproduced by hand — generated manifest, `npm install --omit=dev`, `node dist/server.mjs` — and the server started and served `/api/health` with no workspace, no pnpm and no dev dependencies present.
+```text
+AZURE_OPENAI_ENDPOINT      https://<resource>.cognitiveservices.azure.com
+AZURE_OPENAI_DEPLOYMENT    <deployment name, not a model name>
+AZURE_OPENAI_API_VERSION   2025-04-01-preview
+AZURE_OPENAI_AUTH_MODE     api-key
+AZURE_OPENAI_API_KEY       <from the Foundry resource — never committed>
+HOST                       0.0.0.0
+ALLOWED_ORIGINS            https://soricut.studio
+```
+
+`ALLOWED_ORIGINS` is the CORS allowlist, set to the Pages origin alone. It is not
+authentication.
+
+A host with managed identity can skip the key: assign an identity with
+**Cognitive Services OpenAI User** on the resource, leave `AZURE_OPENAI_API_KEY`
+unset, and `DefaultAzureCredential` finds it.
 
 ---
 
 ## Limitations
 
 - Compatibility is verified against a small fixture set, not a broad corpus.
+- The backend is deployed by hand, so production can lag `main`.
 - Sessions are held in memory, so the server is single-instance.
 - Bender cannot add, remove, reorder or replace blocks, or change routing.
 - No audio. Bender reasons about the signal chain, not about sound.
