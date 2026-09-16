@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { pathToFileURL } from 'node:url';
 import { ConfigError, loadConfig, describeAzure, type ServerConfig } from './config.js';
+import { loadEnvFiles } from './env.js';
 import { AzureOpenAIProvider } from './model/azure-openai.js';
 import type { ModelProvider } from './model/provider.js';
 import { SessionStore } from './store.js';
@@ -65,6 +66,11 @@ export async function buildServer({ config, provider, logger }: BuildOptions) {
 }
 
 async function main(): Promise<void> {
+  // Loaded before the config so the log can say which files were in play. The
+  // config loader calls this too; it is idempotent, since the first definition
+  // of a variable wins and real environment variables beat every file.
+  const envFiles = loadEnvFiles();
+
   let config: ServerConfig;
   try {
     config = loadConfig();
@@ -82,6 +88,7 @@ async function main(): Promise<void> {
     port: config.port,
     host: config.host,
     model: describeAzure(config.azure),
+    envFiles,
   });
 
   try {

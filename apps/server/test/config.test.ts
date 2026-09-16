@@ -30,6 +30,38 @@ describe('required settings', () => {
     expect(config.azure.endpoint).toBe('https://example.com');
   });
 
+  it('accepts the full Responses URL the portal hands you', () => {
+    // Pasting this verbatim used to produce /openai/responses/openai/responses
+    // and a 404 that reads like a missing deployment.
+    const config = loadConfig({
+      ...base,
+      AZURE_OPENAI_ENDPOINT:
+        'https://example.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview',
+    });
+
+    expect(config.azure.endpoint).toBe('https://example.cognitiveservices.azure.com');
+    expect(config.azure.apiVersion).toBe('2025-04-01-preview');
+  });
+
+  it('lets an explicit api version beat one carried in the endpoint', () => {
+    const config = loadConfig({
+      ...base,
+      AZURE_OPENAI_ENDPOINT: 'https://example.openai.azure.com/openai/responses?api-version=2024-01-01',
+      AZURE_OPENAI_API_VERSION: '2025-04-01-preview',
+    });
+
+    expect(config.azure.apiVersion).toBe('2025-04-01-preview');
+  });
+
+  it('leaves a non-SDK path alone, since that is a deliberate gateway', () => {
+    const config = loadConfig({
+      ...base,
+      AZURE_OPENAI_ENDPOINT: 'https://gateway.example.com/azure-openai',
+    });
+
+    expect(config.azure.endpoint).toBe('https://gateway.example.com/azure-openai');
+  });
+
   it('explains that deployment is not a model name', () => {
     // The error text matters: a model name here produces a 404 that reads
     // like the resource is missing.

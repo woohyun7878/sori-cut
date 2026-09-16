@@ -71,7 +71,7 @@ pnpm install
 ### Configure Azure OpenAI
 
 ```bash
-cp apps/server/.env.example apps/server/.env
+cp apps/server/.env.example apps/server/.env   # read automatically at startup
 az login
 ```
 
@@ -85,6 +85,18 @@ Two resources, on purpose:
 
 **Develop against your own resource, never production** — local turns cost the
 budget the live app runs on.
+
+`apps/server/.env.local` overrides `.env`, so pointing at a different deployment
+is one file, and deleting it switches back. Both are gitignored, and real
+environment variables beat both — a deployed host ignores them. The startup log
+names the files it read and the deployment it is talking to:
+
+```json
+{"event":"server.starting","model":"https://<resource> deployment=<name> api-version=2025-04-01-preview auth=entra","envFiles":[".env"]}
+```
+
+`AZURE_OPENAI_ENDPOINT` takes either the resource origin or the full Responses
+URL the portal shows; the path and `api-version` are parsed out of the latter.
 
 Two failure modes worth knowing:
 
@@ -105,7 +117,7 @@ Then open http://localhost:5173 and drop in a `.hlx`.
 ```bash
 pnpm typecheck
 pnpm lint
-pnpm test          # 436 tests
+pnpm test          # 443 tests
 pnpm build
 pnpm eval --mock   # deterministic evaluation cases, no network
 pnpm eval          # full suite against the live model

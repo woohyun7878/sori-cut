@@ -38,9 +38,11 @@ pnpm eval --verbose       # print the full tool transcript as it runs
 ```
 
 Live runs need Azure configured exactly as the server does — see
-`apps/server/.env.example`. **Note that key authentication is disabled on the
-R&D resource**; use Entra ID (`az login`). The harness will tell you so rather
-than failing obscurely.
+`apps/server/.env.example`. The harness reads `apps/server/.env` and
+`.env.local` through the same loader the server uses, so a local run uses the
+dev deployment configured there, not production. **Key auth is disabled on the
+dev resource**; use Entra ID (`az login`). The harness says so rather than
+failing obscurely.
 
 Every run writes a timestamped JSON file to `evals/results/` containing the
 fixture's SHA-256, the parse result, the full model/tool transcript, every
