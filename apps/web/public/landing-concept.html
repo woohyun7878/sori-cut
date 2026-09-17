@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      This prototype is served from apps/web/public, which Vite copies verbatim
+      into the Pages artifact, so it is publicly reachable on the live domain
+      alongside the real app. Keep it out of search results until it either
+      replaces the workspace or is deleted.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
     <title>Bender landing concept</title>
     <style>
       :root {
@@ -57,6 +64,27 @@
 
       .shell {
         min-height: 100vh;
+      }
+
+      /*
+        This page ships to the live site, where every button is inert. Say so
+        before someone clicks "Use this tone" and concludes the product is
+        broken.
+      */
+      .prototype-flag {
+        margin: 0;
+        padding: 7px 16px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(242, 166, 43, 0.1);
+        color: var(--amber-soft);
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .prototype-flag a {
+        color: inherit;
       }
 
       .topbar {
@@ -126,6 +154,14 @@
         background: var(--mint);
         box-shadow: 0 0 10px rgba(121, 216, 178, 0.65);
         content: "";
+      }
+
+      .text-button {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
       }
 
       .icon-button {
@@ -241,11 +277,31 @@
         font-size: 20px;
       }
 
+      .rail-button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      /*
+        Native horizontal scrolling rather than a transform.
+        A transformed rail inside an overflow:hidden box cannot be swiped on a
+        phone, and keyboard focus moves to cards that stay off screen because
+        nothing scrolls them into view. Scrolling the viewport itself gets both
+        for free, and the arrow buttons become an enhancement rather than the
+        only way through.
+      */
       .tone-viewport {
-        overflow: hidden;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        scroll-behavior: smooth;
+        scrollbar-width: none;
         border-top: 1px solid var(--line);
         border-bottom: 1px solid var(--line);
         padding: 18px 0;
+      }
+
+      .tone-viewport::-webkit-scrollbar {
+        display: none;
       }
 
       .tone-rail {
@@ -253,7 +309,6 @@
         grid-auto-flow: column;
         grid-auto-columns: 318px;
         gap: 14px;
-        transition: transform 240ms ease;
       }
 
       .tone-card {
@@ -264,6 +319,7 @@
         border: 1px solid var(--line-strong);
         border-radius: var(--radius);
         background: var(--surface);
+        scroll-snap-align: start;
         text-align: left;
         cursor: pointer;
       }
@@ -411,15 +467,16 @@
       }
 
       .upload-panel {
-        display: none;
+        display: grid;
         min-height: 390px;
         place-items: center;
         border: 1px dashed var(--line-strong);
         background: rgba(17, 20, 20, 0.65);
       }
 
-      .upload-panel.visible {
-        display: grid;
+      /* Panels are hidden with [hidden], so it has to beat display: grid. */
+      [hidden] {
+        display: none !important;
       }
 
       .upload-inner {
@@ -523,6 +580,10 @@
   </head>
   <body>
     <div class="shell">
+      <p class="prototype-flag">
+        Design prototype · nothing here is wired up ·
+        <a href="/">open the real workspace</a>
+      </p>
       <header class="topbar">
         <div class="topbar-inner">
           <div class="brand">
@@ -532,7 +593,7 @@
           </div>
           <div class="top-actions">
             <span class="status">Model ready</span>
-            <span>How it works</span>
+            <button class="text-button" type="button">How it works</button>
             <button class="icon-button" type="button" aria-label="Open help">?</button>
           </div>
         </div>
@@ -551,10 +612,25 @@
         </section>
 
         <div class="mode-switch" role="tablist" aria-label="Choose how to begin">
-          <button class="mode-button" id="tone-tab" type="button" role="tab" aria-selected="true">
+          <button
+            class="mode-button"
+            id="tone-tab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="tone-panel"
+          >
             Start with a tone
           </button>
-          <button class="mode-button" id="upload-tab" type="button" role="tab" aria-selected="false">
+          <button
+            class="mode-button"
+            id="upload-tab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="upload-panel"
+            tabindex="-1"
+          >
             Upload a preset
           </button>
         </div>
@@ -571,9 +647,16 @@
             </div>
           </div>
 
-          <div class="tone-viewport">
+          <div class="tone-viewport" id="tone-viewport" tabindex="0" role="group" aria-label="Starter tones">
             <div class="tone-rail" id="tone-rail">
-              <button class="tone-card" type="button" aria-pressed="true" data-tone="Edge of Breakup" style="--tone:#b44e3f">
+              <button
+                class="tone-card"
+                type="button"
+                aria-pressed="true"
+                data-tone="Edge of Breakup"
+                data-description="A dynamic British-style rhythm tone that cleans up from your guitar volume."
+                style="--tone:#b44e3f"
+              >
                 <span class="tone-face">
                   <span class="tone-index">TONE 01 · RHYTHM</span>
                   <span class="tone-name">Edge of Breakup</span>
@@ -583,7 +666,14 @@
                   <span class="footswitch" aria-hidden="true"></span>
                 </span>
               </button>
-              <button class="tone-card" type="button" aria-pressed="false" data-tone="Glass & Air" style="--tone:#337e86">
+              <button
+                class="tone-card"
+                type="button"
+                aria-pressed="false"
+                data-tone="Glass &amp; Air"
+                data-description="A spacious clean foundation with articulate attack and room for modulation."
+                style="--tone:#337e86"
+              >
                 <span class="tone-face">
                   <span class="tone-index">TONE 02 · CLEAN</span>
                   <span class="tone-name">Glass &amp; Air</span>
@@ -593,7 +683,14 @@
                   <span class="footswitch" aria-hidden="true"></span>
                 </span>
               </button>
-              <button class="tone-card" type="button" aria-pressed="false" data-tone="Modern Lead" style="--tone:#9a7a35">
+              <button
+                class="tone-card"
+                type="button"
+                aria-pressed="false"
+                data-tone="Modern Lead"
+                data-description="A focused lead voice with singing sustain and controlled upper mids."
+                style="--tone:#9a7a35"
+              >
                 <span class="tone-face">
                   <span class="tone-index">TONE 03 · LEAD</span>
                   <span class="tone-name">Modern Lead</span>
@@ -603,7 +700,14 @@
                   <span class="footswitch" aria-hidden="true"></span>
                 </span>
               </button>
-              <button class="tone-card" type="button" aria-pressed="false" data-tone="Tight Machine" style="--tone:#687d4c">
+              <button
+                class="tone-card"
+                type="button"
+                aria-pressed="false"
+                data-tone="Tight Machine"
+                data-description="A fast, controlled high-gain foundation built for precise low-string work."
+                style="--tone:#687d4c"
+              >
                 <span class="tone-face">
                   <span class="tone-index">TONE 04 · HEAVY</span>
                   <span class="tone-name">Tight Machine</span>
@@ -643,7 +747,7 @@
           <p class="why-line">Every starter tone is a real .hlx preset dialled and approved by a player.</p>
         </section>
 
-        <section class="mode-panel upload-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab">
+        <section class="mode-panel upload-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" hidden>
           <div class="upload-inner">
             <div class="upload-icon" aria-hidden="true">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -660,51 +764,87 @@
     </div>
 
     <script>
-      const toneTab = document.querySelector('#tone-tab');
-      const uploadTab = document.querySelector('#upload-tab');
-      const tonePanel = document.querySelector('#tone-panel');
-      const uploadPanel = document.querySelector('#upload-panel');
-      const rail = document.querySelector('#tone-rail');
-      let railOffset = 0;
+      const tabs = [
+        { tab: document.querySelector('#tone-tab'), panel: document.querySelector('#tone-panel') },
+        {
+          tab: document.querySelector('#upload-tab'),
+          panel: document.querySelector('#upload-panel'),
+        },
+      ];
+
+      const viewport = document.querySelector('#tone-viewport');
+      const previousTone = document.querySelector('#previous-tone');
+      const nextTone = document.querySelector('#next-tone');
 
       function selectMode(mode) {
-        const isTone = mode === 'tone';
-        toneTab.setAttribute('aria-selected', String(isTone));
-        uploadTab.setAttribute('aria-selected', String(!isTone));
-        tonePanel.style.display = isTone ? 'block' : 'none';
-        uploadPanel.classList.toggle('visible', !isTone);
+        tabs.forEach(({ tab, panel }, index) => {
+          const selected = (mode === 'tone') === (index === 0);
+          tab.setAttribute('aria-selected', String(selected));
+          // Roving tabindex: one stop for the whole tablist, arrows move
+          // between tabs. Without it a keyboard user tabs through every tab
+          // before reaching the content.
+          tab.tabIndex = selected ? 0 : -1;
+          panel.hidden = !selected;
+        });
+
+        syncRailControls();
       }
 
-      toneTab.addEventListener('click', () => selectMode('tone'));
-      uploadTab.addEventListener('click', () => selectMode('upload'));
+      tabs.forEach(({ tab }, index) => {
+        tab.addEventListener('click', () => selectMode(index === 0 ? 'tone' : 'upload'));
+        tab.addEventListener('keydown', (event) => {
+          const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+          if (step === 0) return;
+
+          event.preventDefault();
+          const next = tabs[(index + step + tabs.length) % tabs.length];
+          selectMode(next.tab === tabs[0].tab ? 'tone' : 'upload');
+          next.tab.focus();
+        });
+      });
 
       if (new URLSearchParams(window.location.search).get('mode') === 'upload') {
         selectMode('upload');
       }
 
-      document.querySelector('#next-tone').addEventListener('click', () => {
-        railOffset = Math.max(railOffset - 332, -332);
-        rail.style.transform = `translateX(${railOffset}px)`;
-      });
+      /**
+       * Page the rail by what is actually visible.
+       *
+       * The card width is viewport-relative below 820px, so a fixed pixel step
+       * drifts out of alignment and — with a clamp — left the last tones
+       * unreachable on a phone. Measuring the viewport works at any width and
+       * for any number of cards.
+       *
+       * Smoothness is CSS (scroll-behavior), so the existing reduced-motion
+       * rule already switches it off and this needs no matchMedia.
+       */
+      function pageTones(direction) {
+        viewport.scrollBy({ left: direction * viewport.clientWidth * 0.85 });
+      }
 
-      document.querySelector('#previous-tone').addEventListener('click', () => {
-        railOffset = Math.min(railOffset + 332, 0);
-        rail.style.transform = `translateX(${railOffset}px)`;
-      });
+      function syncRailControls() {
+        const furthest = viewport.scrollWidth - viewport.clientWidth;
+        previousTone.disabled = viewport.scrollLeft <= 1;
+        // A control that does nothing should not look like it will.
+        nextTone.disabled = furthest <= 1 || viewport.scrollLeft >= furthest - 1;
+      }
 
-      const descriptions = {
-        'Edge of Breakup': 'A dynamic British-style rhythm tone that cleans up from your guitar volume.',
-        'Glass & Air': 'A spacious clean foundation with articulate attack and room for modulation.',
-        'Modern Lead': 'A focused lead voice with singing sustain and controlled upper mids.',
-        'Tight Machine': 'A fast, controlled high-gain foundation built for precise low-string work.'
-      };
+      nextTone.addEventListener('click', () => pageTones(1));
+      previousTone.addEventListener('click', () => pageTones(-1));
+      viewport.addEventListener('scroll', syncRailControls, { passive: true });
+      window.addEventListener('resize', syncRailControls);
+      syncRailControls();
 
       document.querySelectorAll('.tone-card').forEach((card) => {
         card.addEventListener('click', () => {
-          document.querySelectorAll('.tone-card').forEach((item) => item.setAttribute('aria-pressed', 'false'));
+          document
+            .querySelectorAll('.tone-card')
+            .forEach((item) => item.setAttribute('aria-pressed', 'false'));
           card.setAttribute('aria-pressed', 'true');
+          // Description lives on the card, so adding a tone cannot leave the
+          // preview reading "undefined".
           document.querySelector('#preview-title').textContent = card.dataset.tone;
-          document.querySelector('#preview-copy').textContent = descriptions[card.dataset.tone];
+          document.querySelector('#preview-copy').textContent = card.dataset.description ?? '';
         });
       });
     </script>
