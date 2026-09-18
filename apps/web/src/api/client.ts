@@ -178,6 +178,18 @@ export async function getTemplates(): Promise<TemplateSummary[]> {
   return body.templates;
 }
 
+/**
+ * Liveness of the backend.
+ *
+ * The header uses this to say whether Bender can actually answer before anyone
+ * spends a request finding out. The endpoint reports the process, not the
+ * model deployment — which stays server-side — so this only claims the backend
+ * is reachable.
+ */
+export async function getHealth(): Promise<{ status: string; activeSessions: number }> {
+  return requestJson<{ status: string; activeSessions: number }>('/api/health');
+}
+
 /** Fetch the current `.hlx` for download, with the server's suggested name. */
 export async function fetchPresetBlob(
   id: string,

@@ -9,9 +9,9 @@ import type { EditEntry } from '../api/types';
 /**
  * Review and download.
  *
- * Shows exactly what changed as a before/after diff grouped by block, an audit
- * trail of the tool edits behind it, undo/redo driven by the server's history,
- * a confirmed "revert all", and a download of the current `.hlx` — modified or
+ * Every changed parameter with the value it started from, an audit trail of
+ * the tool edits behind it, undo/redo driven by the server's history, a
+ * confirmed "revert all", and a download of the current `.hlx` — modified or
  * not, with the modified state always visible.
  */
 export function ChangesPanel() {
@@ -21,82 +21,81 @@ export function ChangesPanel() {
   const isMutating = usePresetStore((state) => state.isMutating);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  if (!view) return null;
-
-  const groups = groupDiffByBlock(view.diff);
+  const groups = view ? groupDiffByBlock(view.diff) : [];
+  const changeCount = view?.diff.length ?? 0;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {view.modified ? (
-          <span className="rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-300">
-            Modified
-          </span>
+    <section className="px-5 py-[18px]" aria-labelledby="review-label">
+      <div className="flex items-center justify-between gap-4">
+        <p className="eyebrow-lit" id="review-label">
+          Review &amp; download
+        </p>
+        {view?.modified ? (
+          <span className="pill pill-changed">{changeCount} changed</span>
         ) : (
-          <span className="rounded-full bg-hover px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
-            Unchanged
-          </span>
+          <span className="pill pill-idle">Unchanged</span>
         )}
-        <div className="ml-auto flex items-center gap-1">
-          <UndoRedoButtons />
-          <button
-            type="button"
-            onClick={() => setConfirmOpen(true)}
-            disabled={!view.modified || isMutating}
-            className="btn-secondary"
-          >
-            Revert all
-          </button>
-          <button
-            type="button"
-            onClick={() => void download()}
-            className="btn-primary"
-            title={`Download ${view.filename}`}
-          >
-            Download .hlx
-          </button>
-        </div>
       </div>
 
       {groups.length === 0 ? (
-        <p className="rounded-control border border-dashed border-editor-border bg-canvas/40 px-4 py-6 text-center text-xs leading-5 text-muted">
-          No changes yet. Ask Bender for a tone change, or download the preset exactly as uploaded.
+        <p className="mt-3.5 rounded-control border border-dashed border-editor-border-strong p-4 text-center text-xs leading-[1.55] text-muted">
+          {view
+            ? 'No changes yet. Edited parameters appear here the moment Bender proposes them, with the value it started from.'
+            : 'Changes appear here once a preset is loaded and Bender has proposed an edit.'}
         </p>
       ) : (
-        <div className="space-y-3">
-          {groups.map((group) => (
-            <div key={group.id} className="rounded-control border border-editor-border bg-surface-raised">
-              <p className="border-b border-editor-border px-3 py-2 text-sm font-medium text-primary">
-                {group.label}
-              </p>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-left text-muted">
-                    <th className="px-3 py-1.5 font-medium">Parameter</th>
-                    <th className="px-3 py-1.5 font-medium">Before</th>
-                    <th className="px-3 py-1.5 font-medium">After</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {group.changes.map((change) => (
-                    <tr key={change.parameter} className="border-t border-editor-border/60">
-                      <td className="px-3 py-1.5 text-secondary">{change.parameter}</td>
-                      <td className="px-3 py-1.5 font-mono text-muted">
-                        {formatDiffValue(change.before)}
-                      </td>
-                      <td className="px-3 py-1.5 font-mono text-brand-300">
-                        {formatDiffValue(change.after)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
-        </div>
+        <ul className="mt-3.5 grid gap-2">
+          {groups.map((group) =>
+            group.changes.map((change) => (
+              <li
+                key={`${group.id}:${change.parameter}`}
+                className="flex items-baseline justify-between gap-3 text-xs"
+              >
+                <span className="min-w-0 truncate text-secondary">
+                  {group.label} · {change.parameter}
+                </span>
+                <span className="flex-none font-mono text-muted">
+                  {formatDiffValue(change.before)}
+                  <span aria-hidden="true"> → </span>
+                  <span className="sr-only">changed to</span>
+                  <span className="text-brand-300">{formatDiffValue(change.after)}</span>
+                </span>
+              </li>
+            )),
+          )}
+        </ul>
       )}
 
-      {view.edits.length > 0 ? <AuditTrail edits={view.edits} /> : null}
+      <div className="mt-3.5 flex items-center gap-2">
+        <UndoRedoButtons />
+        <button
+          type="button"
+          onClick={() => setConfirmOpen(true)}
+          disabled={!view?.modified || isMutating}
+          className="btn-pill"
+        >
+          Revert all
+        </button>
+        <button
+          type="button"
+          onClick={() => void download()}
+          disabled={!view}
+          className="btn-primary ml-auto px-4 text-[13px]"
+          title={view ? `Download ${view.filename}` : undefined}
+        >
+          Download .hlx
+        </button>
+      </div>
+
+      {view ? (
+        <p className="mt-3.5 text-[11px] text-muted">
+          {view.modified
+            ? 'Downloads the edited preset. Your original file is never touched.'
+            : 'Downloads the preset exactly as it was loaded.'}
+        </p>
+      ) : null}
+
+      {view && view.edits.length > 0 ? <AuditTrail edits={view.edits} /> : null}
 
       <Dialog
         isOpen={confirmOpen}
@@ -106,7 +105,7 @@ export function ChangesPanel() {
       >
         <p className="text-sm text-secondary">
           This discards every edit Bender made and clears the conversation, returning to the preset
-          exactly as you uploaded it. This cannot be undone.
+          exactly as you loaded it. This cannot be undone.
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={() => setConfirmOpen(false)} className="btn-secondary">
@@ -124,17 +123,17 @@ export function ChangesPanel() {
           </button>
         </div>
       </Dialog>
-    </div>
+    </section>
   );
 }
 
 function AuditTrail({ edits }: { edits: EditEntry[] }) {
   return (
-    <details className="rounded-control border border-editor-border bg-surface-raised">
-      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-secondary">
+    <details className="mt-3.5 border-t border-editor-border pt-3">
+      <summary className="cursor-pointer text-xs font-medium text-secondary">
         Edit history ({edits.length})
       </summary>
-      <ol className="space-y-1 px-3 pb-3 pt-1">
+      <ol className="mt-2 space-y-1">
         {edits.map((edit) => (
           <li key={edit.sequence} className="flex gap-2 text-[11px] leading-5">
             <span className="text-muted">{edit.sequence}.</span>
