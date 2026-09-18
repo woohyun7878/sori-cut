@@ -8,6 +8,12 @@
       into the Pages artifact, so it is publicly reachable on the live domain
       alongside the real app. Keep it out of search results until it either
       replaces the workspace or is deleted.
+
+      Deep links, so a reviewer can screenshot a state without clicking:
+        ?mode=upload          open the upload tab
+        ?preset=loaded        open the upload tab with a preset already loaded
+        ?request=more+gain    replay a prompt on load (needs preset=loaded)
+        ?speed=0              run the agent progress instantly
     -->
     <meta name="robots" content="noindex, nofollow" />
     <title>Bender landing concept</title>
@@ -15,18 +21,25 @@
       :root {
         color-scheme: dark;
         --canvas: #090b0b;
-        --surface: #111414;
-        --surface-raised: #171b1a;
-        --line: #2a302e;
-        --line-strong: #454c49;
+        --surface: #101313;
+        --surface-raised: #151918;
+        /*
+          Hairlines as alpha rather than solid hex. They stay thin over the
+          canvas and over a raised surface without needing a second token per
+          background, which is what made the first pass read as stacked boxes.
+        */
+        --line: rgba(236, 240, 238, 0.08);
+        --line-strong: rgba(236, 240, 238, 0.16);
         --ink: #f3efe5;
         --ink-soft: #b4bbb7;
-        --ink-muted: #747c78;
+        --ink-muted: #767e7a;
         --amber: #f2a62b;
         --amber-soft: #ffd27a;
         --mint: #79d8b2;
         --danger: #d76b64;
-        --radius: 5px;
+        --radius: 9px;
+        --radius-sm: 6px;
+        --pill: 999px;
       }
 
       * {
@@ -43,44 +56,71 @@
         margin: 0;
         color: var(--ink);
         font-family: Bahnschrift, "Aptos Display", "Segoe UI Variable", sans-serif;
-        letter-spacing: 0;
         background-color: var(--canvas);
         background-image:
-          linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+          linear-gradient(rgba(255, 255, 255, 0.016) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
         background-size: 32px 32px;
       }
 
-      button {
+      button,
+      textarea {
         color: inherit;
         font: inherit;
       }
 
       button:focus-visible,
+      textarea:focus-visible,
       [tabindex]:focus-visible {
         outline: 2px solid var(--amber);
         outline-offset: 3px;
       }
 
-      .shell {
-        min-height: 100vh;
+      /* Panels are hidden with [hidden], so it has to beat display: grid. */
+      [hidden] {
+        display: none !important;
+      }
+
+      .mono,
+      .kicker,
+      .section-label,
+      .meta-label,
+      .pane-label,
+      .brand-tag,
+      .block-kind,
+      .tone-index {
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .kicker,
+      .section-label,
+      .meta-label,
+      .pane-label {
+        margin: 0;
+        color: var(--amber-soft);
+      }
+
+      .pane-label-muted {
+        color: var(--ink-muted);
       }
 
       /*
-        This page ships to the live site, where every button is inert. Say so
-        before someone clicks "Use this tone" and concludes the product is
-        broken.
+        This page ships to the live site. Say what is real before someone
+        clicks Download and waits for a file.
       */
       .prototype-flag {
         margin: 0;
         padding: 7px 16px;
         border-bottom: 1px solid var(--line);
-        background: rgba(242, 166, 43, 0.1);
+        background: rgba(242, 166, 43, 0.09);
         color: var(--amber-soft);
         font-size: 11px;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.05em;
         text-align: center;
-        text-transform: uppercase;
       }
 
       .prototype-flag a {
@@ -88,14 +128,13 @@
       }
 
       .topbar {
-        height: 64px;
+        height: 62px;
         border-bottom: 1px solid var(--line);
-        background: rgba(9, 11, 11, 0.94);
       }
 
       .topbar-inner,
       main {
-        width: min(1180px, calc(100% - 48px));
+        width: min(1240px, calc(100% - 48px));
         margin: 0 auto;
       }
 
@@ -116,7 +155,8 @@
         width: 17px;
         height: 17px;
         border: 2px solid var(--amber);
-        box-shadow: inset 0 0 0 3px var(--canvas), 0 0 14px rgba(242, 166, 43, 0.38);
+        border-radius: 2px;
+        box-shadow: inset 0 0 0 3px var(--canvas), 0 0 14px rgba(242, 166, 43, 0.34);
       }
 
       .brand-name {
@@ -124,19 +164,20 @@
         font-weight: 700;
       }
 
+      .brand-rule {
+        width: 1px;
+        height: 18px;
+        background: var(--line-strong);
+      }
+
       .brand-tag {
-        margin-left: 2px;
         color: var(--ink-muted);
-        font-family: "Cascadia Code", Consolas, monospace;
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.13em;
       }
 
       .top-actions {
         display: flex;
         align-items: center;
-        gap: 20px;
+        gap: 18px;
         color: var(--ink-soft);
         font-size: 13px;
       }
@@ -144,16 +185,34 @@
       .status {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 9px;
       }
 
-      .status::before {
+      .status-dot {
         width: 7px;
         height: 7px;
         border-radius: 50%;
         background: var(--mint);
-        box-shadow: 0 0 10px rgba(121, 216, 178, 0.65);
-        content: "";
+        box-shadow: 0 0 10px rgba(121, 216, 178, 0.6);
+      }
+
+      .status-text {
+        display: grid;
+        line-height: 1.25;
+      }
+
+      .status-text strong {
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      /*
+        The deployment name stays server-side. This is the model family only,
+        which is what a player actually wants to know.
+      */
+      .status-model {
+        color: var(--ink-muted);
+        font-size: 11px;
       }
 
       .text-button {
@@ -164,9 +223,13 @@
         cursor: pointer;
       }
 
+      .text-button:hover {
+        color: var(--ink);
+      }
+
       .icon-button {
-        width: 32px;
-        height: 32px;
+        width: 30px;
+        height: 30px;
         display: grid;
         place-items: center;
         padding: 0;
@@ -178,64 +241,59 @@
       }
 
       main {
-        padding: 58px 0 64px;
+        padding: 46px 0 64px;
       }
 
       .intro {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 390px;
-        gap: 72px;
+        grid-template-columns: minmax(0, 1fr) 420px;
+        gap: 64px;
         align-items: end;
       }
 
-      .kicker,
-      .section-label,
-      .meta-label {
-        margin: 0;
-        color: var(--amber-soft);
-        font-family: "Cascadia Code", Consolas, monospace;
-        font-size: 10px;
-        font-weight: 600;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-      }
-
       h1 {
-        max-width: 760px;
-        margin: 14px 0 0;
-        font-size: clamp(44px, 5vw, 70px);
+        max-width: 780px;
+        margin: 13px 0 0;
+        font-size: clamp(42px, 4.8vw, 68px);
         font-weight: 620;
         line-height: 0.98;
-        letter-spacing: 0;
       }
 
       .intro-copy {
         margin: 0 0 5px;
         color: var(--ink-soft);
-        font-size: 16px;
-        line-height: 1.6;
+        font-size: 15px;
+        line-height: 1.62;
       }
 
       .mode-switch {
         display: inline-grid;
         grid-template-columns: 1fr 1fr;
-        margin-top: 38px;
+        margin-top: 32px;
         padding: 4px;
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        background: #0d0f0f;
+        background: rgba(255, 255, 255, 0.02);
       }
 
       .mode-button {
-        min-width: 190px;
-        padding: 12px 20px;
+        min-width: 196px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 11px 20px;
         border: 0;
-        border-radius: 3px;
+        border-radius: var(--radius-sm);
         background: transparent;
         color: var(--ink-muted);
         cursor: pointer;
         font-size: 14px;
-        font-weight: 650;
+        font-weight: 620;
+      }
+
+      .mode-button:hover {
+        color: var(--ink-soft);
       }
 
       .mode-button[aria-selected="true"] {
@@ -244,20 +302,22 @@
       }
 
       .mode-panel {
-        margin-top: 26px;
+        margin-top: 34px;
       }
+
+      /* ---------- start with a tone ---------- */
 
       .section-heading {
         display: flex;
         align-items: end;
         justify-content: space-between;
         gap: 24px;
-        margin-bottom: 14px;
+        margin-bottom: 16px;
       }
 
       .section-heading h2 {
-        margin: 5px 0 0;
-        font-size: 23px;
+        margin: 6px 0 0;
+        font-size: 22px;
         font-weight: 600;
       }
 
@@ -267,18 +327,23 @@
       }
 
       .rail-button {
-        width: 38px;
-        height: 38px;
+        width: 36px;
+        height: 36px;
         border: 1px solid var(--line-strong);
-        border-radius: var(--radius);
-        background: var(--surface);
+        border-radius: var(--radius-sm);
+        background: transparent;
         color: var(--ink-soft);
         cursor: pointer;
-        font-size: 20px;
+        font-size: 18px;
+      }
+
+      .rail-button:hover:not(:disabled) {
+        border-color: var(--ink-muted);
+        color: var(--ink);
       }
 
       .rail-button:disabled {
-        opacity: 0.35;
+        opacity: 0.3;
         cursor: default;
       }
 
@@ -295,9 +360,6 @@
         scroll-snap-type: x mandatory;
         scroll-behavior: smooth;
         scrollbar-width: none;
-        border-top: 1px solid var(--line);
-        border-bottom: 1px solid var(--line);
-        padding: 18px 0;
       }
 
       .tone-viewport::-webkit-scrollbar {
@@ -307,98 +369,149 @@
       .tone-rail {
         display: grid;
         grid-auto-flow: column;
-        grid-auto-columns: 318px;
-        gap: 14px;
+        grid-auto-columns: 274px;
+        gap: 12px;
+        padding-bottom: 2px;
       }
 
       .tone-card {
         position: relative;
-        min-height: 190px;
+        min-height: 158px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 18px;
         overflow: hidden;
-        padding: 0;
+        padding: 15px 17px;
         border: 1px solid var(--line-strong);
         border-radius: var(--radius);
         background: var(--surface);
         scroll-snap-align: start;
         text-align: left;
         cursor: pointer;
+        transition: border-color 120ms ease, background-color 120ms ease;
       }
 
-      .tone-card::before {
-        position: absolute;
-        inset: 0 auto 0 0;
-        width: 5px;
-        background: var(--tone);
-        content: "";
+      .tone-card:hover {
+        border-color: color-mix(in srgb, var(--tone) 55%, transparent);
       }
 
       .tone-card[aria-pressed="true"] {
         border-color: var(--tone);
-        box-shadow: inset 0 0 0 1px var(--tone);
+        background: color-mix(in srgb, var(--tone) 11%, var(--surface));
       }
 
-      .tone-face {
-        display: block;
-        height: 118px;
-        padding: 18px 18px 14px 22px;
-        background-color: color-mix(in srgb, var(--tone) 18%, var(--surface));
-        background-image: linear-gradient(120deg, rgba(255,255,255,0.05), transparent 55%);
+      /*
+        Tone art is drawn entirely in CSS -- colour fields, a waveform wedge,
+        dunes, hatching. No photography, so a new tone costs a gradient and a
+        clip-path rather than an asset, and nothing extra ships to Pages.
+      */
+      .tone-art {
+        position: absolute;
+        inset: 0;
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      .tone-card[aria-pressed="true"] .tone-art {
+        opacity: 0.72;
+      }
+
+      .art-curve {
+        background-image: radial-gradient(
+          112% 128% at 86% 142%,
+          var(--tone) 0 52%,
+          transparent 53%
+        );
+      }
+
+      .art-wave {
+        background-image: repeating-linear-gradient(
+          90deg,
+          var(--tone) 0 4px,
+          transparent 4px 11px
+        );
+        clip-path: polygon(46% 100%, 100% 100%, 100% 22%, 46% 74%);
+      }
+
+      .art-dune {
+        background-image:
+          radial-gradient(76% 116% at 30% 126%, var(--tone) 0 55%, transparent 56%),
+          radial-gradient(60% 98% at 92% 118%, var(--tone) 0 50%, transparent 51%);
+      }
+
+      .art-hatch {
+        background-image: repeating-linear-gradient(
+          132deg,
+          var(--tone) 0 9px,
+          transparent 9px 24px
+        );
+        clip-path: polygon(42% 100%, 100% 100%, 100% 6%);
+      }
+
+      .tone-top {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
       }
 
       .tone-index {
-        color: color-mix(in srgb, var(--tone) 70%, white);
-        font-family: "Cascadia Code", Consolas, monospace;
-        font-size: 10px;
-        letter-spacing: 0.12em;
+        color: color-mix(in srgb, var(--tone) 62%, white);
+      }
+
+      .tone-dot {
+        width: 15px;
+        height: 15px;
+        flex: none;
+        border: 1px solid var(--line-strong);
+        border-radius: 50%;
+      }
+
+      .tone-card[aria-pressed="true"] .tone-dot {
+        border-color: var(--amber);
+        background:
+          radial-gradient(circle, var(--amber) 0 42%, transparent 43%);
+      }
+
+      .tone-body {
+        position: relative;
       }
 
       .tone-name {
         display: block;
-        margin-top: 22px;
         color: var(--ink);
-        font-size: 21px;
-        font-weight: 650;
-      }
-
-      .tone-foot {
-        height: 71px;
-        display: grid;
-        grid-template-columns: 1fr auto;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 16px 12px 22px;
+        font-size: 19px;
+        font-weight: 640;
+        line-height: 1.15;
       }
 
       .tone-character {
+        display: block;
+        margin-top: 8px;
         color: var(--ink-soft);
         font-size: 12px;
-        line-height: 1.4;
+        line-height: 1.45;
       }
 
-      .footswitch {
-        width: 30px;
-        height: 30px;
-        border: 5px solid #4b504d;
-        border-radius: 50%;
-        background: #aeb3af;
-        box-shadow: inset 0 0 0 2px #1a1d1c;
-      }
-
+      /*
+        The selected summary is separated by whitespace and one hairline
+        instead of being wrapped in another card.
+      */
       .preview {
         display: grid;
-        grid-template-columns: 310px minmax(0, 1fr) 190px;
-        gap: 28px;
+        grid-template-columns: 300px minmax(0, 1fr) 200px;
+        gap: 34px;
         align-items: center;
-        margin-top: 18px;
-        padding: 24px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background: rgba(17, 20, 20, 0.92);
+        margin-top: 26px;
+        padding-top: 26px;
+        border-top: 1px solid var(--line);
       }
 
       .preview h3 {
-        margin: 7px 0 8px;
-        font-size: 22px;
+        margin: 8px 0 8px;
+        font-size: 21px;
         font-weight: 620;
       }
 
@@ -413,18 +526,28 @@
         min-width: 0;
       }
 
+      /*
+        Scrollable rather than clipped. At 390px a five-block chain does not
+        fit, and silently cutting off the last two blocks hides exactly the
+        information this preview exists to show.
+      */
       .signal-chain {
         display: flex;
         align-items: center;
-        overflow: hidden;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+
+      .signal-chain::-webkit-scrollbar {
+        display: none;
       }
 
       .block {
-        min-width: 72px;
-        padding: 11px 8px;
+        min-width: 84px;
+        padding: 10px 12px;
         border: 1px solid var(--block-color, var(--line-strong));
-        border-radius: 3px;
-        background: #0d1010;
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.015);
         color: var(--ink-soft);
         text-align: center;
         font-family: "Cascadia Code", Consolas, monospace;
@@ -433,10 +556,14 @@
         text-transform: uppercase;
       }
 
+      /*
+        Connectors shrink before the blocks do, so a narrow column tightens the
+        chain instead of squeezing the block labels into two lines.
+      */
       .cable {
-        min-width: 17px;
+        flex: 0 1 28px;
+        min-width: 10px;
         height: 1px;
-        flex: 1;
         background: var(--line-strong);
       }
 
@@ -448,14 +575,29 @@
 
       .primary-action {
         width: 100%;
-        min-height: 48px;
-        border: 1px solid var(--amber);
-        border-radius: var(--radius);
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 0 18px;
+        border: 0;
+        border-radius: var(--radius-sm);
         background: var(--amber);
-        color: #14110a;
+        color: #16120a;
         cursor: pointer;
         font-size: 14px;
-        font-weight: 750;
+        font-weight: 700;
+      }
+
+      .primary-action:hover:not(:disabled) {
+        background: var(--amber-soft);
+      }
+
+      .primary-action:disabled {
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink-muted);
+        cursor: default;
       }
 
       .action-note {
@@ -466,57 +608,11 @@
         text-align: center;
       }
 
-      .upload-panel {
-        display: grid;
-        min-height: 390px;
-        place-items: center;
-        border: 1px dashed var(--line-strong);
-        background: rgba(17, 20, 20, 0.65);
-      }
-
-      /* Panels are hidden with [hidden], so it has to beat display: grid. */
-      [hidden] {
-        display: none !important;
-      }
-
-      .upload-inner {
-        max-width: 420px;
-        text-align: center;
-      }
-
-      .upload-icon {
-        width: 56px;
-        height: 56px;
-        display: grid;
-        place-items: center;
-        margin: 0 auto 20px;
-        border: 1px solid var(--line-strong);
-        color: var(--amber);
-      }
-
-      .upload-inner h2 {
-        margin: 0;
-        font-size: 24px;
-      }
-
-      .upload-inner p {
-        margin: 10px 0 20px;
-        color: var(--ink-soft);
-        line-height: 1.5;
-      }
-
-      .upload-note {
-        margin-top: 18px;
-        color: var(--ink-muted);
-        font-family: "Cascadia Code", Consolas, monospace;
-        font-size: 10px;
-      }
-
       .why-line {
         display: flex;
         align-items: center;
         gap: 14px;
-        margin-top: 22px;
+        margin-top: 26px;
         color: var(--ink-muted);
         font-size: 11px;
       }
@@ -524,8 +620,627 @@
       .why-line::before {
         width: 22px;
         height: 1px;
+        flex: none;
         background: var(--mint);
         content: "";
+      }
+
+      /* ---------- upload: intake ---------- */
+
+      .intake {
+        max-width: 560px;
+        padding: 38px 0 6px;
+      }
+
+      .intake h2 {
+        margin: 12px 0 0;
+        font-size: 26px;
+        font-weight: 620;
+      }
+
+      .intake p {
+        margin: 10px 0 22px;
+        color: var(--ink-soft);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .intake-actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+
+      .intake-actions .primary-action {
+        width: auto;
+      }
+
+      .intake-rules {
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+        color: var(--ink-muted);
+        font-size: 12px;
+      }
+
+      .intake-rules span {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .intake-rules span::before {
+        width: 4px;
+        height: 4px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--line-strong);
+        content: "";
+      }
+
+      /* ---------- upload: workspace ---------- */
+
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 392px;
+        gap: 30px;
+        align-items: start;
+      }
+
+      .agent-pane {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        min-height: 520px;
+        padding: 20px 22px 18px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .pane-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .agent-intro h2 {
+        margin: 0;
+        font-size: 25px;
+        font-weight: 620;
+      }
+
+      .agent-intro p {
+        margin: 9px 0 0;
+        max-width: 54ch;
+        color: var(--ink-soft);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .chips {
+        display: flex;
+        gap: 9px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+      }
+
+      .chip {
+        padding: 8px 14px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--pill);
+        background: transparent;
+        color: var(--ink-soft);
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      .chip:hover {
+        border-color: var(--ink-muted);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--ink);
+      }
+
+      /*
+        The conversation is the product surface, so it takes the free space and
+        the composer stays pinned under it.
+      */
+      .thread {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        margin: 22px 0 18px;
+        overflow-y: auto;
+      }
+
+      .msg-user {
+        align-self: flex-end;
+        max-width: 80%;
+        padding: 10px 14px;
+        border-radius: var(--radius) var(--radius) 2px var(--radius);
+        background: rgba(255, 255, 255, 0.055);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .msg-agent {
+        max-width: 84%;
+        color: var(--ink-soft);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .steps {
+        display: grid;
+        gap: 9px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .step {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        color: var(--ink-muted);
+        font-size: 13px;
+      }
+
+      .step::before {
+        width: 6px;
+        height: 6px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--line-strong);
+        content: "";
+      }
+
+      .step[data-state="active"] {
+        color: var(--ink);
+      }
+
+      .step[data-state="active"]::before {
+        background: var(--amber);
+        box-shadow: 0 0 0 3px rgba(242, 166, 43, 0.16);
+      }
+
+      .step[data-state="done"] {
+        color: var(--ink-soft);
+      }
+
+      .step[data-state="done"]::before {
+        background: var(--mint);
+      }
+
+      .agent-summary {
+        margin: 14px 0 0;
+        color: var(--ink);
+        font-size: 14px;
+      }
+
+      .composer {
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .composer:focus-within {
+        border-color: var(--ink-muted);
+      }
+
+      .composer textarea {
+        width: 100%;
+        min-height: 148px;
+        display: block;
+        padding: 15px 16px 6px;
+        border: 0;
+        background: transparent;
+        color: var(--ink);
+        font-size: 14px;
+        line-height: 1.55;
+        resize: vertical;
+      }
+
+      .composer textarea:focus-visible {
+        outline: 0;
+      }
+
+      .composer textarea::placeholder {
+        color: var(--ink-muted);
+      }
+
+      .composer-foot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 10px 10px 14px;
+      }
+
+      .ghost-button {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border: 0;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--ink-muted);
+        cursor: pointer;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .ghost-button:hover {
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--ink-soft);
+      }
+
+      .composer-hint {
+        margin-left: auto;
+        color: var(--ink-muted);
+        font-size: 11px;
+      }
+
+      .send-button {
+        min-height: 36px;
+        width: auto;
+        padding: 0 20px;
+        font-size: 13px;
+      }
+
+      .agent-note {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin: 14px 0 0;
+        color: var(--ink-muted);
+        font-size: 11px;
+      }
+
+      .agent-note::before {
+        width: 22px;
+        height: 1px;
+        flex: none;
+        background: var(--mint);
+        content: "";
+      }
+
+      /*
+        One pane, hairline-separated groups. The mockup drew three stacked
+        cards; the written direction asks for fewer nested boxes and whitespace
+        between logical groups, so the boxes became rules.
+      */
+      .state-pane {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .state-group {
+        padding: 18px 20px;
+      }
+
+      .state-group + .state-group {
+        border-top: 1px solid var(--line);
+      }
+
+      .file-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .file-glyph {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        flex: none;
+        place-items: center;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius-sm);
+        color: var(--ink-muted);
+      }
+
+      .file-name {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .file-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .file-head strong {
+        min-width: 0;
+        overflow: hidden;
+        font-size: 14px;
+        font-weight: 620;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /*
+        Device, firmware, block count and size on one line under the name. In
+        the first pass they shared a row with the status pill and wrapped.
+      */
+      .file-meta {
+        margin-top: 3px;
+        overflow: hidden;
+        color: var(--ink-muted);
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 11px;
+        border-radius: var(--pill);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .pill-ok {
+        background: rgba(121, 216, 178, 0.12);
+        color: var(--mint);
+      }
+
+      .pill-ok::before {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--mint);
+        content: "";
+      }
+
+      .pill-idle {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--ink-muted);
+      }
+
+      .pill-changed {
+        background: rgba(242, 166, 43, 0.14);
+        color: var(--amber-soft);
+      }
+
+      .link-button {
+        padding: 6px 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--pill);
+        background: transparent;
+        color: var(--ink-soft);
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .link-button:hover:not(:disabled) {
+        border-color: var(--ink-muted);
+        color: var(--ink);
+      }
+
+      .link-button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      .blocks {
+        margin: 14px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .block-row {
+        display: grid;
+        grid-template-columns: 22px 10px minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .block-row:first-child {
+        border-top: 0;
+      }
+
+      .block-index {
+        color: var(--ink-muted);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+      }
+
+      .block-state {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--amber);
+      }
+
+      .block-item[data-enabled="false"] .block-state {
+        background: var(--line-strong);
+      }
+
+      .block-name {
+        min-width: 0;
+        overflow: hidden;
+        font-size: 13px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .block-item[data-enabled="false"] .block-name {
+        color: var(--ink-muted);
+      }
+
+      .block-kind {
+        color: var(--ink-muted);
+        font-size: 9px;
+      }
+
+      .block-toggle {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--ink-muted);
+        cursor: pointer;
+        letter-spacing: 1px;
+      }
+
+      .block-toggle:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--ink);
+      }
+
+      .block-params {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin: 0 0 10px 42px;
+      }
+
+      .param {
+        padding: 4px 9px;
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--ink-soft);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+      }
+
+      /*
+        A changed parameter is the single most useful thing on the page, so it
+        is legible without expanding the block.
+      */
+      .block-diff {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin: 0 0 10px 42px;
+      }
+
+      .param-diff {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 9px;
+        border-radius: var(--radius-sm);
+        background: rgba(242, 166, 43, 0.12);
+        color: var(--amber-soft);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+      }
+
+      .param-diff s {
+        color: var(--ink-muted);
+        text-decoration-color: var(--ink-muted);
+      }
+
+      .review-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .review-controls .primary-action {
+        width: auto;
+        min-height: 36px;
+        margin-left: auto;
+        font-size: 13px;
+      }
+
+      .history-button {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+
+      .history-button:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .review-empty {
+        margin: 14px 0 0;
+        padding: 16px;
+        border: 1px dashed var(--line-strong);
+        border-radius: var(--radius-sm);
+        color: var(--ink-muted);
+        font-size: 12px;
+        line-height: 1.55;
+        text-align: center;
+      }
+
+      .review-list {
+        margin: 14px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 8px;
+      }
+
+      .review-list li {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 12px;
+      }
+
+      .review-list span {
+        color: var(--ink-muted);
+      }
+
+      .review-foot {
+        margin: 14px 0 0;
+        color: var(--ink-muted);
+        font-size: 11px;
+      }
+
+      @media (max-width: 1080px) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .agent-pane {
+          min-height: 0;
+        }
+
+        .preview {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .preview > :last-child {
+          grid-column: span 2;
+        }
       }
 
       @media (max-width: 820px) {
@@ -534,22 +1249,37 @@
           width: min(100% - 32px, 620px);
         }
 
+        .brand-rule,
         .brand-tag,
-        .status {
+        .composer-hint {
           display: none;
         }
 
+        /*
+          Keep the model name -- it is the reason the indicator is there -- and
+          drop the label plus "How it works", which the help button repeats.
+        */
+        .status-text strong,
+        .top-actions .text-button,
+        .optional {
+          display: none;
+        }
+
+        .ghost-button {
+          padding-inline: 8px;
+        }
+
         main {
-          padding-top: 38px;
+          padding-top: 34px;
         }
 
         .intro {
           grid-template-columns: 1fr;
-          gap: 20px;
+          gap: 18px;
         }
 
         h1 {
-          font-size: 44px;
+          font-size: 42px;
         }
 
         .mode-switch {
@@ -561,12 +1291,23 @@
           padding-inline: 10px;
         }
 
-        .preview {
+        .preview,
+        .preview > :last-child {
+          grid-column: auto;
           grid-template-columns: 1fr;
         }
 
         .tone-rail {
-          grid-auto-columns: min(82vw, 300px);
+          grid-auto-columns: min(82vw, 296px);
+        }
+
+        /*
+          Let a five-block chain fit a 390px screen outright. It still scrolls
+          if a preset carries longer block names than these.
+        */
+        .block {
+          min-width: 0;
+          padding: 8px 6px;
         }
       }
 
@@ -581,18 +1322,26 @@
   <body>
     <div class="shell">
       <p class="prototype-flag">
-        Design prototype · nothing here is wired up ·
+        Design prototype &middot; the agent run is scripted, no preset leaves your browser &middot;
         <a href="/">open the real workspace</a>
       </p>
+
       <header class="topbar">
         <div class="topbar-inner">
           <div class="brand">
             <span class="brand-mark" aria-hidden="true"></span>
             <span class="brand-name">Bender</span>
+            <span class="brand-rule" aria-hidden="true"></span>
             <span class="brand-tag">Helix tone workspace</span>
           </div>
           <div class="top-actions">
-            <span class="status">Model ready</span>
+            <span class="status">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="status-text">
+                <strong>Model ready</strong>
+                <span class="status-model">GPT-5-mini</span>
+              </span>
+            </span>
             <button class="text-button" type="button">How it works</button>
             <button class="icon-button" type="button" aria-label="Open help">?</button>
           </div>
@@ -602,10 +1351,10 @@
       <main>
         <section class="intro" aria-labelledby="page-title">
           <div>
-            <p class="kicker">Line 6 Helix · safe preset editing</p>
+            <p class="kicker" id="kicker">Line 6 Helix &middot; safe preset editing</p>
             <h1 id="page-title">Shape your Helix tone.</h1>
           </div>
-          <p class="intro-copy">
+          <p class="intro-copy" id="intro-copy">
             Begin with a player-approved foundation or bring the preset already on your rig.
             Bender shows every edit before you download it.
           </p>
@@ -620,6 +1369,9 @@
             aria-selected="true"
             aria-controls="tone-panel"
           >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M2 12h3l2.5-7 4 14L14 9l2 3h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
             Start with a tone
           </button>
           <button
@@ -631,19 +1383,23 @@
             aria-controls="upload-panel"
             tabindex="-1"
           >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 16V4M12 4L8 8M12 4L16 8M5 15v4a2 2 0 002 2h10a2 2 0 002-2v-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
             Upload a preset
           </button>
         </div>
 
+        <!-- ---------- start with a tone ---------- -->
         <section class="mode-panel" id="tone-panel" role="tabpanel" aria-labelledby="tone-tab">
           <div class="section-heading">
             <div>
-              <p class="section-label">Player-approved foundations · 03</p>
+              <p class="section-label">Player-approved foundations &middot; <span id="tone-count">04</span></p>
               <h2>Choose where your sound begins</h2>
             </div>
             <div class="rail-controls" aria-label="Browse starter tones">
-              <button class="rail-button" type="button" id="previous-tone" aria-label="Previous tones">←</button>
-              <button class="rail-button" type="button" id="next-tone" aria-label="Next tones">→</button>
+              <button class="rail-button" type="button" id="previous-tone" aria-label="Previous tones">&#8592;</button>
+              <button class="rail-button" type="button" id="next-tone" aria-label="Next tones">&#8594;</button>
             </div>
           </div>
 
@@ -657,64 +1413,71 @@
                 data-description="A dynamic British-style rhythm tone that cleans up from your guitar volume."
                 style="--tone:#b44e3f"
               >
-                <span class="tone-face">
-                  <span class="tone-index">TONE 01 · RHYTHM</span>
-                  <span class="tone-name">Edge of Breakup</span>
+                <span class="tone-art art-curve" aria-hidden="true"></span>
+                <span class="tone-top">
+                  <span class="tone-index">Tone 01 &middot; Rhythm</span>
+                  <span class="tone-dot" aria-hidden="true"></span>
                 </span>
-                <span class="tone-foot">
-                  <span class="tone-character">Warm attack<br />touch responsive</span>
-                  <span class="footswitch" aria-hidden="true"></span>
+                <span class="tone-body">
+                  <span class="tone-name">Edge of Breakup</span>
+                  <span class="tone-character">Warm attack &middot; touch responsive</span>
                 </span>
               </button>
+
               <button
                 class="tone-card"
                 type="button"
                 aria-pressed="false"
                 data-tone="Glass &amp; Air"
                 data-description="A spacious clean foundation with articulate attack and room for modulation."
-                style="--tone:#337e86"
+                style="--tone:#3d8f97"
               >
-                <span class="tone-face">
-                  <span class="tone-index">TONE 02 · CLEAN</span>
-                  <span class="tone-name">Glass &amp; Air</span>
+                <span class="tone-art art-wave" aria-hidden="true"></span>
+                <span class="tone-top">
+                  <span class="tone-index">Tone 02 &middot; Clean</span>
+                  <span class="tone-dot" aria-hidden="true"></span>
                 </span>
-                <span class="tone-foot">
-                  <span class="tone-character">Wide shimmer<br />clear transients</span>
-                  <span class="footswitch" aria-hidden="true"></span>
+                <span class="tone-body">
+                  <span class="tone-name">Glass &amp; Air</span>
+                  <span class="tone-character">Wide shimmer &middot; clear transients</span>
                 </span>
               </button>
+
               <button
                 class="tone-card"
                 type="button"
                 aria-pressed="false"
                 data-tone="Modern Lead"
                 data-description="A focused lead voice with singing sustain and controlled upper mids."
-                style="--tone:#9a7a35"
+                style="--tone:#a8863a"
               >
-                <span class="tone-face">
-                  <span class="tone-index">TONE 03 · LEAD</span>
-                  <span class="tone-name">Modern Lead</span>
+                <span class="tone-art art-dune" aria-hidden="true"></span>
+                <span class="tone-top">
+                  <span class="tone-index">Tone 03 &middot; Lead</span>
+                  <span class="tone-dot" aria-hidden="true"></span>
                 </span>
-                <span class="tone-foot">
-                  <span class="tone-character">Focused mids<br />singing sustain</span>
-                  <span class="footswitch" aria-hidden="true"></span>
+                <span class="tone-body">
+                  <span class="tone-name">Modern Lead</span>
+                  <span class="tone-character">Focused mids &middot; singing sustain</span>
                 </span>
               </button>
+
               <button
                 class="tone-card"
                 type="button"
                 aria-pressed="false"
                 data-tone="Tight Machine"
                 data-description="A fast, controlled high-gain foundation built for precise low-string work."
-                style="--tone:#687d4c"
+                style="--tone:#748b52"
               >
-                <span class="tone-face">
-                  <span class="tone-index">TONE 04 · HEAVY</span>
-                  <span class="tone-name">Tight Machine</span>
+                <span class="tone-art art-hatch" aria-hidden="true"></span>
+                <span class="tone-top">
+                  <span class="tone-index">Tone 04 &middot; Heavy</span>
+                  <span class="tone-dot" aria-hidden="true"></span>
                 </span>
-                <span class="tone-foot">
-                  <span class="tone-character">Fast low end<br />controlled gain</span>
-                  <span class="footswitch" aria-hidden="true"></span>
+                <span class="tone-body">
+                  <span class="tone-name">Tight Machine</span>
+                  <span class="tone-character">Fast low end &middot; controlled gain</span>
                 </span>
               </button>
             </div>
@@ -733,13 +1496,13 @@
                 <span class="block" style="--block-color:#55776b">Gate</span><span class="cable"></span>
                 <span class="block" style="--block-color:#a96243">Drive</span><span class="cable"></span>
                 <span class="block" style="--block-color:#b44e3f">Brit Amp</span><span class="cable"></span>
-                <span class="block" style="--block-color:#927843">4×12 Cab</span><span class="cable"></span>
+                <span class="block" style="--block-color:#927843">4&times;12 Cab</span><span class="cable"></span>
                 <span class="block" style="--block-color:#39767e">Room</span>
               </div>
-              <div class="chain-meta">5 blocks · Helix Floor / LT · firmware 3.80+</div>
+              <div class="chain-meta">5 blocks &middot; Helix Floor / LT &middot; firmware 3.80+</div>
             </div>
             <div>
-              <button class="primary-action" type="button">Use this tone →</button>
+              <button class="primary-action" type="button">Use this tone &rarr;</button>
               <p class="action-note">Next: tell Bender what you want to change</p>
             </div>
           </div>
@@ -747,71 +1510,290 @@
           <p class="why-line">Every starter tone is a real .hlx preset dialled and approved by a player.</p>
         </section>
 
-        <section class="mode-panel upload-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" hidden>
-          <div class="upload-inner">
-            <div class="upload-icon" aria-hidden="true">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 16V4M12 4L8 8M12 4L16 8M5 15V19C5 20.1 5.9 21 7 21H17C18.1 21 19 20.1 19 19V15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+        <!-- ---------- upload a preset ---------- -->
+        <section class="mode-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" hidden>
+          <div class="intake" id="intake">
+            <p class="section-label">Step 01 &middot; bring your preset</p>
+            <h2>Drop the .hlx already on your rig</h2>
+            <p>
+              Bender validates the file, maps its signal chain block by block, and then waits for
+              you to describe the change you want. Nothing is edited until you ask.
+            </p>
+            <div class="intake-actions">
+              <button class="primary-action" type="button" id="load-preset">Browse .hlx files</button>
+              <span class="chip" role="presentation">or drop a file anywhere</span>
             </div>
-            <h2>Drop your Helix preset</h2>
-            <p>Bender will validate the file, map its signal chain, and ask what you want to change.</p>
-            <button class="primary-action" type="button">Browse .hlx files</button>
-            <div class="upload-note">.HLX · MAX 2 MB · YOUR ORIGINAL STAYS UNCHANGED</div>
+            <div class="intake-rules">
+              <span>.hlx only</span>
+              <span>Max 2 MB</span>
+              <span>Parsed in your browser session</span>
+              <span>Your original file stays unchanged</span>
+            </div>
+          </div>
+
+          <div class="workspace" id="workspace" hidden>
+            <!-- left: the agent conversation -->
+            <div class="agent-pane">
+              <div class="pane-head">
+                <p class="pane-label">AI agent</p>
+                <p class="pane-label pane-label-muted">Your request</p>
+              </div>
+
+              <div class="agent-intro" id="agent-intro">
+                <h2>Describe a tone change</h2>
+                <p>
+                  Tell Bender what you want to change in your preset, in plain English.
+                  You can also attach a reference audio clip if it helps.
+                </p>
+                <div class="chips">
+                  <button class="chip" type="button">More gain and a tighter low end</button>
+                  <button class="chip" type="button">Give me more sustain without extra noise</button>
+                  <button class="chip" type="button">Brighten the amp and slow the delay down</button>
+                </div>
+              </div>
+
+              <div class="thread" id="thread" aria-live="polite" aria-label="Conversation with Bender"></div>
+
+              <form class="composer" id="composer">
+                <label class="mono" for="request" hidden>Describe a tone change</label>
+                <textarea
+                  id="request"
+                  placeholder="e.g. more gain, tighter low end, a slower delay..."
+                ></textarea>
+                <div class="composer-foot">
+                  <button class="ghost-button" type="button">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M21 11.5l-8.8 8.8a5 5 0 01-7.1-7.1l8.9-8.8a3.3 3.3 0 014.7 4.7l-8.8 8.8a1.7 1.7 0 01-2.4-2.4l8.2-8.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Add file
+                  </button>
+                  <button class="ghost-button" type="button">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M3 12h2.5L7 8l3 8 2.5-9 2 7 1.5-4h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Add audio <span class="optional">(optional)</span>
+                  </button>
+                  <span class="composer-hint">Shift + Enter for a new line</span>
+                  <button class="primary-action send-button" type="submit" id="send" disabled>Send</button>
+                </div>
+              </form>
+
+              <p class="agent-note">
+                Bender analyses your preset, proposes changes, and shows a preview for you to review.
+              </p>
+            </div>
+
+            <!-- right: preset state -->
+            <aside class="state-pane" aria-label="Preset state">
+              <div class="state-group">
+                <div class="pane-head" style="margin-bottom: 0">
+                  <p class="pane-label">Loaded preset</p>
+                  <button class="link-button" type="button" id="replace-preset">Replace preset</button>
+                </div>
+                <div class="file-row">
+                  <span class="file-glyph" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                      <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                      <path d="M14 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                    </svg>
+                  </span>
+                  <span class="file-name">
+                    <span class="file-head">
+                      <strong>2204 Warm.hlx</strong>
+                      <span class="pill pill-ok">Loaded</span>
+                    </span>
+                    <span class="file-meta">Helix Floor / LT &middot; firmware 3.80 &middot; 5 blocks &middot; 6.3 KB</span>
+                  </span>
+                </div>
+              </div>
+
+              <div class="state-group">
+                <div class="pane-head" style="margin-bottom: 0">
+                  <p class="pane-label">Blocks &amp; routing</p>
+                  <p class="pane-label pane-label-muted">Signal chain &middot; 5</p>
+                </div>
+                <ul class="blocks" id="blocks">
+                  <li class="block-item" data-enabled="true" data-block="0">
+                    <div class="block-row">
+                      <span class="block-index">01</span>
+                      <span class="block-state" aria-hidden="true"></span>
+                      <span class="block-name">Scream 808</span>
+                      <span class="block-kind">Distortion</span>
+                      <button class="block-toggle" type="button" aria-expanded="false" aria-label="Show Scream 808 parameters">&hellip;</button>
+                    </div>
+                    <div class="block-params" hidden>
+                      <span class="param">Gain 4.2</span>
+                      <span class="param">Tone 5.0</span>
+                      <span class="param">Level 6.0</span>
+                    </div>
+                    <div class="block-diff" hidden></div>
+                  </li>
+                  <li class="block-item" data-enabled="true" data-block="1">
+                    <div class="block-row">
+                      <span class="block-index">02</span>
+                      <span class="block-state" aria-hidden="true"></span>
+                      <span class="block-name">Line 6 2204 Mod</span>
+                      <span class="block-kind">Amp</span>
+                      <button class="block-toggle" type="button" aria-expanded="false" aria-label="Show Line 6 2204 Mod parameters">&hellip;</button>
+                    </div>
+                    <div class="block-params" hidden>
+                      <span class="param">Drive 5.0</span>
+                      <span class="param">Bass 5.4</span>
+                      <span class="param">Mid 4.8</span>
+                      <span class="param">Treble 6.2</span>
+                      <span class="param">Presence 5.5</span>
+                      <span class="param">Master 7.0</span>
+                    </div>
+                    <div class="block-diff" hidden></div>
+                  </li>
+                  <li class="block-item" data-enabled="true" data-block="2">
+                    <div class="block-row">
+                      <span class="block-index">03</span>
+                      <span class="block-state" aria-hidden="true"></span>
+                      <span class="block-name">4&times;12 1960 T75</span>
+                      <span class="block-kind">Cab</span>
+                      <button class="block-toggle" type="button" aria-expanded="false" aria-label="Show 4x12 1960 T75 parameters">&hellip;</button>
+                    </div>
+                    <div class="block-params" hidden>
+                      <span class="param">Mic 57 Dynamic</span>
+                      <span class="param">Distance 2.0</span>
+                      <span class="param">Low Cut 80 Hz</span>
+                    </div>
+                    <div class="block-diff" hidden></div>
+                  </li>
+                  <li class="block-item" data-enabled="true" data-block="3">
+                    <div class="block-row">
+                      <span class="block-index">04</span>
+                      <span class="block-state" aria-hidden="true"></span>
+                      <span class="block-name">Vintage Digital</span>
+                      <span class="block-kind">Delay</span>
+                      <button class="block-toggle" type="button" aria-expanded="false" aria-label="Show Vintage Digital parameters">&hellip;</button>
+                    </div>
+                    <div class="block-params" hidden>
+                      <span class="param">Time 380 ms</span>
+                      <span class="param">Feedback 32%</span>
+                      <span class="param">Mix 24%</span>
+                    </div>
+                    <div class="block-diff" hidden></div>
+                  </li>
+                  <li class="block-item" data-enabled="false" data-block="4">
+                    <div class="block-row">
+                      <span class="block-index">05</span>
+                      <span class="block-state" aria-hidden="true"></span>
+                      <span class="block-name">Ganymede</span>
+                      <span class="block-kind">Reverb &middot; bypassed</span>
+                      <button class="block-toggle" type="button" aria-expanded="false" aria-label="Show Ganymede parameters">&hellip;</button>
+                    </div>
+                    <div class="block-params" hidden>
+                      <span class="param">Decay 4.2</span>
+                      <span class="param">Predelay 20 ms</span>
+                      <span class="param">Mix 18%</span>
+                    </div>
+                    <div class="block-diff" hidden></div>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="state-group">
+                <div class="pane-head" style="margin-bottom: 0">
+                  <p class="pane-label">Review &amp; download</p>
+                  <span class="pill pill-idle" id="change-pill">Unchanged</span>
+                </div>
+
+                <p class="review-empty" id="review-empty">
+                  No changes yet. Edited parameters appear here the moment Bender proposes them,
+                  with the value it started from.
+                </p>
+                <ul class="review-list" id="review-list" hidden></ul>
+
+                <div class="review-controls">
+                  <button class="history-button" type="button" id="undo" aria-label="Undo last change" disabled>&#8630;</button>
+                  <button class="history-button" type="button" id="redo" aria-label="Redo last change" disabled>&#8631;</button>
+                  <button class="link-button" type="button" id="revert" disabled>Revert all</button>
+                  <button class="primary-action" type="button" id="download" disabled>Download .hlx</button>
+                </div>
+                <p class="review-foot">Your original file is never modified &mdash; Bender writes a new copy.</p>
+              </div>
+            </aside>
           </div>
         </section>
       </main>
     </div>
 
     <script>
-      const tabs = [
-        { tab: document.querySelector('#tone-tab'), panel: document.querySelector('#tone-panel') },
-        {
+      const params = new URLSearchParams(window.location.search);
+
+      /* ---------- tabs ---------- */
+
+      const MODES = {
+        tone: {
+          tab: document.querySelector('#tone-tab'),
+          panel: document.querySelector('#tone-panel'),
+          kicker: 'Line 6 Helix \u00b7 safe preset editing',
+          copy:
+            'Begin with a player-approved foundation or bring the preset already on your rig. ' +
+            'Bender shows every edit before you download it.',
+        },
+        upload: {
           tab: document.querySelector('#upload-tab'),
           panel: document.querySelector('#upload-panel'),
+          kicker: 'Line 6 Helix \u00b7 AI preset editing',
+          copy:
+            'Upload a .hlx preset and Bender maps its signal chain, proposes editable changes, and ' +
+            'lets you review every parameter before you download. Reference audio is optional context.',
         },
-      ];
+      };
 
-      const viewport = document.querySelector('#tone-viewport');
-      const previousTone = document.querySelector('#previous-tone');
-      const nextTone = document.querySelector('#next-tone');
+      const order = ['tone', 'upload'];
+      const kicker = document.querySelector('#kicker');
+      const introCopy = document.querySelector('#intro-copy');
 
       function selectMode(mode) {
-        tabs.forEach(({ tab, panel }, index) => {
-          const selected = (mode === 'tone') === (index === 0);
-          tab.setAttribute('aria-selected', String(selected));
+        order.forEach((name) => {
+          const selected = name === mode;
+          MODES[name].tab.setAttribute('aria-selected', String(selected));
           // Roving tabindex: one stop for the whole tablist, arrows move
           // between tabs. Without it a keyboard user tabs through every tab
           // before reaching the content.
-          tab.tabIndex = selected ? 0 : -1;
-          panel.hidden = !selected;
+          MODES[name].tab.tabIndex = selected ? 0 : -1;
+          MODES[name].panel.hidden = !selected;
         });
 
+        kicker.textContent = MODES[mode].kicker;
+        introCopy.textContent = MODES[mode].copy;
         syncRailControls();
       }
 
-      tabs.forEach(({ tab }, index) => {
-        tab.addEventListener('click', () => selectMode(index === 0 ? 'tone' : 'upload'));
+      order.forEach((name, index) => {
+        const { tab } = MODES[name];
+        tab.addEventListener('click', () => selectMode(name));
         tab.addEventListener('keydown', (event) => {
           const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
           if (step === 0) return;
 
           event.preventDefault();
-          const next = tabs[(index + step + tabs.length) % tabs.length];
-          selectMode(next.tab === tabs[0].tab ? 'tone' : 'upload');
-          next.tab.focus();
+          const next = order[(index + step + order.length) % order.length];
+          selectMode(next);
+          MODES[next].tab.focus();
         });
       });
 
-      if (new URLSearchParams(window.location.search).get('mode') === 'upload') {
-        selectMode('upload');
-      }
+      /* ---------- tone rail ---------- */
+
+      const viewport = document.querySelector('#tone-viewport');
+      const previousTone = document.querySelector('#previous-tone');
+      const nextTone = document.querySelector('#next-tone');
+      const toneCards = Array.from(document.querySelectorAll('.tone-card'));
+
+      // The count is a fact about the rail, not a caption. Typing it by hand is
+      // how the first pass ended up claiming three tones above four cards.
+      document.querySelector('#tone-count').textContent = String(toneCards.length).padStart(2, '0');
 
       /**
        * Page the rail by what is actually visible.
        *
        * The card width is viewport-relative below 820px, so a fixed pixel step
-       * drifts out of alignment and — with a clamp — left the last tones
+       * drifts out of alignment and -- with a clamp -- left the last tones
        * unreachable on a phone. Measuring the viewport works at any width and
        * for any number of cards.
        *
@@ -833,13 +1815,10 @@
       previousTone.addEventListener('click', () => pageTones(-1));
       viewport.addEventListener('scroll', syncRailControls, { passive: true });
       window.addEventListener('resize', syncRailControls);
-      syncRailControls();
 
-      document.querySelectorAll('.tone-card').forEach((card) => {
+      toneCards.forEach((card) => {
         card.addEventListener('click', () => {
-          document
-            .querySelectorAll('.tone-card')
-            .forEach((item) => item.setAttribute('aria-pressed', 'false'));
+          toneCards.forEach((item) => item.setAttribute('aria-pressed', 'false'));
           card.setAttribute('aria-pressed', 'true');
           // Description lives on the card, so adding a tone cannot leave the
           // preview reading "undefined".
@@ -847,6 +1826,262 @@
           document.querySelector('#preview-copy').textContent = card.dataset.description ?? '';
         });
       });
+
+      /* ---------- upload: intake ---------- */
+
+      const intake = document.querySelector('#intake');
+      const workspace = document.querySelector('#workspace');
+
+      function loadPreset(loaded) {
+        intake.hidden = loaded;
+        workspace.hidden = !loaded;
+      }
+
+      document.querySelector('#load-preset').addEventListener('click', () => loadPreset(true));
+      document.querySelector('#replace-preset').addEventListener('click', () => {
+        revertAll();
+        thread.replaceChildren();
+        agentIntro.hidden = false;
+        loadPreset(false);
+      });
+
+      /* ---------- upload: blocks ---------- */
+
+      document.querySelectorAll('.block-toggle').forEach((toggle) => {
+        toggle.addEventListener('click', () => {
+          const item = toggle.closest('.block-item');
+          const open = toggle.getAttribute('aria-expanded') === 'true';
+          toggle.setAttribute('aria-expanded', String(!open));
+          item.querySelector('.block-params').hidden = open;
+        });
+      });
+
+      /* ---------- upload: the agent run ---------- */
+
+      const agentIntro = document.querySelector('#agent-intro');
+      const thread = document.querySelector('#thread');
+      const composer = document.querySelector('#composer');
+      const request = document.querySelector('#request');
+      const send = document.querySelector('#send');
+      const changePill = document.querySelector('#change-pill');
+      const reviewEmpty = document.querySelector('#review-empty');
+      const reviewList = document.querySelector('#review-list');
+      const undo = document.querySelector('#undo');
+      const redo = document.querySelector('#redo');
+      const revert = document.querySelector('#revert');
+      const download = document.querySelector('#download');
+
+      const STEPS = [
+        'Analysing preset',
+        'Inspecting signal chain',
+        'Planning parameter changes',
+        'Updating blocks',
+        'Ready for review',
+      ];
+
+      // A scripted edit stands in for a model response. Real values, real
+      // parameter names from the block catalogue, so the diff reads the way a
+      // genuine one will.
+      const EDIT = [
+        { block: 0, name: 'Scream 808', parameter: 'Gain', from: '4.2', to: '5.8' },
+        { block: 1, name: 'Line 6 2204 Mod', parameter: 'Drive', from: '5.0', to: '6.1' },
+        { block: 1, name: 'Line 6 2204 Mod', parameter: 'Bass', from: '5.4', to: '4.6' },
+      ];
+
+      // ?speed=0 runs the sequence instantly, which is how the jsdom checks and
+      // screenshot captures avoid waiting on timers.
+      const STEP_MS = Math.max(0, Number(params.get('speed') ?? 520) || 0);
+
+      let busy = false;
+      let applied = false;
+      let timers = [];
+
+      function setSendState() {
+        send.disabled = busy || request.value.trim().length === 0;
+      }
+
+      request.addEventListener('input', setSendState);
+      request.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          composer.requestSubmit();
+        }
+      });
+
+      document.querySelectorAll('.chips .chip').forEach((chip) => {
+        chip.addEventListener('click', () => {
+          request.value = chip.textContent.trim();
+          setSendState();
+          request.focus();
+        });
+      });
+
+      composer.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const text = request.value.trim();
+        if (busy || text.length === 0) return;
+        runAgent(text);
+      });
+
+      function runAgent(text) {
+        busy = true;
+        agentIntro.hidden = true;
+        request.value = '';
+        setSendState();
+
+        const user = document.createElement('p');
+        user.className = 'msg-user';
+        user.textContent = text;
+
+        const run = document.createElement('div');
+        run.className = 'msg-agent';
+        const steps = document.createElement('ul');
+        steps.className = 'steps';
+        STEPS.forEach((label) => {
+          const step = document.createElement('li');
+          step.className = 'step';
+          step.dataset.state = 'pending';
+          step.textContent = label;
+          steps.append(step);
+        });
+        run.append(steps);
+        thread.append(user, run);
+        thread.scrollTop = thread.scrollHeight;
+
+        const items = Array.from(steps.children);
+        items.forEach((step, index) => {
+          timers.push(
+            window.setTimeout(() => {
+              items.slice(0, index).forEach((done) => {
+                done.dataset.state = 'done';
+              });
+              step.dataset.state = 'active';
+
+              if (index === items.length - 1) {
+                step.dataset.state = 'done';
+                finishRun(run);
+              }
+            }, STEP_MS * (index + 1)),
+          );
+        });
+      }
+
+      function finishRun(run) {
+        busy = false;
+        applyChanges();
+        setSendState();
+
+        const summary = document.createElement('p');
+        summary.className = 'agent-summary';
+        const blocks = new Set(EDIT.map((change) => change.block)).size;
+        summary.textContent =
+          'Proposed ' + EDIT.length + ' parameter changes across ' + blocks +
+          ' blocks. Review them in the preset panel, then download when you are happy.';
+        run.append(summary);
+        thread.scrollTop = thread.scrollHeight;
+      }
+
+      /* ---------- upload: review state ---------- */
+
+      function applyChanges() {
+        applied = true;
+
+        document.querySelectorAll('.block-item').forEach((item) => {
+          const index = Number(item.dataset.block);
+          const changes = EDIT.filter((change) => change.block === index);
+          const diff = item.querySelector('.block-diff');
+          diff.replaceChildren();
+          diff.hidden = changes.length === 0;
+
+          changes.forEach((change) => {
+            const pill = document.createElement('span');
+            pill.className = 'param-diff';
+            const before = document.createElement('s');
+            before.textContent = change.from;
+            pill.append(change.parameter + ' ', before, document.createTextNode(' \u2192 ' + change.to));
+            diff.append(pill);
+          });
+        });
+
+        reviewList.replaceChildren();
+        EDIT.forEach((change) => {
+          const row = document.createElement('li');
+          const label = document.createElement('span');
+          label.textContent = change.name + ' \u00b7 ' + change.parameter;
+          const value = document.createElement('strong');
+          value.textContent = change.from + ' \u2192 ' + change.to;
+          row.append(label, value);
+          reviewList.append(row);
+        });
+
+        reviewList.hidden = false;
+        reviewEmpty.hidden = true;
+        changePill.textContent = EDIT.length + ' changes';
+        changePill.className = 'pill pill-changed';
+        undo.disabled = false;
+        redo.disabled = true;
+        revert.disabled = false;
+        download.disabled = false;
+      }
+
+      function revertAll() {
+        applied = false;
+        timers.forEach((timer) => window.clearTimeout(timer));
+        timers = [];
+        busy = false;
+
+        document.querySelectorAll('.block-diff').forEach((diff) => {
+          diff.replaceChildren();
+          diff.hidden = true;
+        });
+
+        reviewList.replaceChildren();
+        reviewList.hidden = true;
+        reviewEmpty.hidden = false;
+        changePill.textContent = 'Unchanged';
+        changePill.className = 'pill pill-idle';
+        undo.disabled = true;
+        revert.disabled = true;
+        download.disabled = true;
+        redo.disabled = !thread.children.length;
+        setSendState();
+      }
+
+      undo.addEventListener('click', () => {
+        if (!applied) return;
+        revertAll();
+        redo.disabled = false;
+      });
+
+      redo.addEventListener('click', () => {
+        if (applied) return;
+        applyChanges();
+      });
+
+      revert.addEventListener('click', revertAll);
+
+      /* ---------- deep links ---------- */
+
+      if (params.get('preset') === 'loaded') {
+        selectMode('upload');
+        loadPreset(true);
+      } else if (params.get('mode') === 'upload') {
+        selectMode('upload');
+      } else {
+        selectMode('tone');
+      }
+
+      // ?request=... replays a prompt on load, so a reviewer can link to the
+      // reviewed-changes state instead of describing how to reach it.
+      const replay = params.get('request');
+      if (replay && !workspace.hidden) {
+        request.value = replay;
+        setSendState();
+        runAgent(replay);
+      }
+
+      syncRailControls();
+      setSendState();
     </script>
   </body>
 </html>
