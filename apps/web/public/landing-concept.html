@@ -11,8 +11,10 @@
 
       Deep links, so a reviewer can screenshot a state without clicking:
         ?mode=upload          open the upload tab
-        ?preset=loaded        open the upload tab with a preset already loaded
+        ?preset=loaded        skip the drop step, preset already loaded
         ?request=more+gain    replay a prompt on load (needs preset=loaded)
+        ?error=type|size|parse   show an upload rejection
+        ?fail=model           make the next agent run fail
         ?speed=0              run the agent progress instantly
     -->
     <meta name="robots" content="noindex, nofollow" />
@@ -625,61 +627,107 @@
         content: "";
       }
 
-      /* ---------- upload: intake ---------- */
+      /* ---------- upload: drop target ---------- */
 
-      .intake {
-        max-width: 560px;
-        padding: 38px 0 6px;
+      .dropzone {
+        margin-top: 14px;
       }
 
-      .intake h2 {
-        margin: 12px 0 0;
-        font-size: 26px;
+      .dropzone-target {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        padding: 16px 15px;
+        border: 1px dashed var(--line-strong);
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.015);
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .dropzone-target:hover,
+      .dropzone.is-over .dropzone-target {
+        border-color: var(--amber);
+        background: rgba(242, 166, 43, 0.07);
+      }
+
+      .dropzone-glyph {
+        flex: none;
+        color: var(--amber);
+      }
+
+      .dropzone-copy strong {
+        display: block;
+        font-size: 14px;
         font-weight: 620;
       }
 
-      .intake p {
-        margin: 10px 0 22px;
-        color: var(--ink-soft);
-        font-size: 14px;
-        line-height: 1.6;
-      }
-
-      .intake-actions {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        flex-wrap: wrap;
-      }
-
-      .intake-actions .primary-action {
-        width: auto;
-      }
-
-      .intake-rules {
-        display: flex;
-        gap: 18px;
-        flex-wrap: wrap;
-        margin-top: 24px;
-        padding-top: 18px;
-        border-top: 1px solid var(--line);
+      .dropzone-copy span {
+        display: block;
+        margin-top: 2px;
         color: var(--ink-muted);
         font-size: 12px;
       }
 
-      .intake-rules span {
-        display: flex;
-        align-items: center;
-        gap: 8px;
+      .dropzone-rules {
+        margin: 9px 0 0;
+        color: var(--ink-muted);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        letter-spacing: 0.04em;
       }
 
-      .intake-rules span::before {
-        width: 4px;
-        height: 4px;
+      .group-empty {
+        margin: 14px 0 0;
+        color: var(--ink-muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      /*
+        Errors are stated where the action was taken, not in a toast that a
+        player has to catch. Copy matches what the server and parser actually
+        return so the concept does not promise friendlier failures than exist.
+      */
+      .notice {
+        display: flex;
+        gap: 12px;
+        margin-top: 14px;
+        padding: 13px 15px;
+        border: 1px solid rgba(215, 107, 100, 0.4);
+        border-radius: var(--radius-sm);
+        background: rgba(215, 107, 100, 0.09);
+      }
+
+      .notice-glyph {
         flex: none;
-        border-radius: 50%;
-        background: var(--line-strong);
-        content: "";
+        color: var(--danger);
+        line-height: 1.35;
+      }
+
+      .notice-body {
+        min-width: 0;
+      }
+
+      .notice-body strong {
+        display: block;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 640;
+      }
+
+      .notice-body p {
+        margin: 5px 0 0;
+        color: var(--ink-soft);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .notice-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 11px;
       }
 
       /* ---------- upload: workspace ---------- */
@@ -818,6 +866,15 @@
 
       .step[data-state="done"]::before {
         background: var(--mint);
+      }
+
+      .step[data-state="failed"] {
+        color: var(--danger);
+      }
+
+      .step[data-state="failed"]::before {
+        background: var(--danger);
+        box-shadow: 0 0 0 3px rgba(215, 107, 100, 0.16);
       }
 
       .agent-summary {
@@ -1302,6 +1359,14 @@
         }
 
         /*
+          Until a preset is loaded the drop target is the only useful control,
+          so it leads. Once loaded the conversation takes the top again.
+        */
+        .workspace[data-preset="empty"] .state-pane {
+          order: -1;
+        }
+
+        /*
           Let a five-block chain fit a 390px screen outright. It still scrolls
           if a preset carries longer block names than these.
         */
@@ -1512,26 +1577,7 @@
 
         <!-- ---------- upload a preset ---------- -->
         <section class="mode-panel" id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" hidden>
-          <div class="intake" id="intake">
-            <p class="section-label">Step 01 &middot; bring your preset</p>
-            <h2>Drop the .hlx already on your rig</h2>
-            <p>
-              Bender validates the file, maps its signal chain block by block, and then waits for
-              you to describe the change you want. Nothing is edited until you ask.
-            </p>
-            <div class="intake-actions">
-              <button class="primary-action" type="button" id="load-preset">Browse .hlx files</button>
-              <span class="chip" role="presentation">or drop a file anywhere</span>
-            </div>
-            <div class="intake-rules">
-              <span>.hlx only</span>
-              <span>Max 2 MB</span>
-              <span>Parsed in your browser session</span>
-              <span>Your original file stays unchanged</span>
-            </div>
-          </div>
-
-          <div class="workspace" id="workspace" hidden>
+          <div class="workspace" id="workspace">
             <!-- left: the agent conversation -->
             <div class="agent-pane">
               <div class="pane-head">
@@ -1588,9 +1634,30 @@
               <div class="state-group">
                 <div class="pane-head" style="margin-bottom: 0">
                   <p class="pane-label">Loaded preset</p>
-                  <button class="link-button" type="button" id="replace-preset">Replace preset</button>
+                  <button class="link-button" type="button" id="replace-preset" hidden>Replace preset</button>
                 </div>
-                <div class="file-row">
+
+                <!--
+                  The drop target lives where the preset belongs rather than
+                  behind a separate intake screen, so the whole workflow -- ask,
+                  inspect, download -- is visible before you commit a file.
+                -->
+                <div class="dropzone" id="dropzone">
+                  <button class="dropzone-target" type="button" id="load-preset">
+                    <span class="dropzone-glyph" aria-hidden="true">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 16V4M12 4L8 8M12 4l4 4M5 15v4a2 2 0 002 2h10a2 2 0 002-2v-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </span>
+                    <span class="dropzone-copy">
+                      <strong>Drop your .hlx preset</strong>
+                      <span>or browse for a file</span>
+                    </span>
+                  </button>
+                  <p class="dropzone-rules">.hlx &middot; max 2 MB &middot; your original stays unchanged</p>
+                </div>
+
+                <div class="file-row" id="file-row" hidden>
                   <span class="file-glyph" aria-hidden="true">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
                       <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
@@ -1610,9 +1677,12 @@
               <div class="state-group">
                 <div class="pane-head" style="margin-bottom: 0">
                   <p class="pane-label">Blocks &amp; routing</p>
-                  <p class="pane-label pane-label-muted">Signal chain &middot; 5</p>
+                  <p class="pane-label pane-label-muted" id="chain-count">Signal chain</p>
                 </div>
-                <ul class="blocks" id="blocks">
+                <p class="group-empty" id="blocks-empty">
+                  Your signal chain appears here block by block, with the parameters Bender can edit.
+                </p>
+                <ul class="blocks" id="blocks" hidden>
                   <li class="block-item" data-enabled="true" data-block="0">
                     <div class="block-row">
                       <span class="block-index">01</span>
@@ -1723,6 +1793,128 @@
     <script>
       const params = new URLSearchParams(window.location.search);
 
+      /* ---------- upload: loading a preset ---------- */
+
+      const workspace = document.querySelector('#workspace');
+      const dropzone = document.querySelector('#dropzone');
+      const fileRow = document.querySelector('#file-row');
+      const replacePreset = document.querySelector('#replace-preset');
+      const blocks = document.querySelector('#blocks');
+      const blocksEmpty = document.querySelector('#blocks-empty');
+      const chainCount = document.querySelector('#chain-count');
+
+      // Copy lifted from the real failure paths -- apps/server/src/http/routes.ts
+      // and the parse message in usePresetStore -- so the concept does not
+      // promise friendlier errors than the product actually returns.
+      const UPLOAD_ERRORS = {
+        type: {
+          title: 'That is not a .hlx file',
+          detail: 'Bender reads Line 6 Helix presets. Export one from HX Edit and try again.',
+        },
+        size: {
+          title: 'That preset is too large',
+          detail: 'Presets must be under 2048 KB. A Helix preset is normally a few KB, so this is probably a bundle.',
+        },
+        parse: {
+          title: 'That file could not be read as a Helix preset',
+          detail: 'Make sure it is an unmodified .hlx exported from HX Edit.',
+        },
+      };
+
+      let presetLoaded = false;
+
+      function showUploadError(kind) {
+        clearUploadError();
+        const copy = UPLOAD_ERRORS[kind];
+        if (!copy) return;
+
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.id = 'upload-error';
+        notice.setAttribute('role', 'alert');
+
+        const glyph = document.createElement('span');
+        glyph.className = 'notice-glyph';
+        glyph.setAttribute('aria-hidden', 'true');
+        glyph.textContent = '!';
+
+        const body = document.createElement('div');
+        body.className = 'notice-body';
+        const title = document.createElement('strong');
+        title.textContent = copy.title;
+        const detail = document.createElement('p');
+        detail.textContent = copy.detail;
+        body.append(title, detail);
+
+        notice.append(glyph, body);
+        dropzone.append(notice);
+      }
+
+      function clearUploadError() {
+        document.querySelector('#upload-error')?.remove();
+      }
+
+      function loadPreset(loaded) {
+        presetLoaded = loaded;
+        clearUploadError();
+
+        workspace.dataset.preset = loaded ? 'loaded' : 'empty';
+        dropzone.hidden = loaded;
+        fileRow.hidden = !loaded;
+        replacePreset.hidden = !loaded;
+        blocks.hidden = !loaded;
+        blocksEmpty.hidden = loaded;
+        chainCount.textContent = loaded ? 'Signal chain \u00b7 5' : 'Signal chain';
+
+        setSendState();
+      }
+
+      document.querySelector('#load-preset').addEventListener('click', () => loadPreset(true));
+      replacePreset.addEventListener('click', () => {
+        revertAll();
+        thread.replaceChildren();
+        agentIntro.hidden = false;
+        loadPreset(false);
+      });
+
+      // Dragging over the pane is the other half of "drop your preset"; without
+      // it the dashed border is decoration.
+      ['dragenter', 'dragover'].forEach((type) => {
+        dropzone.addEventListener(type, (event) => {
+          event.preventDefault();
+          dropzone.classList.add('is-over');
+        });
+      });
+
+      ['dragleave', 'drop'].forEach((type) => {
+        dropzone.addEventListener(type, (event) => {
+          event.preventDefault();
+          dropzone.classList.remove('is-over');
+        });
+      });
+
+      dropzone.addEventListener('drop', (event) => {
+        const file = event.dataTransfer?.files?.[0];
+        if (!file) {
+          loadPreset(true);
+          return;
+        }
+
+        if (!file.name.toLowerCase().endsWith('.hlx')) {
+          showUploadError('type');
+        } else if (file.size > 2 * 1024 * 1024) {
+          showUploadError('size');
+        } else {
+          loadPreset(true);
+        }
+      });
+
+      // Missing the drop target should do nothing. Without this the browser
+      // navigates to the dropped file and the session is gone.
+      ['dragover', 'drop'].forEach((type) => {
+        workspace.addEventListener(type, (event) => event.preventDefault());
+      });
+
       /* ---------- tabs ---------- */
 
       const MODES = {
@@ -1827,24 +2019,6 @@
         });
       });
 
-      /* ---------- upload: intake ---------- */
-
-      const intake = document.querySelector('#intake');
-      const workspace = document.querySelector('#workspace');
-
-      function loadPreset(loaded) {
-        intake.hidden = loaded;
-        workspace.hidden = !loaded;
-      }
-
-      document.querySelector('#load-preset').addEventListener('click', () => loadPreset(true));
-      document.querySelector('#replace-preset').addEventListener('click', () => {
-        revertAll();
-        thread.replaceChildren();
-        agentIntro.hidden = false;
-        loadPreset(false);
-      });
-
       /* ---------- upload: blocks ---------- */
 
       document.querySelectorAll('.block-toggle').forEach((toggle) => {
@@ -1895,9 +2069,15 @@
       let busy = false;
       let applied = false;
       let timers = [];
+      let lastRequest = '';
+
+      // ?fail=model makes the next run fail, so the error path can be reviewed
+      // and screenshotted without a backend.
+      const FAIL_AT_STEP = 2;
+      let failNextRun = params.get('fail') === 'model';
 
       function setSendState() {
-        send.disabled = busy || request.value.trim().length === 0;
+        send.disabled = busy || !presetLoaded || request.value.trim().length === 0;
       }
 
       request.addEventListener('input', setSendState);
@@ -1919,13 +2099,16 @@
       composer.addEventListener('submit', (event) => {
         event.preventDefault();
         const text = request.value.trim();
-        if (busy || text.length === 0) return;
+        if (busy || !presetLoaded || text.length === 0) return;
         runAgent(text);
       });
 
       function runAgent(text) {
         busy = true;
         agentIntro.hidden = true;
+        // Keep the request until the run succeeds. A failed call should not
+        // cost the player the sentence they just typed.
+        lastRequest = text;
         request.value = '';
         setSendState();
 
@@ -1957,6 +2140,14 @@
               });
               step.dataset.state = 'active';
 
+              // A model call fails partway through, not before it starts, so
+              // the failure is shown against the step that was running.
+              if (failNextRun && index === FAIL_AT_STEP) {
+                step.dataset.state = 'failed';
+                failRun(run);
+                return;
+              }
+
               if (index === items.length - 1) {
                 step.dataset.state = 'done';
                 finishRun(run);
@@ -1978,6 +2169,52 @@
           'Proposed ' + EDIT.length + ' parameter changes across ' + blocks +
           ' blocks. Review them in the preset panel, then download when you are happy.';
         run.append(summary);
+        thread.scrollTop = thread.scrollHeight;
+      }
+
+      function failRun(run) {
+        busy = false;
+        failNextRun = false;
+        // Stop the rest of the sequence. Without this the remaining steps still
+        // fire and the run "succeeds" after having already failed.
+        timers.forEach((timer) => window.clearTimeout(timer));
+        timers = [];
+        // Nothing was applied, so the preset is exactly where it was. Say so.
+        request.value = lastRequest;
+        setSendState();
+
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.setAttribute('role', 'alert');
+
+        const glyph = document.createElement('span');
+        glyph.className = 'notice-glyph';
+        glyph.setAttribute('aria-hidden', 'true');
+        glyph.textContent = '!';
+
+        const body = document.createElement('div');
+        body.className = 'notice-body';
+        const title = document.createElement('strong');
+        title.textContent = 'Bender could not finish that request';
+        const detail = document.createElement('p');
+        detail.textContent =
+          'The model did not respond. Your preset is unchanged and your request is still in the box.';
+
+        const actions = document.createElement('div');
+        actions.className = 'notice-actions';
+        const retry = document.createElement('button');
+        retry.className = 'link-button';
+        retry.type = 'button';
+        retry.textContent = 'Retry';
+        retry.addEventListener('click', () => {
+          notice.remove();
+          runAgent(lastRequest);
+        });
+        actions.append(retry);
+
+        body.append(title, detail, actions);
+        notice.append(glyph, body);
+        run.append(notice);
         thread.scrollTop = thread.scrollHeight;
       }
 
@@ -2062,19 +2299,25 @@
 
       /* ---------- deep links ---------- */
 
-      if (params.get('preset') === 'loaded') {
-        selectMode('upload');
-        loadPreset(true);
-      } else if (params.get('mode') === 'upload') {
+      if (params.get('mode') === 'upload' || params.has('preset') || params.has('error') || params.has('fail')) {
         selectMode('upload');
       } else {
         selectMode('tone');
       }
 
+      // The workspace starts empty; ?preset=loaded skips the drop step.
+      loadPreset(params.get('preset') === 'loaded');
+
+      const uploadError = params.get('error');
+      if (uploadError) {
+        loadPreset(false);
+        showUploadError(uploadError);
+      }
+
       // ?request=... replays a prompt on load, so a reviewer can link to the
       // reviewed-changes state instead of describing how to reach it.
       const replay = params.get('request');
-      if (replay && !workspace.hidden) {
+      if (replay && presetLoaded) {
         request.value = replay;
         setSendState();
         runAgent(replay);
