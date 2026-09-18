@@ -34,6 +34,9 @@ export interface LocalPreview {
   deviceName?: string;
   firmware?: string;
   blockCount: number;
+  /** Byte length of the uploaded file. Absent for starter tones, which the
+   * client never holds as text. */
+  sizeBytes?: number;
 }
 
 export interface UserTurn {
@@ -70,6 +73,12 @@ export interface PresetStoreState {
 
   /** The server-side preset view — the source of truth after upload. */
   view: PresetView | null;
+
+  /**
+   * Set when the session came from a starter tone rather than a file, so the
+   * rail can mark which foundation is in use and show its real signal chain.
+   */
+  sourceTemplateId: string | null;
 
   conversation: ConversationTurn[];
   isSending: boolean;
@@ -108,6 +117,7 @@ function previewFrom(fileName: string, source: string): LocalPreview | null {
       deviceName: preset.deviceName,
       firmware: preset.firmware,
       blockCount: preset.blocks().filter((block) => block.role === 'block').length,
+      sizeBytes: new TextEncoder().encode(source).length,
     };
   } catch {
     return null;
@@ -135,6 +145,7 @@ export const usePresetStore = create<PresetStoreState>((set, get) => {
       canRedo: false,
       conversation: [],
       localPreview: null,
+      sourceTemplateId: null,
       uploadError: message,
     });
     showToast('Session expired — please re-upload');
@@ -145,6 +156,7 @@ export const usePresetStore = create<PresetStoreState>((set, get) => {
     uploadError: null,
     isUploading: false,
     view: null,
+    sourceTemplateId: null,
     conversation: [],
     isSending: false,
     isMutating: false,
@@ -163,6 +175,7 @@ export const usePresetStore = create<PresetStoreState>((set, get) => {
         uploadError: null,
         isUploading: true,
         view: null,
+        sourceTemplateId: null,
         conversation: [],
         canUndo: false,
         canRedo: false,
@@ -185,6 +198,7 @@ export const usePresetStore = create<PresetStoreState>((set, get) => {
         uploadError: null,
         isUploading: true,
         view: null,
+        sourceTemplateId: null,
         conversation: [],
         canUndo: false,
         canRedo: false,
@@ -194,6 +208,7 @@ export const usePresetStore = create<PresetStoreState>((set, get) => {
         const view = await createSessionFromTemplate(templateId);
         applyView(view);
         set({
+          sourceTemplateId: templateId,
           localPreview: {
             fileName: view.filename,
             name: view.name ?? undefined,
@@ -219,6 +234,7 @@ export const usePresetStore = create<PresetStoreState>((set, get) => {
         localPreview: null,
         uploadError: null,
         view: null,
+        sourceTemplateId: null,
         conversation: [],
         isSending: false,
         canUndo: false,

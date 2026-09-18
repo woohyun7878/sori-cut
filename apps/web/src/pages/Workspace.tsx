@@ -1,10 +1,10 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { NavBar } from '../components/NavBar';
-import { DropZone } from '../components/DropZone';
+import { ModeTabs, type WorkspaceMode } from '../components/ModeTabs';
 import { StarterTones } from '../components/StarterTones';
-import { SignalChain } from '../components/SignalChain';
 import { RequestBox } from '../components/RequestBox';
-import { ChangesPanel } from '../components/ChangesPanel';
+import { PresetPane } from '../components/PresetPane';
 import { Toast } from '../components/Toast';
 import { ShortcutHelpModal } from '../components/ShortcutHelpModal';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
@@ -13,118 +13,83 @@ import { usePresetStore } from '../store/usePresetStore';
 /**
  * The Bender workspace.
  *
- * Intake (upload + starter tones) is always available. Once a preset is open on
- * the server, the signal chain, the request box and the review/download panel
- * appear, all driven by the server-held session as the single source of truth.
+ * Two ways in — a player-approved starter tone, or the preset already on your
+ * rig — and one place the work happens: the agent conversation on the left,
+ * the state of the preset on the right. The workspace renders before anything
+ * is loaded, so the whole flow is visible without committing a file first.
+ *
+ * The chosen mode lives in the URL, so the browser's Back button steps between
+ * the two panels and a link can point at either.
  */
 export function Workspace() {
   const [isHelpOpen, setHelpOpen] = useState(false);
   const openHelp = useCallback(() => setHelpOpen(true), []);
+  const [searchParams, setSearchParams] = useSearchParams();
   const view = usePresetStore((state) => state.view);
 
   useKeyboardShortcuts(openHelp);
 
+  const mode: WorkspaceMode = searchParams.get('mode') === 'upload' ? 'upload' : 'tone';
+  const setMode = useCallback(
+    (next: WorkspaceMode) => {
+      setSearchParams(next === 'upload' ? { mode: 'upload' } : {}, { replace: false });
+    },
+    [setSearchParams],
+  );
+
+  // Once a preset is open the hero has done its job; the workspace gets the screen.
+  const compact = view !== null;
+
   return (
-    <div className="flex min-h-screen flex-col bg-canvas text-primary">
+    <div className="flex min-h-screen flex-col">
       <NavBar onOpenHelp={openHelp} />
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
-        <section className="max-w-2xl">
-          <p className="eyebrow">Bender · AI tone engineer</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-primary sm:text-4xl">
-            Your AI guitar tone engineer.
-          </h1>
-          <p className="mt-3 text-sm leading-6 text-secondary">
-            Bender reads your Line 6 Helix preset, shows its signal chain, and turns a plain-English
-            request — <span className="text-primary">“more gain, tighter low end, a slower delay”</span> —
-            into safe, reviewable edits. Inspect every change, undo anything, then download the
-            modified <code className="rounded bg-surface-raised px-1 py-0.5 text-xs">.hlx</code>.
-          </p>
-          <p className="mt-3 text-sm text-muted">
-            To get started, drop a Helix{' '}
-            <code className="rounded bg-surface-raised px-1 py-0.5 text-xs">.hlx</code> preset below.
-          </p>
+      <main className="mx-auto w-[min(1240px,calc(100%-48px))] flex-1 pb-16 pt-12 max-sm:w-[min(100%-32px,620px)] max-sm:pt-8">
+        <section
+          aria-labelledby="page-title"
+          className={
+            compact ? '' : 'grid grid-cols-[minmax(0,1fr)_420px] items-end gap-16 max-lg:grid-cols-1 max-lg:gap-4'
+          }
+        >
+          <div>
+            <p className="eyebrow-lit">Line 6 Helix · safe preset editing</p>
+            <h1
+              id="page-title"
+              className={
+                compact
+                  ? 'mt-2 text-2xl font-semibold text-primary'
+                  : 'mt-3 max-w-[780px] text-[clamp(42px,4.8vw,68px)] font-semibold leading-[0.98] text-primary'
+              }
+            >
+              Shape your Helix tone.
+            </h1>
+          </div>
+          {compact ? null : (
+            <p className="mb-1 text-[15px] leading-[1.62] text-secondary">
+              Begin with a player-approved foundation or bring the preset already on your rig.
+              Bender shows every edit before you download it.
+            </p>
+          )}
         </section>
 
-        <div className="mt-8 grid gap-5 lg:grid-cols-2">
-          <RegionCard eyebrow="Preset" title="Upload">
-            <DropZone />
-          </RegionCard>
+        <ModeTabs mode={mode} onChange={setMode} />
 
-          <RegionCard eyebrow="Starter tones" title="Beginner path">
-            <StarterTones />
-          </RegionCard>
-        </div>
-
-        {view ? (
-          <div className="mt-5 grid gap-5 lg:grid-cols-2">
-            <div className="space-y-5">
-              <RegionCard eyebrow="Signal chain" title="Blocks &amp; routing">
-                <PresetMeta />
-                <SignalChain chain={view.chain} diff={view.diff} />
-              </RegionCard>
-
-              <RegionCard eyebrow="Changes" title="Review &amp; download">
-                <ChangesPanel />
-              </RegionCard>
-            </div>
-
-            <RegionCard
-              eyebrow="Request"
-              title="Describe a tone change"
-              className="self-start lg:sticky lg:top-20"
-            >
-              <RequestBox />
-            </RegionCard>
+        {mode === 'tone' ? (
+          <div id="tone-panel" role="tabpanel" aria-labelledby="tone-tab">
+            <StarterTones onToneLoaded={() => setMode('upload')} />
           </div>
         ) : (
-          <p className="mt-5 text-sm text-muted">
-            Upload a preset to see its signal chain, ask Bender for changes, and download the result.
-          </p>
+          <div id="upload-panel" role="tabpanel" aria-labelledby="upload-tab" className="mt-9">
+            <div className="grid grid-cols-[minmax(0,1fr)_392px] items-start gap-[30px] max-lg:grid-cols-1">
+              <RequestBox />
+              <PresetPane />
+            </div>
+          </div>
         )}
       </main>
 
       <ShortcutHelpModal isOpen={isHelpOpen} onClose={() => setHelpOpen(false)} />
       <Toast />
     </div>
-  );
-}
-
-/** A compact identity line for the loaded preset, above the chain. */
-function PresetMeta() {
-  const view = usePresetStore((state) => state.view);
-  if (!view) return null;
-
-  const parts = [
-    view.device,
-    view.firmware ? `FW ${view.firmware}` : null,
-    view.tempo ? `${view.tempo} BPM` : null,
-  ].filter((part): part is string => Boolean(part));
-
-  return (
-    <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-editor-border pb-3">
-      <span className="text-sm font-semibold text-primary">{view.name ?? view.filename}</span>
-      {parts.length > 0 ? <span className="text-xs text-muted">{parts.join(' · ')}</span> : null}
-    </div>
-  );
-}
-
-interface RegionCardProps {
-  eyebrow: string;
-  title: string;
-  children: ReactNode;
-  className?: string;
-}
-
-/** A titled rack panel wrapping one workspace region. */
-function RegionCard({ eyebrow, title, children, className }: RegionCardProps) {
-  return (
-    <section className={['rack-panel flex flex-col', className ?? ''].join(' ')}>
-      <div className="flex items-baseline justify-between border-b border-editor-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-primary">{title}</h2>
-        <span className="eyebrow">{eyebrow}</span>
-      </div>
-      <div className="flex-1 p-4">{children}</div>
-    </section>
   );
 }

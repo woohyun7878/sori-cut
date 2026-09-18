@@ -4,28 +4,60 @@ import { usePresetStore } from '../store/usePresetStore';
 const ACCEPTED_PRESET_TYPES = '.hlx,application/json';
 
 /**
+ * Mirrors `maxPresetBytes` in apps/server/src/http/routes.ts. Checking it here
+ * turns a 2 MB round trip that ends in a 413 into an instant, local answer;
+ * the server still enforces it, this is only the fast path.
+ */
+const MAX_PRESET_BYTES = 2048 * 1024;
+
+interface UploadNotice {
+  title: string;
+  detail: string;
+}
+
+const REJECTIONS: Record<'type' | 'size', UploadNotice> = {
+  type: {
+    title: 'That is not a .hlx file',
+    detail: 'Bender reads Line 6 Helix presets. Export one from HX Edit and try again.',
+  },
+  size: {
+    title: 'That preset is too large',
+    detail:
+      'Presets must be under 2048 KB. A Helix preset is normally a few KB, so this is probably a bundle.',
+  },
+};
+
+/**
  * Bender's preset intake.
  *
- * Accepts a Line 6 Helix `.hlx` file and reads it as text. The store parses it
- * locally with `@bender/helix` for instant confirmation, then opens a
- * server-side session that becomes the source of truth. This component
- * surfaces whichever metadata is most authoritative — the server view once it
- * arrives, the local parse until then.
+ * It lives inside the preset pane rather than behind a separate intake screen,
+ * so the whole workflow — ask, inspect, download — is visible before anyone
+ * commits a file. Obvious rejections are answered locally; the store parses
+ * the file with `@bender/helix` for instant confirmation, then opens a
+ * server-side session that becomes the source of truth.
  */
 export function DropZone() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const loadPreset = usePresetStore((state) => state.loadPreset);
-  const clearPreset = usePresetStore((state) => state.clearPreset);
-  const localPreview = usePresetStore((state) => state.localPreview);
-  const view = usePresetStore((state) => state.view);
   const uploadError = usePresetStore((state) => state.uploadError);
   const isUploading = usePresetStore((state) => state.isUploading);
   const [isDragging, setIsDragging] = useState(false);
   const [isReading, setIsReading] = useState(false);
+  const [rejection, setRejection] = useState<UploadNotice | null>(null);
 
   const handleFileSelection = async (file: File | null) => {
     if (!file) return;
 
+    if (!file.name.toLowerCase().endsWith('.hlx')) {
+      setRejection(REJECTIONS.type);
+      return;
+    }
+    if (file.size > MAX_PRESET_BYTES) {
+      setRejection(REJECTIONS.size);
+      return;
+    }
+
+    setRejection(null);
     setIsReading(true);
     try {
       const text = await file.text();
@@ -41,14 +73,10 @@ export function DropZone() {
     await handleFileSelection(event.dataTransfer.files.item(0));
   };
 
-  const name = view?.name ?? localPreview?.name ?? localPreview?.fileName ?? null;
-  const deviceName = view?.device ?? localPreview?.deviceName ?? 'Unknown';
-  const firmware = view?.firmware ?? localPreview?.firmware ?? '—';
-  const blockCount = view
-    ? view.chain.filter((block) => block.role === 'block').length
-    : (localPreview?.blockCount ?? 0);
-  const fileName = view?.filename ?? localPreview?.fileName ?? '';
   const busy = isReading || isUploading;
+  const notice =
+    rejection ??
+    (uploadError ? { title: 'Bender could not open that preset', detail: uploadError } : null);
 
   return (
     <div
@@ -59,15 +87,8 @@ export function DropZone() {
         setIsDragging(true);
       }}
       onDrop={(event) => void handleDrop(event)}
-      role="group"
-      aria-label="Helix preset upload"
+      className="mt-3.5"
       aria-busy={busy}
-      className={[
-        'rounded-editor border-2 border-dashed bg-surface/60 p-8 text-center transition-colors',
-        isDragging
-          ? 'border-brand-500 bg-brand-500/5'
-          : 'border-editor-border hover:border-brand-600/60',
-      ].join(' ')}
     >
       <input
         ref={inputRef}
@@ -81,67 +102,60 @@ export function DropZone() {
         }}
       />
 
-      <div
-        className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-panel border border-editor-border bg-surface-raised text-secondary"
-        aria-hidden="true"
-      >
-        <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 16V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
-          />
-        </svg>
-      </div>
-
-      <h3 className="text-lg font-semibold text-primary">Drop your .hlx preset here</h3>
-      <p className="mt-1 text-sm text-secondary">or click to browse</p>
-      <p className="mt-4 text-xs text-muted">Line 6 Helix preset · .hlx</p>
-
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
         disabled={busy}
-        className="btn-primary mt-6"
+        className={[
+          'flex w-full items-center gap-3 rounded-control border border-dashed px-4 py-4 text-left transition-colors',
+          'hover:border-brand-500 hover:bg-brand-500/[0.07] disabled:cursor-not-allowed disabled:opacity-60',
+          isDragging ? 'border-brand-500 bg-brand-500/[0.07]' : 'border-editor-border-strong bg-white/[0.015]',
+        ].join(' ')}
       >
-        {isReading ? 'Reading…' : isUploading ? 'Opening…' : 'Browse files'}
+        <span className="flex-none text-brand-500" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M12 16V4M12 4L8 8M12 4l4 4M5 15v4a2 2 0 002 2h10a2 2 0 002-2v-4"
+              stroke="currentColor"
+              strokeWidth={1.7}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <span>
+          <strong className="block text-sm font-semibold text-primary">
+            {busy ? 'Opening your preset…' : 'Drop your .hlx preset'}
+          </strong>
+          <span className="mt-0.5 block text-xs text-muted">or browse for a file</span>
+        </span>
       </button>
 
-      <div role="status" aria-live="polite">
-        {uploadError ? (
-          <p className="mx-auto mt-6 max-w-md rounded-control border border-danger/40 bg-danger/10 p-3 text-left text-xs text-danger">
-            {uploadError}
-          </p>
-        ) : null}
+      <p className="mt-2.5 font-mono text-[10px] tracking-[0.04em] text-muted">
+        .hlx · max 2048 KB · your original stays unchanged
+      </p>
 
-        {localPreview ? (
-          <div className="mx-auto mt-6 max-w-md rack-panel p-4 text-left">
-            <div className="flex items-center gap-2">
-              <span className="led" aria-hidden="true" />
-              <p className="truncate text-sm font-medium text-primary">{name}</p>
-              {isUploading ? (
-                <span className="ml-auto text-[10px] uppercase tracking-wide text-muted">
-                  Opening…
-                </span>
-              ) : view?.modified ? (
-                <span className="ml-auto rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-300">
-                  Modified
-                </span>
-              ) : null}
+      <div role="status" aria-live="polite">
+        {notice ? (
+          <div className="mt-3.5 flex gap-3 rounded-control border border-danger/40 bg-danger/[0.09] px-4 py-3.5">
+            <span aria-hidden="true" className="flex-none leading-snug text-danger">
+              !
+            </span>
+            <div className="min-w-0">
+              <strong className="block text-[13px] font-semibold text-primary">
+                {notice.title}
+              </strong>
+              <p className="mt-1.5 text-[13px] leading-normal text-secondary">{notice.detail}</p>
+              <div className="mt-2.5 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  className="btn-pill"
+                >
+                  Choose another file
+                </button>
+              </div>
             </div>
-            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-              <dt className="text-muted">Device</dt>
-              <dd className="text-secondary">{deviceName}</dd>
-              <dt className="text-muted">Firmware</dt>
-              <dd className="text-secondary">{firmware}</dd>
-              <dt className="text-muted">Blocks</dt>
-              <dd className="text-secondary">{blockCount}</dd>
-              <dt className="text-muted">File</dt>
-              <dd className="truncate text-secondary">{fileName}</dd>
-            </dl>
-            <button type="button" onClick={clearPreset} className="btn-secondary mt-4 w-full">
-              Remove preset
-            </button>
           </div>
         ) : null}
       </div>

@@ -146,6 +146,8 @@ Preset contents are redacted too. A user's preset is their work.
 
 A Vite/React/Tailwind app inherited from this repository's previous life, with the product code replaced. The framework setup, undo middleware, toast, dialog, focus trap and resizable panel hook were all worth keeping; none of them were specific to video editing.
 
+One page, two ways in. `ModeTabs` chooses between a player-approved starter tone and the preset already on your rig; the chosen mode lives in the URL so Back works and either panel can be linked to. Past that point the layout is fixed: the agent conversation on the left, `PresetPane` — what is loaded, what is in it, what is about to change — on the right. Every group renders before a preset exists, so the whole workflow is visible without committing a file first.
+
 Uploads are parsed **client-side first** via `@bender/helix`, for instant feedback and to reject an obviously invalid file before a network round trip. The server is the source of truth for everything after that.
 
 **No Azure credential, endpoint or SDK exists anywhere in the frontend.** The production build is scanned to confirm it.

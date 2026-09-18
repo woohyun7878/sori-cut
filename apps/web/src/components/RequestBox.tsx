@@ -9,134 +9,202 @@ const SUGGESTIONS = [
 ];
 
 /**
- * Bender's request box.
+ * Bender's request box — the conversation is the product surface.
  *
  * A plain-English request goes to the backend, which reasons and calls
  * constrained editing tools. That round trip takes several seconds, so the
- * input locks and an activity line shows while it works; when it returns, the
- * tool calls are shown after the fact as an honest, compact feed — never raw
- * JSON and never the model's private reasoning.
+ * input locks and a live step shows while it works; when it returns, the tool
+ * calls are shown after the fact as an honest, compact feed — never raw JSON
+ * and never the model's private reasoning.
  */
 export function RequestBox() {
   const conversation = usePresetStore((state) => state.conversation);
   const isSending = usePresetStore((state) => state.isSending);
   const sendMessage = usePresetStore((state) => state.sendMessage);
+  const presetLoaded = usePresetStore((state) => state.view !== null);
   const [input, setInput] = useState('');
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    // `scrollTop` rather than `scrollTo`: it is the one that exists everywhere,
+    // including jsdom, and the thread is short enough not to want smoothing.
+    const thread = threadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
   }, [conversation, isSending]);
 
-  const submit = () => {
-    const trimmed = input.trim();
-    if (!trimmed || isSending) return;
+  const send = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isSending || !presetLoaded) return;
     void sendMessage(trimmed);
     setInput('');
   };
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    submit();
+    send(input);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      submit();
+      send(input);
     }
   };
 
-  return (
-    <div className="flex h-full min-h-[420px] flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto pr-1">
-        {conversation.length === 0 ? (
-          <div className="flex h-full flex-col justify-center gap-3 text-center">
-            <p className="text-sm text-secondary">
-              Tell Bender what you want to change, in your own words.
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => setInput(suggestion)}
-                  disabled={isSending}
-                  className="btn-secondary max-w-full"
-                >
-                  <span className="truncate">{suggestion}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          conversation.map((turn) => <Turn key={turn.id} turn={turn} />)
-        )}
+  const applySuggestion = (suggestion: string) => {
+    setInput(suggestion);
+    textareaRef.current?.focus();
+  };
 
+  return (
+    <div className="flex min-w-0 flex-col rounded-editor border border-editor-border bg-surface px-[22px] pb-[18px] pt-5 lg:min-h-[520px]">
+      <div className="mb-[18px] flex items-center justify-between gap-4">
+        <p className="eyebrow-lit">AI agent</p>
+        <p className="eyebrow">Your request</p>
+      </div>
+
+      {conversation.length === 0 ? (
+        <div>
+          <h2 className="text-[25px] font-semibold text-primary">Describe a tone change</h2>
+          <p className="mt-2.5 max-w-[54ch] text-sm leading-relaxed text-secondary">
+            {presetLoaded
+              ? 'Tell Bender what you want to change in your preset, in plain English. Every edit is shown before you download it.'
+              : 'Load a preset or start from a tone, then tell Bender what you want to change in plain English.'}
+          </p>
+          <div className="mt-[18px] flex flex-wrap gap-2.5">
+            {SUGGESTIONS.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onClick={() => applySuggestion(suggestion)}
+                disabled={isSending}
+                className="btn-pill"
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div
+        ref={threadRef}
+        aria-live="polite"
+        aria-label="Conversation with Bender"
+        className="my-[22px] flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto"
+      >
+        {conversation.map((turn, index) => (
+          <Turn
+            key={turn.id}
+            turn={turn}
+            lastRequest={lastRequestBefore(conversation, index)}
+            onRetry={send}
+            retryable={!isSending && index === conversation.length - 1}
+          />
+        ))}
         {isSending ? <Working /> : null}
       </div>
 
-      <form onSubmit={handleSubmit} className="mt-3 border-t border-editor-border pt-3">
-        <label htmlFor="tone-request" className="sr-only">
-          Describe a tone change
-        </label>
-        <textarea
-          id="tone-request"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isSending}
-          rows={2}
-          placeholder="e.g. more gain, tighter low end, a slower delay"
-          className="w-full resize-none rounded-control border border-editor-border bg-surface-raised px-3 py-2 text-sm text-primary placeholder:text-muted disabled:opacity-60"
-        />
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <p className="text-[11px] text-muted">
-            {isSending
-              ? 'Bender is reasoning and editing — this can take 5–20 seconds.'
-              : 'Enter to send · Shift+Enter for a new line'}
-          </p>
-          <button type="submit" disabled={isSending || input.trim() === ''} className="btn-primary">
-            {isSending ? 'Working…' : 'Send'}
-          </button>
+      <form onSubmit={handleSubmit}>
+        <div className="rounded-editor border border-editor-border-strong bg-white/[0.02] focus-within:border-muted">
+          <label htmlFor="tone-request" className="sr-only">
+            Describe a tone change
+          </label>
+          <textarea
+            id="tone-request"
+            ref={textareaRef}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isSending || !presetLoaded}
+            placeholder={
+              presetLoaded
+                ? 'e.g. more gain, tighter low end, a slower delay…'
+                : 'Load a preset to start'
+            }
+            className="block min-h-[148px] w-full resize-y bg-transparent px-4 pb-1.5 pt-4 text-sm leading-relaxed text-primary placeholder:text-muted focus-visible:shadow-none disabled:opacity-60 max-sm:min-h-[96px]"
+          />
+          <div className="flex items-center gap-2.5 py-2.5 pl-3.5 pr-2.5">
+            <p className="text-[11px] text-muted max-sm:hidden">
+              {isSending
+                ? 'Bender is reasoning and editing — this can take 5–20 seconds.'
+                : 'Enter to send · Shift + Enter for a new line'}
+            </p>
+            <button
+              type="submit"
+              disabled={isSending || !presetLoaded || input.trim() === ''}
+              className="btn-primary ml-auto px-5 text-[13px]"
+            >
+              {isSending ? 'Working…' : 'Send'}
+            </button>
+          </div>
         </div>
       </form>
+
+      <p className="rule-note mt-3.5">
+        Bender analyses your preset, proposes changes, and shows a preview for you to review.
+      </p>
     </div>
   );
 }
 
-function Turn({ turn }: { turn: ConversationTurn }) {
+/** The request that produced the turn at `index`, for a retry affordance. */
+function lastRequestBefore(conversation: ConversationTurn[], index: number): string | null {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const turn = conversation[i];
+    if (turn.role === 'user') return turn.text;
+  }
+  return null;
+}
+
+interface TurnProps {
+  turn: ConversationTurn;
+  lastRequest: string | null;
+  retryable: boolean;
+  onRetry: (text: string) => void;
+}
+
+function Turn({ turn, lastRequest, retryable, onRetry }: TurnProps) {
   if (turn.role === 'user') {
     return (
-      <div className="ml-8 rounded-control border border-editor-border bg-hover/40 px-3 py-2">
-        <p className="eyebrow mb-1 text-secondary">You</p>
-        <p className="whitespace-pre-wrap text-sm text-primary">{turn.text}</p>
-      </div>
+      <p className="max-w-[80%] self-end whitespace-pre-wrap rounded-editor rounded-br-[2px] bg-white/[0.055] px-3.5 py-2.5 text-sm leading-relaxed text-primary">
+        {turn.text}
+      </p>
     );
   }
 
   if (turn.role === 'error') {
     return (
-      <div className="mr-8 rounded-control border border-danger/40 bg-danger/10 px-3 py-2">
-        <p className="eyebrow mb-1 text-danger">Bender hit a problem</p>
-        <p className="whitespace-pre-wrap text-sm text-danger">{turn.text}</p>
-        {turn.hint ? <p className="mt-1 text-xs text-danger/80">{turn.hint}</p> : null}
+      <div className="flex gap-3 rounded-editor border border-danger/40 bg-danger/[0.09] px-4 py-3.5">
+        <span aria-hidden="true" className="flex-none leading-snug text-danger">
+          !
+        </span>
+        <div className="min-w-0">
+          <strong className="block text-[13px] font-semibold text-primary">
+            Bender hit a problem
+          </strong>
+          <p className="mt-1.5 text-[13px] leading-normal text-secondary">{turn.text}</p>
+          {turn.hint ? <p className="mt-1 text-xs text-muted">{turn.hint}</p> : null}
+          {retryable && lastRequest ? (
+            <div className="mt-2.5 flex gap-2">
+              <button type="button" onClick={() => onRetry(lastRequest)} className="btn-pill">
+                Try again
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="mr-8 rounded-control border border-editor-border bg-surface-raised px-3 py-2">
-      <div className="mb-1 flex items-center gap-2">
-        <span className="led" aria-hidden="true" />
-        <p className="eyebrow text-secondary">Bender</p>
-        <span className="ml-auto text-[10px] text-muted">{(turn.latencyMs / 1000).toFixed(1)}s</span>
-      </div>
-      {turn.activity.length > 0 ? <ActivityFeed items={turn.activity} /> : null}
-      <p className="whitespace-pre-wrap text-sm text-primary">{turn.text}</p>
+    <div className="max-w-[84%]">
+      {turn.activity.length > 0 ? <ActivitySteps items={turn.activity} /> : null}
+      <p className="whitespace-pre-wrap text-sm leading-relaxed text-secondary">{turn.text}</p>
       {turn.truncated ? (
-        <p className="mt-1 text-xs text-warning">
-          Bender ran out of steps before finishing — review the diff and ask it to continue.
+        <p className="mt-2 text-xs text-warning">
+          Bender ran out of steps before finishing — review the changes and ask it to continue.
         </p>
       ) : null}
       {turn.warnings.length > 0 ? (
@@ -148,23 +216,20 @@ function Turn({ turn }: { turn: ConversationTurn }) {
           ))}
         </ul>
       ) : null}
+      <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
+        {(turn.latencyMs / 1000).toFixed(1)}s
+      </p>
     </div>
   );
 }
 
-function ActivityFeed({ items }: { items: ToolActivityItem[] }) {
+function ActivitySteps({ items }: { items: ToolActivityItem[] }) {
   return (
-    <ul className="mb-2 space-y-1 rounded-control bg-canvas/50 p-2">
+    <ul className="mb-3.5 grid gap-2.5">
       {items.map((item) => (
-        <li key={item.key} className="flex items-start gap-2 text-[11px] leading-5">
-          <span
-            aria-hidden="true"
-            className={item.ok ? 'text-success' : 'text-danger'}
-          >
-            {item.ok ? '✓' : '✕'}
-          </span>
-          <span className={item.ok ? 'text-secondary' : 'text-danger'}>
-            <span className="font-medium">{item.verb}</span>
+        <li key={item.key} className="step" data-state={item.ok ? 'done' : 'failed'}>
+          <span>
+            {item.verb}
             {item.detail ? <span className="text-muted"> — {item.detail}</span> : null}
           </span>
         </li>
@@ -173,11 +238,17 @@ function ActivityFeed({ items }: { items: ToolActivityItem[] }) {
   );
 }
 
+/**
+ * The backend answers in one response rather than streaming, so there is no
+ * honest per-step progress to show mid-flight — one active step that says what
+ * is happening beats a progress bar that is making its position up.
+ */
 function Working() {
   return (
-    <div className="mr-8 flex items-center gap-2 rounded-control border border-editor-border bg-surface-raised px-3 py-2">
-      <span className="led animate-pulse" aria-hidden="true" />
-      <p className="text-sm text-secondary">Bender is working…</p>
-    </div>
+    <ul className="grid gap-2.5">
+      <li className="step" data-state="active">
+        Bender is reading your preset and working out the edits…
+      </li>
+    </ul>
   );
 }

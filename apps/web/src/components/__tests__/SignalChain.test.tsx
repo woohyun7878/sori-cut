@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { SignalChain } from '../SignalChain';
 import type { ChainBlock, DiffEntry } from '../../api/types';
 
@@ -17,10 +18,22 @@ function block(overrides: Partial<ChainBlock> & Pick<ChainBlock, 'id'>): ChainBl
 }
 
 const singlePath: ChainBlock[] = [
-  block({ id: 'dsp0/block2', label: 'Volume Pedal', position: 7 }),
-  block({ id: 'dsp0/block0', label: 'Compulsive Drive', position: 2, enabled: false }),
-  block({ id: 'dsp0/block1', label: 'Amp Brit2204', position: 3, cab: 'cab0' }),
-  block({ id: 'dsp0/cab0', label: 'Cab 4x12', role: 'cab', position: 0 }),
+  block({ id: 'dsp0/block2', label: 'Volume Pedal', model: 'HD2_VolPanVol', position: 7 }),
+  block({
+    id: 'dsp0/block0',
+    label: 'Compulsive Drive',
+    model: 'HD2_DistCompulsiveDrive',
+    position: 2,
+    enabled: false,
+  }),
+  block({
+    id: 'dsp0/block1',
+    label: 'Amp Brit2204',
+    model: 'HD2_AmpBrit2204',
+    position: 3,
+    cab: 'cab0',
+  }),
+  block({ id: 'dsp0/cab0', label: 'Cab 4x12', model: 'HD2_Cab4x121960T75', role: 'cab', position: 0 }),
 ];
 
 describe('SignalChain', () => {
@@ -35,25 +48,51 @@ describe('SignalChain', () => {
     render(<SignalChain chain={singlePath} diff={[]} />);
 
     const bypassed = screen.getByText('Compulsive Drive').closest('[data-testid="chain-block"]');
-    expect(bypassed).toHaveAttribute('data-bypassed', 'true');
-    expect(within(bypassed as HTMLElement).getByText('Bypassed')).toBeInTheDocument();
+    expect(bypassed).toHaveAttribute('data-enabled', 'false');
+    expect(within(bypassed as HTMLElement).getByText(/bypassed/i)).toBeInTheDocument();
   });
 
-  it('flags blocks touched by the current diff', () => {
+  it('names the block family from its Helix model id', () => {
+    render(<SignalChain chain={singlePath} diff={[]} />);
+
+    const amp = screen.getByText('Amp Brit2204').closest('[data-testid="chain-block"]');
+    expect(within(amp as HTMLElement).getByText('Amp')).toBeInTheDocument();
+  });
+
+  it('shows a changed parameter before and after without expanding the block', () => {
     const diff: DiffEntry[] = [
-      { dsp: 'dsp0', slot: 'block1', label: 'Amp Brit2204', parameter: 'Master', before: 0.36, after: 0.48 },
+      {
+        dsp: 'dsp0',
+        slot: 'block1',
+        label: 'Amp Brit2204',
+        parameter: 'Master',
+        before: 0.36,
+        after: 0.48,
+      },
     ];
 
     render(<SignalChain chain={singlePath} diff={diff} />);
 
     const amp = screen.getByText('Amp Brit2204').closest('[data-testid="chain-block"]');
     expect(amp).toHaveAttribute('data-changed', 'true');
-    expect(within(amp as HTMLElement).getByText('Changed')).toBeInTheDocument();
+
+    const change = within(amp as HTMLElement).getByTestId('block-diff');
+    expect(change).toHaveTextContent('Master');
+    expect(change).toHaveTextContent('0.36');
+    expect(change).toHaveTextContent('0.48');
   });
 
-  it('shows the paired cab against its amp', () => {
+  it('reveals the paired cab and model behind the block toggle', async () => {
+    const user = userEvent.setup();
     render(<SignalChain chain={singlePath} diff={[]} />);
-    expect(screen.getByText(/Cab: Cab 4x12/)).toBeInTheDocument();
+
+    expect(screen.queryByText(/Cab 4x12/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show Amp Brit2204 details' }));
+
+    const amp = screen.getByText('Amp Brit2204').closest('[data-testid="chain-block"]');
+    expect(within(amp as HTMLElement).getByText(/Cab 4x12/)).toBeInTheDocument();
+    expect(within(amp as HTMLElement).getByText(/HD2_AmpBrit2204/)).toBeInTheDocument();
   });
 
   it('omits branch headings when there is a single path', () => {
@@ -71,5 +110,10 @@ describe('SignalChain', () => {
 
     expect(screen.getByText('Branch A')).toBeInTheDocument();
     expect(screen.getByText('Branch B')).toBeInTheDocument();
+  });
+
+  it('says so when the preset has no playable blocks', () => {
+    render(<SignalChain chain={[]} diff={[]} />);
+    expect(screen.getByText(/no playable blocks Bender recognises/i)).toBeInTheDocument();
   });
 });
