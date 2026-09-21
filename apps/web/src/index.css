@@ -152,6 +152,64 @@
     @apply inline-flex items-center gap-2 rounded-control px-2.5 py-1.5 text-xs text-muted transition-colors duration-150 hover:bg-white/[0.04] hover:text-secondary disabled:cursor-not-allowed disabled:opacity-40;
   }
 
+  /*
+    The composer is one row that grows with what is typed: a single line at
+    rest, up to a third of the pane, then it scrolls. Send sits on the same
+    baseline rather than claiming a row of its own.
+  */
+  .composer {
+    @apply flex items-end gap-2 rounded-editor border border-editor-border-strong bg-white/[0.02] px-2.5 py-2 transition-colors duration-150;
+  }
+
+  .composer:focus-within {
+    border-color: rgb(var(--color-brand) / 0.45);
+    background-color: rgb(var(--color-brand) / 0.03);
+  }
+
+  .composer-input {
+    @apply block max-h-[168px] w-full resize-none bg-transparent px-1.5 py-1.5 text-sm leading-relaxed text-primary placeholder:text-muted disabled:opacity-60;
+    /* The floor before the auto-grow effect writes an explicit height. */
+    min-height: 34px;
+  }
+
+  /* The composer shows focus as a whole, so the field itself stays quiet. */
+  .composer-input:focus-visible {
+    box-shadow: none;
+  }
+
+  /* Quiet until there is something to send, then it takes the accent. */
+  .btn-send {
+    @apply inline-flex h-[34px] flex-none items-center justify-center rounded-control bg-brand-500 px-4 text-[13px] font-bold text-canvas transition-colors duration-150 hover:bg-brand-300 disabled:cursor-not-allowed disabled:bg-white/[0.05] disabled:text-muted;
+  }
+
+  /*
+    The hint earns its line only while the composer is live. Animating the grid
+    row from 0fr to 1fr collapses it without hard-coding a pixel height that
+    would have to be kept in step with the copy.
+  */
+  .composer-hint {
+    @apply grid text-[11px] text-muted;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    /* Spacing lives on the margin, not inside the clipped row: padding on the
+       collapsed child would still occupy its own height. */
+    margin-top: 0;
+    transition:
+      grid-template-rows 150ms ease,
+      opacity 150ms ease,
+      margin-top 150ms ease;
+  }
+
+  .composer-hint[data-visible='true'] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    margin-top: 8px;
+  }
+
+  .composer-hint > span {
+    @apply overflow-hidden;
+  }
+
   /* Eyebrow label for a placeholder / section heading. */
   .eyebrow {
     @apply font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted;

@@ -23,8 +23,23 @@ export function RequestBox() {
   const sendMessage = usePresetStore((state) => state.sendMessage);
   const presetLoaded = usePresetStore((state) => state.view !== null);
   const [input, setInput] = useState('');
+  const [isFocused, setFocused] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // The composer starts at one line and grows with what is typed, up to the
+  // cap in `.composer-input`, after which it scrolls. Height is reset first so
+  // `scrollHeight` can report a shrink as well as a growth.
+  useEffect(() => {
+    const field = textareaRef.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight}px`;
+  }, [input]);
+
+  // The hint costs a line only while it is useful: when the field is live, or
+  // when there is something to say about what Bender is doing.
+  const hintVisible = isFocused || input !== '' || isSending;
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -131,44 +146,50 @@ export function RequestBox() {
       </div>
 
       <form onSubmit={handleSubmit}>
-        <div className="rounded-editor border border-editor-border-strong bg-white/[0.02] focus-within:border-muted">
+        <div className="composer">
           <label htmlFor="tone-request" className="sr-only">
             Describe a tone change
           </label>
           <textarea
             id="tone-request"
             ref={textareaRef}
+            rows={1}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             disabled={isSending || !presetLoaded}
             placeholder={
               presetLoaded
                 ? 'e.g. more gain, tighter low end, a slower delay…'
                 : 'Load a preset to start'
             }
-            className="block min-h-[148px] w-full resize-y bg-transparent px-4 pb-1.5 pt-4 text-sm leading-relaxed text-primary placeholder:text-muted focus-visible:shadow-none disabled:opacity-60 max-sm:min-h-[96px]"
+            className="composer-input"
           />
-          <div className="flex items-center gap-2.5 py-2.5 pl-3.5 pr-2.5">
-            <p className="text-[11px] text-muted max-sm:hidden">
-              {isSending
-                ? 'Bender is reasoning and editing — this can take 5–20 seconds.'
-                : 'Enter to send · Shift + Enter for a new line'}
-            </p>
-            <button
-              type="submit"
-              disabled={isSending || !presetLoaded || input.trim() === ''}
-              className="btn-primary ml-auto px-5 text-[13px]"
-            >
-              {isSending ? 'Working…' : 'Send'}
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={isSending || !presetLoaded || input.trim() === ''}
+            className="btn-send"
+          >
+            Send
+          </button>
         </div>
+
+        <p className="composer-hint" data-visible={hintVisible} aria-hidden={!hintVisible}>
+          <span>
+            {isSending
+              ? 'Bender is reasoning and editing — this can take 5–20 seconds.'
+              : 'Enter to send · Shift + Enter for a new line'}
+          </span>
+        </p>
       </form>
 
-      <p className="rule-note mt-3.5">
-        Bender analyses your preset, proposes changes, and shows a preview for you to review.
-      </p>
+      {conversation.length === 0 ? (
+        <p className="rule-note mt-3.5">
+          Bender analyses your preset, proposes changes, and shows a preview for you to review.
+        </p>
+      ) : null}
     </div>
   );
 }
