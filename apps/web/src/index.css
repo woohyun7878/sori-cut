@@ -46,6 +46,8 @@
   --space-8: 32px;
   --control-height: 32px;
   --primary-control-height: 36px;
+  /* The sticky top bar's height, so panes below it can offset themselves. */
+  --nav-height: 62px;
   --focus-ring:
     0 0 0 2px rgb(var(--color-canvas)), 0 0 0 4px rgb(var(--color-brand));
   color-scheme: dark;
@@ -148,6 +150,64 @@
   /* A borderless action that only earns a background on hover. */
   .btn-ghost {
     @apply inline-flex items-center gap-2 rounded-control px-2.5 py-1.5 text-xs text-muted transition-colors duration-150 hover:bg-white/[0.04] hover:text-secondary disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  /*
+    The composer is one row that grows with what is typed: a single line at
+    rest, up to a third of the pane, then it scrolls. Send sits on the same
+    baseline rather than claiming a row of its own.
+  */
+  .composer {
+    @apply flex items-end gap-2 rounded-editor border border-editor-border-strong bg-white/[0.02] px-2.5 py-2 transition-colors duration-150;
+  }
+
+  .composer:focus-within {
+    border-color: rgb(var(--color-brand) / 0.45);
+    background-color: rgb(var(--color-brand) / 0.03);
+  }
+
+  .composer-input {
+    @apply block max-h-[168px] w-full resize-none bg-transparent px-1.5 py-1.5 text-sm leading-relaxed text-primary placeholder:text-muted disabled:opacity-60;
+    /* The floor before the auto-grow effect writes an explicit height. */
+    min-height: 34px;
+  }
+
+  /* The composer shows focus as a whole, so the field itself stays quiet. */
+  .composer-input:focus-visible {
+    box-shadow: none;
+  }
+
+  /* Quiet until there is something to send, then it takes the accent. */
+  .btn-send {
+    @apply inline-flex h-[34px] flex-none items-center justify-center rounded-control bg-brand-500 px-4 text-[13px] font-bold text-canvas transition-colors duration-150 hover:bg-brand-300 disabled:cursor-not-allowed disabled:bg-white/[0.05] disabled:text-muted;
+  }
+
+  /*
+    The hint earns its line only while the composer is live. Animating the grid
+    row from 0fr to 1fr collapses it without hard-coding a pixel height that
+    would have to be kept in step with the copy.
+  */
+  .composer-hint {
+    @apply grid text-[11px] text-muted;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    /* Spacing lives on the margin, not inside the clipped row: padding on the
+       collapsed child would still occupy its own height. */
+    margin-top: 0;
+    transition:
+      grid-template-rows 150ms ease,
+      opacity 150ms ease,
+      margin-top 150ms ease;
+  }
+
+  .composer-hint[data-visible='true'] {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    margin-top: 8px;
+  }
+
+  .composer-hint > span {
+    @apply overflow-hidden;
   }
 
   /* Eyebrow label for a placeholder / section heading. */
@@ -345,6 +405,56 @@
 
   .scroll-hidden::-webkit-scrollbar {
     display: none;
+  }
+
+  /*
+    A vertical scroll region that says so at its edges.
+
+    Four background layers, after Lea Verou: the first two are covers painted
+    in the surface colour and attached `local`, so they ride with the content
+    and sit over the shadow whenever that end is already in view; the last two
+    are the shadows, attached `scroll`, so they stay pinned to the box. The
+    result is a hint that appears only when there is genuinely more to read,
+    with no scroll listener and no state to keep in sync.
+  */
+  .scroll-thread {
+    overflow-y: auto;
+    /* Reaching either end shouldn't hand the scroll to the page behind it. */
+    overscroll-behavior: contain;
+    background:
+      linear-gradient(rgb(var(--color-surface)) 30%, rgb(var(--color-surface) / 0)) top / 100% 30px
+        no-repeat local,
+      linear-gradient(rgb(var(--color-surface) / 0), rgb(var(--color-surface)) 70%) bottom / 100% 30px
+        no-repeat local,
+      radial-gradient(
+          farthest-side at 50% 0,
+          rgb(var(--color-text-primary) / 0.11),
+          rgb(var(--color-text-primary) / 0)
+        )
+        top / 100% 14px no-repeat scroll,
+      radial-gradient(
+          farthest-side at 50% 100%,
+          rgb(var(--color-text-primary) / 0.11),
+          rgb(var(--color-text-primary) / 0)
+        )
+        bottom / 100% 14px no-repeat scroll;
+  }
+
+  .scroll-thread::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scroll-thread::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-thread::-webkit-scrollbar-thumb {
+    background: rgb(var(--color-border-strong));
+    border-radius: 9999px;
+  }
+
+  .scroll-thread::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--color-text-muted));
   }
 }
 

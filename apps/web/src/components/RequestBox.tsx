@@ -23,14 +23,42 @@ export function RequestBox() {
   const sendMessage = usePresetStore((state) => state.sendMessage);
   const presetLoaded = usePresetStore((state) => state.view !== null);
   const [input, setInput] = useState('');
+  const [isFocused, setFocused] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // The composer starts at one line and grows with what is typed, up to the
+  // cap in `.composer-input`, after which it scrolls. Height is reset first so
+  // `scrollHeight` can report a shrink as well as a growth.
   useEffect(() => {
-    // `scrollTop` rather than `scrollTo`: it is the one that exists everywhere,
-    // including jsdom, and the thread is short enough not to want smoothing.
+    const field = textareaRef.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight}px`;
+  }, [input]);
+
+  // The hint costs a line only while it is useful: when the field is live, or
+  // when there is something to say about what Bender is doing.
+  const hintVisible = isFocused || input !== '' || isSending;
+
+  useEffect(() => {
     const thread = threadRef.current;
-    if (thread) thread.scrollTop = thread.scrollHeight;
+    if (!thread) return;
+
+    // While Bender works, the live step is the thing to keep in view.
+    if (isSending) {
+      thread.scrollTop = thread.scrollHeight;
+      return;
+    }
+
+    // Once a reply lands, put the request that prompted it at the top of the
+    // thread. Replies run long, so the bottom is a poor place to start reading
+    // one, and anchoring on the request keeps the exchange together.
+    const requests = thread.querySelectorAll('[data-role="user"]');
+    const anchor = requests[requests.length - 1] ?? thread.lastElementChild;
+    if (!anchor) return;
+    const offset = anchor.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+    thread.scrollTop = Math.min(thread.scrollTop + offset, thread.scrollHeight - thread.clientHeight);
   }, [conversation, isSending]);
 
   const send = (text: string) => {
@@ -58,7 +86,18 @@ export function RequestBox() {
   };
 
   return (
-    <div className="flex min-w-0 flex-col rounded-editor border border-editor-border bg-surface px-[22px] pb-[18px] pt-5 lg:min-h-[520px]">
+    <div
+      className={[
+        'flex min-w-0 flex-col rounded-editor border border-editor-border bg-surface px-[22px] pb-[18px] pt-5',
+        // The conversation grows without limit, so the pane is bounded by the
+        // viewport and the thread scrolls inside it. Pinned below the top bar
+        // so the composer stays put while the preset pane scrolls past.
+        'sticky top-[calc(var(--nav-height)+24px)] max-h-[calc(100dvh-var(--nav-height)-48px)]',
+        // A floor for the empty state, but never one that beats the ceiling:
+        // min-height wins over max-height, so a short window would overflow.
+        'lg:min-h-[min(520px,calc(100dvh-var(--nav-height)-48px))]',
+      ].join(' ')}
+    >
       <div className="mb-[18px] flex items-center justify-between gap-4">
         <p className="eyebrow-lit">AI agent</p>
         <p className="eyebrow">Your request</p>
@@ -92,7 +131,7 @@ export function RequestBox() {
         ref={threadRef}
         aria-live="polite"
         aria-label="Conversation with Bender"
-        className="my-[22px] flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto"
+        className="scroll-thread my-[22px] flex min-h-0 flex-1 flex-col gap-[18px]"
       >
         {conversation.map((turn, index) => (
           <Turn
@@ -107,44 +146,50 @@ export function RequestBox() {
       </div>
 
       <form onSubmit={handleSubmit}>
-        <div className="rounded-editor border border-editor-border-strong bg-white/[0.02] focus-within:border-muted">
+        <div className="composer">
           <label htmlFor="tone-request" className="sr-only">
             Describe a tone change
           </label>
           <textarea
             id="tone-request"
             ref={textareaRef}
+            rows={1}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             disabled={isSending || !presetLoaded}
             placeholder={
               presetLoaded
                 ? 'e.g. more gain, tighter low end, a slower delay…'
                 : 'Load a preset to start'
             }
-            className="block min-h-[148px] w-full resize-y bg-transparent px-4 pb-1.5 pt-4 text-sm leading-relaxed text-primary placeholder:text-muted focus-visible:shadow-none disabled:opacity-60 max-sm:min-h-[96px]"
+            className="composer-input"
           />
-          <div className="flex items-center gap-2.5 py-2.5 pl-3.5 pr-2.5">
-            <p className="text-[11px] text-muted max-sm:hidden">
-              {isSending
-                ? 'Bender is reasoning and editing — this can take 5–20 seconds.'
-                : 'Enter to send · Shift + Enter for a new line'}
-            </p>
-            <button
-              type="submit"
-              disabled={isSending || !presetLoaded || input.trim() === ''}
-              className="btn-primary ml-auto px-5 text-[13px]"
-            >
-              {isSending ? 'Working…' : 'Send'}
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={isSending || !presetLoaded || input.trim() === ''}
+            className="btn-send"
+          >
+            Send
+          </button>
         </div>
+
+        <p className="composer-hint" data-visible={hintVisible} aria-hidden={!hintVisible}>
+          <span>
+            {isSending
+              ? 'Bender is reasoning and editing — this can take 5–20 seconds.'
+              : 'Enter to send · Shift + Enter for a new line'}
+          </span>
+        </p>
       </form>
 
-      <p className="rule-note mt-3.5">
-        Bender analyses your preset, proposes changes, and shows a preview for you to review.
-      </p>
+      {conversation.length === 0 ? (
+        <p className="rule-note mt-3.5">
+          Bender analyses your preset, proposes changes, and shows a preview for you to review.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -168,7 +213,10 @@ interface TurnProps {
 function Turn({ turn, lastRequest, retryable, onRetry }: TurnProps) {
   if (turn.role === 'user') {
     return (
-      <p className="max-w-[80%] self-end whitespace-pre-wrap rounded-editor rounded-br-[2px] bg-white/[0.055] px-3.5 py-2.5 text-sm leading-relaxed text-primary">
+      <p
+        data-role="user"
+        className="max-w-[80%] self-end whitespace-pre-wrap rounded-editor rounded-br-[2px] bg-white/[0.055] px-3.5 py-2.5 text-sm leading-relaxed text-primary"
+      >
         {turn.text}
       </p>
     );
