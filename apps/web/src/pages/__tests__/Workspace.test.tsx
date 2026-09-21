@@ -208,6 +208,13 @@ describe('Workspace', () => {
     expect(screen.getByText('Amp Brit2204 · Master')).toBeInTheDocument();
     expect(screen.getByText('1 changed')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled();
+
+    // The thread is a bounded scroll region, and the request is tagged so the
+    // thread can scroll it to the top when a reply lands. jsdom computes no
+    // layout, so this pins the markup contract rather than the geometry.
+    const thread = screen.getByLabelText('Conversation with Bender');
+    expect(thread).toHaveClass('scroll-thread');
+    expect(within(thread).getByText('more gain')).toHaveAttribute('data-role', 'user');
   });
 
   it('offers a retry when a request fails, without losing the request', async () => {
