@@ -16,7 +16,7 @@ interface NavBarProps {
 export function NavBar({ onOpenHelp }: NavBarProps) {
   return (
     <header
-      className="sticky top-0 z-50 h-[62px] border-b border-editor-border bg-canvas/95 backdrop-blur-sm safe-top"
+      className="sticky top-0 z-50 h-[var(--nav-height)] border-b border-editor-border bg-canvas/95 backdrop-blur-sm safe-top"
       role="banner"
     >
       <div className="mx-auto flex h-full w-[min(1240px,calc(100%-48px))] items-center justify-between gap-4 max-sm:w-[min(100%-32px,620px)]">

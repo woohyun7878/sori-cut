@@ -46,6 +46,8 @@
   --space-8: 32px;
   --control-height: 32px;
   --primary-control-height: 36px;
+  /* The sticky top bar's height, so panes below it can offset themselves. */
+  --nav-height: 62px;
   --focus-ring:
     0 0 0 2px rgb(var(--color-canvas)), 0 0 0 4px rgb(var(--color-brand));
   color-scheme: dark;
@@ -345,6 +347,56 @@
 
   .scroll-hidden::-webkit-scrollbar {
     display: none;
+  }
+
+  /*
+    A vertical scroll region that says so at its edges.
+
+    Four background layers, after Lea Verou: the first two are covers painted
+    in the surface colour and attached `local`, so they ride with the content
+    and sit over the shadow whenever that end is already in view; the last two
+    are the shadows, attached `scroll`, so they stay pinned to the box. The
+    result is a hint that appears only when there is genuinely more to read,
+    with no scroll listener and no state to keep in sync.
+  */
+  .scroll-thread {
+    overflow-y: auto;
+    /* Reaching either end shouldn't hand the scroll to the page behind it. */
+    overscroll-behavior: contain;
+    background:
+      linear-gradient(rgb(var(--color-surface)) 30%, rgb(var(--color-surface) / 0)) top / 100% 30px
+        no-repeat local,
+      linear-gradient(rgb(var(--color-surface) / 0), rgb(var(--color-surface)) 70%) bottom / 100% 30px
+        no-repeat local,
+      radial-gradient(
+          farthest-side at 50% 0,
+          rgb(var(--color-text-primary) / 0.11),
+          rgb(var(--color-text-primary) / 0)
+        )
+        top / 100% 14px no-repeat scroll,
+      radial-gradient(
+          farthest-side at 50% 100%,
+          rgb(var(--color-text-primary) / 0.11),
+          rgb(var(--color-text-primary) / 0)
+        )
+        bottom / 100% 14px no-repeat scroll;
+  }
+
+  .scroll-thread::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scroll-thread::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-thread::-webkit-scrollbar-thumb {
+    background: rgb(var(--color-border-strong));
+    border-radius: 9999px;
+  }
+
+  .scroll-thread::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--color-text-muted));
   }
 }
 
